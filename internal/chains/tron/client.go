@@ -177,7 +177,7 @@ func (c *Client) makeRequest(ctx context.Context, method string, params []any) (
 }
 
 // GetRateLimitStats returns rate limiting statistics
-func (c *Client) GetRateLimitStats() map[string]map[string]any {
+func (c *Client) GetRateLimitStats() map[string]ratelimiter.Stats {
 	return c.rateLimiter.GetStats()
 }
 

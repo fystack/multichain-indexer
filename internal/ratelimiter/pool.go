@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// Stats represents the current state of a rate limiter
+type Stats struct {
+	AvailableTokens int
+	Capacity        int
+	Rate            time.Duration
+}
+
 // PooledRateLimiter manages rate limiters per node
 type PooledRateLimiter struct {
 	limiters map[string]*RateLimiter
@@ -70,17 +77,17 @@ func (p *PooledRateLimiter) Close() {
 }
 
 // GetStats returns statistics for all nodes
-func (p *PooledRateLimiter) GetStats() map[string]map[string]any {
+func (p *PooledRateLimiter) GetStats() map[string]Stats {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
-	stats := make(map[string]map[string]any)
+	stats := make(map[string]Stats)
 	for node, limiter := range p.limiters {
 		available, capacity, rate := limiter.GetStats()
-		stats[node] = map[string]any{
-			"available_tokens": available,
-			"capacity":         capacity,
-			"rate_ms":          rate.Milliseconds(),
+		stats[node] = Stats{
+			AvailableTokens: available,
+			Capacity:        capacity,
+			Rate:            rate,
 		}
 	}
 	return stats

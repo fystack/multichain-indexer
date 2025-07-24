@@ -54,8 +54,12 @@ func (p *Pool) MarkFailed(node string) {
 func (p *Pool) MarkHealthy(node string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+
+	// Only log if node was previously marked failed
+	if _, exists := p.failedNodes[node]; exists {
+		slog.Debug("Node marked as healthy", "node", node)
+	}
 	delete(p.failedNodes, node)
-	slog.Debug("Node marked as healthy", "node", node)
 }
 
 func (p *Pool) GetStats() (total, healthy, failed int) {

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fystack/indexer/internal/ratelimiter"
 	"github.com/fystack/indexer/internal/types"
 )
 
@@ -78,7 +79,6 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("result", result)
 	return i.parseBlock(result)
 }
 
@@ -99,7 +99,7 @@ func (i *Indexer) IsHealthy() bool {
 	return err == nil
 }
 
-func (i *Indexer) GetRateLimitStats() map[string]map[string]any {
+func (i *Indexer) GetRateLimitStats() map[string]ratelimiter.Stats {
 	return i.client.GetRateLimitStats()
 }
 
