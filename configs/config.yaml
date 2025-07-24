@@ -1,0 +1,23 @@
+indexer:
+  chains:
+    tron:
+      name: "tron"
+      nodes:
+        - "https://api.trongrid.io"
+      start_block: 74228620
+      batch_size: 10
+      poll_interval: "5s"
+      rate_limit:
+        requests_per_second: 10 # Maximum 10 requests per second per node
+        burst_size: 20 # Allow burst of up to 20 requests
+      client:
+        request_timeout: "30s" # Timeout for individual requests
+        max_retries: 3 # Maximum retry attempts
+        retry_delay: "1s" # Delay between retries
+
+  nats:
+    url: "nats://localhost:4222"
+    subject_prefix: "blockchain.indexer"
+
+  storage:
+    type: "memory"
