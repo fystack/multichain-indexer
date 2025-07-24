@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/fystack/indexer/internal/chains"
@@ -66,40 +68,68 @@ func (w *Worker) processBlocks() error {
 	if err != nil {
 		return fmt.Errorf("failed to get latest block: %w", err)
 	}
-	slog.Debug("Latest block", "chain", w.chain.GetName(), "block", latestBlock)
+	slog.Info("Latest block", "chain", w.chain.GetName(), "block", latestBlock)
 
 	if w.currentBlock >= latestBlock {
 		return nil // Nothing to process
 	}
 
-	// Process blocks in batches
 	endBlock := w.currentBlock + int64(w.config.BatchSize) - 1
 	if endBlock > latestBlock {
 		endBlock = latestBlock
 	}
 
-	blocks, err := w.chain.GetBlocks(w.currentBlock, endBlock)
-	if err != nil {
-		return fmt.Errorf("failed to get blocks %d-%d: %w", w.currentBlock, endBlock, err)
-	}
+	var lastSuccessBlock int64 = w.currentBlock - 1
 
-	for _, block := range blocks {
-		// Emit block event
+	// Prepare log file
+	logFile, err := failedBlockLogger()
+	if err != nil {
+		return fmt.Errorf("failed to prepare log file: %w", err)
+	}
+	defer logFile.Close()
+
+	for blockNumber := w.currentBlock; blockNumber <= endBlock; blockNumber++ {
+		block, err := w.chain.GetBlock(blockNumber)
+		if err != nil {
+			msg := fmt.Sprintf("Failed to fetch block: chain=%s block=%d err=%v\n", w.chain.GetName(), blockNumber, err)
+			slog.Error(msg)
+
+			// write to log file
+			_, _ = logFile.WriteString(msg)
+
+			// emit error for observability
+			_ = w.emitter.EmitError(w.chain.GetName(), fmt.Errorf("failed block %d: %w", blockNumber, err))
+			continue
+		}
+
 		if err := w.emitter.EmitBlock(w.chain.GetName(), block); err != nil {
 			slog.Error("Failed to emit block event", "chain", w.chain.GetName(), "error", err)
 		}
 
-		// Emit transaction events
 		for _, tx := range block.Transactions {
-			slog.Debug("Emitting transaction event", "chain", w.chain.GetName(), "transaction", tx.Hash)
 			if err := w.emitter.EmitTransaction(w.chain.GetName(), &tx); err != nil {
-				slog.Error("Failed to emit transaction event", "chain", w.chain.GetName(), "error", err)
+				slog.Error("Failed to emit transaction event", "chain", w.chain.GetName(), "tx", tx.Hash, "error", err)
 			}
 		}
 
 		slog.Info("Processed block", "chain", w.chain.GetName(), "block", block.Number, "transactions", len(block.Transactions))
+		lastSuccessBlock = block.Number
 	}
 
-	w.currentBlock = endBlock + 1
+	// Move currentBlock forward only to last successfully processed block
+	if lastSuccessBlock >= w.currentBlock {
+		w.currentBlock = lastSuccessBlock + 1
+	}
+
 	return nil
+}
+
+// failedBlockLogger returns a file handle for appending block errors
+func failedBlockLogger() (*os.File, error) {
+	logDir := "logs"
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		return nil, err
+	}
+	logFile := filepath.Join(logDir, "failed_blocks.log")
+	return os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 }

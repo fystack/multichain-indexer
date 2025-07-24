@@ -35,7 +35,7 @@ func main() {
 	}
 
 	logger.Init(&logger.Options{
-		Level:      slog.LevelDebug,
+		Level:      slog.LevelInfo,
 		TimeFormat: time.RFC3339,
 	})
 
