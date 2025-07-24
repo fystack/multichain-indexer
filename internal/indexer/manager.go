@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/fystack/indexer/internal/chains"
+	"github.com/fystack/indexer/internal/chains/evm"
 	"github.com/fystack/indexer/internal/chains/tron"
 	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/events"
@@ -33,8 +34,10 @@ func (m *Manager) Start() error {
 		var chainIndexer chains.ChainIndexer
 
 		switch chainName {
-		case "tron":
-			chainIndexer = tron.NewIndexer(chainConfig.Nodes)
+		// case "tron":
+		// 	chainIndexer = tron.NewIndexer(chainConfig.Nodes)
+		case "evm":
+			chainIndexer = evm.NewIndexer(chainConfig.Nodes)
 		default:
 			return fmt.Errorf("unsupported chain: %s", chainName)
 		}
@@ -43,6 +46,27 @@ func (m *Manager) Start() error {
 		worker.Start()
 		m.workers = append(m.workers, worker)
 	}
+
+	slog.Info("Started indexer", "chains", len(m.workers))
+	return nil
+}
+
+func (m *Manager) StartSelectedChain(chainName string) error {
+	chainConfig := m.config.Indexer.Chains[chainName]
+	var chainIndexer chains.ChainIndexer
+
+	switch chainName {
+	case "tron":
+		chainIndexer = tron.NewIndexer(chainConfig.Nodes)
+	case "evm":
+		chainIndexer = evm.NewIndexer(chainConfig.Nodes)
+	default:
+		return fmt.Errorf("unsupported chain: %s", chainName)
+	}
+
+	worker := NewWorker(chainIndexer, chainConfig, m.emitter)
+	worker.Start()
+	m.workers = append(m.workers, worker)
 
 	slog.Info("Started indexer", "chains", len(m.workers))
 	return nil

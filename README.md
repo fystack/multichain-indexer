@@ -22,17 +22,20 @@ A modular, high-performance blockchain indexer supporting multiple chains with r
 ### Installation
 
 1. Clone the repository:
+
 ```bash
-git clone <repository-url>
-cd blockchain-indexer
+git clone github.com/fystack/indexer
+cd indexer
 ```
 
 2. Install dependencies:
+
 ```bash
 go mod download
 ```
 
 3. Start NATS server:
+
 ```bash
 # Using Docker
 docker run -p 4222:4222 -p 8222:8222 nats:latest --http_port 8222 --js
@@ -42,12 +45,14 @@ docker run -p 4222:4222 -p 8222:8222 nats:latest --http_port 8222 --js
 ```
 
 4. Configure the indexer:
+
 ```bash
 cp configs/config.yaml.example configs/config.yaml
 # Edit configs/config.yaml with your settings
 ```
 
 5. Run the indexer:
+
 ```bash
 go run cmd/indexer/main.go
 ```
@@ -70,18 +75,24 @@ indexer:
       name: "tron"
       nodes:
         - "https://api.trongrid.io"
-        - "https://api.tronstack.io"
-      start_block: 0      # Starting block number
-      batch_size: 10      # Blocks per batch
-      poll_interval: "3s" # Polling interval
+      start_block: 74228620
+      batch_size: 10
+      poll_interval: "5s"
+      rate_limit:
+        requests_per_second: 5 # Maximum 10 requests per second per node
+        burst_size: 10 # Allow burst of up to 20 requests
+      client:
+        request_timeout: "30s" # Timeout for individual requests
+        max_retries: 3 # Maximum retry attempts
+        retry_delay: "10s" # Delay between retries
 ```
 
 ### NATS Configuration
 
 ```yaml
-  nats:
-    url: "nats://localhost:4222"
-    subject_prefix: "blockchain.indexer"
+nats:
+  url: "nats://localhost:4222"
+  subject_prefix: "blockchain.indexer"
 ```
 
 ## Event Types
@@ -89,14 +100,17 @@ indexer:
 The indexer emits the following event types via NATS:
 
 ### Block Events
+
 - **Subject**: `blockchain.indexer.{chain}.block.indexed`
 - **Data**: Complete block information with transactions
 
 ### Transaction Events
+
 - **Subject**: `blockchain.indexer.{chain}.transaction.indexed`
 - **Data**: Individual transaction details
 
 ### Error Events
+
 - **Subject**: `blockchain.indexer.{chain}.indexer.error`
 - **Data**: Error information and context
 
@@ -113,6 +127,7 @@ The indexer emits the following event types via NATS:
 ### Adding New Chains
 
 1. Implement the `ChainIndexer` interface:
+
 ```go
 type ChainIndexer interface {
     GetName() string
@@ -124,12 +139,13 @@ type ChainIndexer interface {
 ```
 
 2. Register the new chain in the manager:
+
 ```go
 switch chainName {
 case "tron":
     chainIndexer = tron.NewIndexer(chainConfig.Nodes)
-case "ethereum":
-    chainIndexer = ethereum.NewIndexer(chainConfig.Nodes)
+case "evm":
+    chainIndexer = evm.NewIndexer(chainConfig.Nodes)
 // Add your new chain here
 }
 ```
@@ -145,6 +161,7 @@ case "ethereum":
 ### Metrics
 
 Monitor the indexer through:
+
 - NATS monitoring endpoint: `http://localhost:8222`
 - Application logs
 - Event stream monitoring
@@ -152,19 +169,25 @@ Monitor the indexer through:
 ## Performance Tuning
 
 ### Batch Size
+
 Adjust `batch_size` based on:
+
 - Node capacity
 - Network latency
 - Processing requirements
 
 ### Poll Interval
+
 Set `poll_interval` considering:
+
 - Block production rate
 - Resource usage
 - Real-time requirements
 
 ### Node Selection
+
 Use multiple nodes for:
+
 - Load distribution
 - High availability
 - Rate limit avoidance
@@ -172,13 +195,14 @@ Use multiple nodes for:
 ## Development
 
 ### Project Structure
+
 ```
 blockchain-indexer/
 ├── cmd/indexer/           # Application entry point
 ├── internal/
 │   ├── config/           # Configuration management
 │   ├── types/            # Common types
-│   ├── nodepool/         # Round-robin node pool
+│   ├── pool/             # Round-robin node pool
 │   ├── events/           # NATS event emitter
 │   ├── chains/           # Chain implementations
 │   └── indexer/          # Core indexing logic
@@ -186,6 +210,7 @@ blockchain-indexer/
 ```
 
 ### Testing
+
 ```bash
 # Run tests
 go test ./...
