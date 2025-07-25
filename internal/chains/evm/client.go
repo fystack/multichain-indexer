@@ -9,53 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fystack/indexer/internal/pool"
-	"github.com/fystack/indexer/internal/ratelimiter"
+	"github.com/fystack/indexer/internal/rpc"
 )
-
-type ClientConfig struct {
-	RequestTimeout time.Duration
-	RateLimit      RateLimitConfig
-	MaxRetries     int
-	RetryDelay     time.Duration
-}
-
-type RateLimitConfig struct {
-	RequestsPerSecond int
-	BurstSize         int
-}
-
-type Client struct {
-	pool        *pool.Pool
-	rateLimiter *ratelimiter.PooledRateLimiter
-	client      *http.Client
-	config      ClientConfig
-}
-
-func NewClient(nodes []string) *Client {
-	return NewClientWithConfig(nodes, ClientConfig{
-		RequestTimeout: 30 * time.Second,
-		RateLimit: RateLimitConfig{
-			RequestsPerSecond: 10,
-			BurstSize:         20,
-		},
-		MaxRetries: 3,
-		RetryDelay: 1 * time.Second,
-	})
-}
-
-func NewClientWithConfig(nodes []string, config ClientConfig) *Client {
-	rateDuration := time.Second / time.Duration(config.RateLimit.RequestsPerSecond)
-
-	return &Client{
-		pool:        pool.New(nodes),
-		rateLimiter: ratelimiter.NewPooledRateLimiter(rateDuration, config.RateLimit.BurstSize),
-		client: &http.Client{
-			Timeout: config.RequestTimeout,
-		},
-		config: config,
-	}
-}
 
 type JSONRPCRequest struct {
 	JSONRPC string      `json:"jsonrpc"`
@@ -75,18 +30,17 @@ type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
-
-func (c *Client) Call(method string, params interface{}) (json.RawMessage, error) {
-	return c.CallWithContext(context.Background(), method, params)
+type EvmClient struct {
+	rpc.HTTPClient
 }
 
-func (c *Client) CallWithContext(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+func (c *EvmClient) callWithContext(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	var lastErr error
 
-	for attempt := 0; attempt <= c.config.MaxRetries; attempt++ {
+	for attempt := 0; attempt <= c.Config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			select {
-			case <-time.After(c.config.RetryDelay):
+			case <-time.After(c.Config.RetryDelay):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
@@ -104,10 +58,10 @@ func (c *Client) CallWithContext(ctx context.Context, method string, params inte
 		}
 	}
 
-	return nil, fmt.Errorf("failed after %d attempts: %w", c.config.MaxRetries+1, lastErr)
+	return nil, fmt.Errorf("failed after %d attempts: %w", c.Config.MaxRetries+1, lastErr)
 }
 
-func (c *Client) makeRequest(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+func (c *EvmClient) makeRequest(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
 	request := JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  method,
@@ -120,9 +74,9 @@ func (c *Client) makeRequest(ctx context.Context, method string, params interfac
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	node := c.pool.GetNext()
+	node := c.Pool.GetNext()
 
-	if err := c.rateLimiter.Wait(ctx, node); err != nil {
+	if err := c.RateLimiter.Wait(ctx, node); err != nil {
 		return nil, fmt.Errorf("rate limit wait failed: %w", err)
 	}
 
@@ -135,29 +89,29 @@ func (c *Client) makeRequest(ctx context.Context, method string, params interfac
 	req.Header.Set("Content-Type", "application/json")
 
 	startTime := time.Now()
-	resp, err := c.client.Do(req)
+	resp, err := c.HTTPClient.Do(req)
 	duration := time.Since(startTime)
 
 	if err != nil {
-		c.pool.MarkFailed(node)
+		c.Pool.MarkFailed(node)
 		return nil, fmt.Errorf("request failed to %s (took %v): %w", node, duration, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		c.pool.MarkFailed(node)
+		c.Pool.MarkFailed(node)
 		return nil, fmt.Errorf("HTTP error %d from %s", resp.StatusCode, node)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.pool.MarkFailed(node)
+		c.Pool.MarkFailed(node)
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	var response JSONRPCResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		c.pool.MarkFailed(node)
+		c.Pool.MarkFailed(node)
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
@@ -165,14 +119,6 @@ func (c *Client) makeRequest(ctx context.Context, method string, params interfac
 		return nil, fmt.Errorf("RPC error from %s: %s (code: %d)", node, response.Error.Message, response.Error.Code)
 	}
 
-	c.pool.MarkHealthy(node)
+	c.Pool.MarkHealthy(node)
 	return response.Result, nil
-}
-
-func (c *Client) GetRateLimitStats() map[string]ratelimiter.Stats {
-	return c.rateLimiter.GetStats()
-}
-
-func (c *Client) Close() {
-	c.rateLimiter.Close()
 }

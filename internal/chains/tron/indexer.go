@@ -10,6 +10,7 @@ import (
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/ratelimiter"
+	"github.com/fystack/indexer/internal/rpc"
 	"github.com/fystack/indexer/internal/types"
 )
 
@@ -34,9 +35,9 @@ func NewIndexer(nodes []string) *Indexer {
 }
 
 func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
-	clientConfig := ClientConfig{
+	clientConfig := rpc.ClientConfig{
 		RequestTimeout: config.Client.RequestTimeout,
-		RateLimit: RateLimitConfig{
+		RateLimit: rpc.RateLimitConfig{
 			RequestsPerSecond: config.RateLimit.RequestsPerSecond,
 			BurstSize:         config.RateLimit.BurstSize,
 		},
@@ -45,7 +46,9 @@ func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
 	}
 
 	return &Indexer{
-		client: NewClientWithConfig(nodes, clientConfig),
+		client: &Client{
+			HTTPClient: rpc.NewHTTPClientWithConfig(nodes, clientConfig),
+		},
 		name:   "tron",
 		config: config,
 	}
@@ -84,6 +87,8 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	return i.parseBlock(result)
 }
 
+// TRON doesn't support batch fetching
+// So we need to fetch one by one
 func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 	var results []chains.BlockResult
 

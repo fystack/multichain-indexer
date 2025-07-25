@@ -72,7 +72,7 @@ func runIndexer(chainName, configPath string) {
 		TimeFormat: time.RFC3339,
 	})
 
-	slog.Info("config loaded")
+	slog.Info("Config loaded")
 
 	manager, err := indexer.NewManager(cfg)
 	if err != nil {

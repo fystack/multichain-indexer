@@ -10,11 +10,12 @@ import (
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/ratelimiter"
+	"github.com/fystack/indexer/internal/rpc"
 	"github.com/fystack/indexer/internal/types"
 )
 
 type Indexer struct {
-	client *Client
+	client *EvmClient
 	name   string
 	config config.ChainConfig
 }
@@ -34,9 +35,9 @@ func NewIndexer(nodes []string) *Indexer {
 }
 
 func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
-	clientConfig := ClientConfig{
+	clientConfig := rpc.ClientConfig{
 		RequestTimeout: config.Client.RequestTimeout,
-		RateLimit: RateLimitConfig{
+		RateLimit: rpc.RateLimitConfig{
 			RequestsPerSecond: config.RateLimit.RequestsPerSecond,
 			BurstSize:         config.RateLimit.BurstSize,
 		},
@@ -45,7 +46,9 @@ func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
 	}
 
 	return &Indexer{
-		client: NewClientWithConfig(nodes, clientConfig),
+		client: &EvmClient{
+			HTTPClient: *rpc.NewHTTPClientWithConfig(nodes, clientConfig),
+		},
 		name:   "evm",
 		config: config,
 	}
@@ -59,7 +62,7 @@ func (i *Indexer) GetLatestBlockNumber() (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), i.config.Client.RequestTimeout)
 	defer cancel()
 
-	result, err := i.client.CallWithContext(ctx, "eth_blockNumber", []any{})
+	result, err := i.client.callWithContext(ctx, "eth_blockNumber", []any{})
 	if err != nil {
 		return 0, err
 	}
@@ -77,7 +80,7 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	defer cancel()
 
 	hexNumber := fmt.Sprintf("0x%x", number)
-	result, err := i.client.CallWithContext(ctx, "eth_getBlockByNumber", []any{hexNumber, true})
+	result, err := i.client.callWithContext(ctx, "eth_getBlockByNumber", []any{hexNumber, true})
 	if err != nil {
 		return nil, err
 	}
@@ -85,6 +88,8 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	return i.parseBlock(result)
 }
 
+// TODO: Implement batch fetching
+// Might be implemented in the future
 func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 	var results []chains.BlockResult
 
