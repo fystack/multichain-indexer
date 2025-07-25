@@ -15,7 +15,7 @@ import (
 )
 
 type Indexer struct {
-	client *Client
+	client *TronClient
 	name   string
 	config config.ChainConfig
 }
@@ -46,7 +46,7 @@ func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
 	}
 
 	return &Indexer{
-		client: &Client{
+		client: &TronClient{
 			HTTPClient: rpc.NewHTTPClientWithConfig(nodes, clientConfig),
 		},
 		name:   "tron",
@@ -142,53 +142,51 @@ func (i *Indexer) Close() {
 }
 
 func (i *Indexer) parseBlock(data any) (*types.Block, error) {
-	blockData, err := json.Marshal(data)
+	// Marshal from `any` to []byte
+	blockBytes, err := json.Marshal(data)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal block failed: %w", err)
 	}
 
-	var rawBlock map[string]any
-	if err := json.Unmarshal(blockData, &rawBlock); err != nil {
-		return nil, err
-	}
-
-	block := &types.Block{
-		Hash:       rawBlock["hash"].(string),
-		ParentHash: rawBlock["parentHash"].(string),
+	// Unmarshal to struct type-safe
+	var raw rawBlock
+	if err := json.Unmarshal(blockBytes, &raw); err != nil {
+		return nil, fmt.Errorf("unmarshal block failed: %w", err)
 	}
 
 	// Parse block number
-	if numberHex, ok := rawBlock["number"].(string); ok {
-		if number, err := strconv.ParseInt(numberHex, 0, 64); err == nil {
-			block.Number = number
-		}
+	number, err := strconv.ParseInt(raw.Number, 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid block number: %w", err)
 	}
 
 	// Parse timestamp
-	if timestampHex, ok := rawBlock["timestamp"].(string); ok {
-		if timestamp, err := strconv.ParseInt(timestampHex, 0, 64); err == nil {
-			block.Timestamp = timestamp
-		}
+	timestamp, err := strconv.ParseInt(raw.Timestamp, 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %w", err)
 	}
 
-	// Parse transactions
-	if txs, ok := rawBlock["transactions"].([]any); ok {
-		for idx, tx := range txs {
-			if txMap, ok := tx.(map[string]any); ok {
-				toStr, _ := txMap["to"].(string)
-				transaction := types.Transaction{
-					Hash:             txMap["hash"].(string),
-					From:             txMap["from"].(string),
-					To:               toStr,
-					Value:            txMap["value"].(string),
-					BlockNumber:      block.Number,
-					BlockHash:        block.Hash,
-					TransactionIndex: idx,
-					Status:           "success", // Default for now
-				}
-				block.Transactions = append(block.Transactions, transaction)
-			}
-		}
+	// Create block result
+	block := &types.Block{
+		Hash:       raw.Hash,
+		ParentHash: raw.ParentHash,
+		Number:     number,
+		Timestamp:  timestamp,
+	}
+
+	// Assign transactions
+	block.Transactions = make([]types.Transaction, 0, len(raw.Transactions))
+	for i, tx := range raw.Transactions {
+		block.Transactions = append(block.Transactions, types.Transaction{
+			Hash:             tx.Hash,
+			From:             tx.From,
+			To:               tx.To,
+			Value:            tx.Value,
+			BlockNumber:      number,
+			BlockHash:        raw.Hash,
+			TransactionIndex: i,
+			Status:           "success", // default
+		})
 	}
 
 	return block, nil

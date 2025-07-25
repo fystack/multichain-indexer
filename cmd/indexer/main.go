@@ -54,7 +54,7 @@ func setupRootCmd() *cobra.Command {
 		},
 	}
 	natsPrinterCmd.Flags().StringVar(&natsURL, "nats-url", nats.DefaultURL, "NATS server URL")
-	natsPrinterCmd.Flags().StringVar(&subject, "subject", "indexer.>", "NATS subject to subscribe to")
+	natsPrinterCmd.Flags().StringVar(&subject, "subject", "blockchain.indexer.>", "NATS subject to subscribe to")
 
 	rootCmd.AddCommand(indexCmd, natsPrinterCmd)
 	return rootCmd

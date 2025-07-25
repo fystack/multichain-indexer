@@ -49,7 +49,7 @@ func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
 		client: &EvmClient{
 			HTTPClient: *rpc.NewHTTPClientWithConfig(nodes, clientConfig),
 		},
-		name:   "evm",
+		name:   chains.ChainEVM,
 		config: config,
 	}
 }
@@ -142,45 +142,40 @@ func (i *Indexer) Close() {
 }
 
 func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
-	var raw map[string]any
+	var raw rawBlock
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("invalid block data: %w", err)
 	}
 
+	number, err := strconv.ParseInt(raw.Number, 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid block number: %w", err)
+	}
+
+	timestamp, err := strconv.ParseInt(raw.Timestamp, 0, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid timestamp: %w", err)
+	}
+
 	block := &types.Block{
-		Hash:       raw["hash"].(string),
-		ParentHash: raw["parentHash"].(string),
+		Hash:       raw.Hash,
+		ParentHash: raw.ParentHash,
+		Number:     number,
+		Timestamp:  timestamp,
 	}
 
-	if hexNum, ok := raw["number"].(string); ok {
-		if num, err := strconv.ParseInt(hexNum, 0, 64); err == nil {
-			block.Number = num
+	for idx, tx := range raw.Transactions {
+		transaction := types.Transaction{
+			Hash:             tx.Hash,
+			From:             tx.From,
+			To:               tx.To,
+			Value:            tx.Value,
+			BlockNumber:      number,
+			BlockHash:        raw.Hash,
+			TransactionIndex: idx,
+			Status:           "success",
 		}
-	}
-
-	if hexTime, ok := raw["timestamp"].(string); ok {
-		if ts, err := strconv.ParseInt(hexTime, 0, 64); err == nil {
-			block.Timestamp = ts
-		}
-	}
-
-	if txs, ok := raw["transactions"].([]any); ok {
-		for idx, tx := range txs {
-			if txMap, ok := tx.(map[string]any); ok {
-				toStr, _ := txMap["to"].(string)
-				transaction := types.Transaction{
-					Hash:             txMap["hash"].(string),
-					From:             txMap["from"].(string),
-					To:               toStr,
-					Value:            txMap["value"].(string),
-					BlockNumber:      block.Number,
-					BlockHash:        block.Hash,
-					TransactionIndex: idx,
-					Status:           "success", // EVM mặc định
-				}
-				block.Transactions = append(block.Transactions, transaction)
-			}
-		}
+		block.Transactions = append(block.Transactions, transaction)
 	}
 
 	return block, nil

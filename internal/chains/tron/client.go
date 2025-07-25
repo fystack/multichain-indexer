@@ -31,11 +31,11 @@ type RPCError struct {
 	Message string `json:"message"`
 }
 
-type Client struct {
+type TronClient struct {
 	*rpc.HTTPClient
 }
 
-func (c *Client) callWithContext(ctx context.Context, method string, params []any) (any, error) {
+func (c *TronClient) callWithContext(ctx context.Context, method string, params []any) (any, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.Config.MaxRetries; attempt++ {
@@ -64,7 +64,7 @@ func (c *Client) callWithContext(ctx context.Context, method string, params []an
 	return nil, fmt.Errorf("failed after %d attempts: %w", c.Config.MaxRetries+1, lastErr)
 }
 
-func (c *Client) makeRequest(ctx context.Context, method string, params []any) (any, error) {
+func (c *TronClient) makeRequest(ctx context.Context, method string, params []any) (any, error) {
 	request := JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  method,
