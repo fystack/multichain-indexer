@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,36 +11,80 @@ import (
 	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/indexer"
 	"github.com/fystack/indexer/internal/logger"
+	"github.com/nats-io/nats.go"
+	"github.com/spf13/cobra"
 )
 
 func main() {
+	rootCmd := setupRootCmd()
+	if err := rootCmd.Execute(); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+}
+
+func setupRootCmd() *cobra.Command {
+	var (
+		chainName  string
+		configPath string
+		natsURL    string
+		subject    string
+	)
+
+	rootCmd := &cobra.Command{
+		Use:   "indexer",
+		Short: "Unified blockchain indexer CLI",
+	}
+
+	indexCmd := &cobra.Command{
+		Use:   "index",
+		Short: "Run the indexer",
+		Run: func(cmd *cobra.Command, args []string) {
+			runIndexer(chainName, configPath)
+		},
+	}
+	indexCmd.Flags().StringVar(&chainName, "chain", "", "Chain to index (e.g. tron, evm, or empty for all)")
+	indexCmd.Flags().StringVar(&configPath, "config", "configs/config.yaml", "Path to configuration file")
+
+	natsPrinterCmd := &cobra.Command{
+		Use:   "nats-printer",
+		Short: "Run the NATS event printer",
+		Run: func(cmd *cobra.Command, args []string) {
+			runNatsPrinter(natsURL, subject)
+		},
+	}
+	natsPrinterCmd.Flags().StringVar(&natsURL, "nats-url", nats.DefaultURL, "NATS server URL")
+	natsPrinterCmd.Flags().StringVar(&subject, "subject", "indexer.>", "NATS subject to subscribe to")
+
+	rootCmd.AddCommand(indexCmd, natsPrinterCmd)
+	return rootCmd
+}
+
+func runIndexer(chainName, configPath string) {
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		slog.Error("Failed to load config", "err", err)
+		os.Exit(1)
+	}
+
 	logger.Init(&logger.Options{
-		Level:      slog.LevelDebug,
+		Level:      slog.LevelInfo,
 		TimeFormat: time.RFC3339,
 	})
 
-	configPath := flag.String("config", "configs/config.yaml", "Path to configuration file")
-	flag.Parse()
-
-	// Load configuration
-	cfg, err := config.Load(*configPath)
-	if err != nil {
-		slog.Error("Failed to load config", "error", err)
-	}
-
 	slog.Info("config loaded")
 
-	// Create and start indexer manager
 	manager, err := indexer.NewManager(cfg)
 	if err != nil {
 		slog.Error("Failed to create indexer manager", "error", err)
+		os.Exit(1)
 	}
 
-	if err := manager.Start(); err != nil {
+	if err := manager.Start(chainName); err != nil {
 		slog.Error("Failed to start indexer", "error", err)
+		os.Exit(1)
 	}
 
-	// Wait for interrupt signal
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 
@@ -50,4 +94,25 @@ func main() {
 	slog.Info("Shutting down indexer...")
 	manager.Stop()
 	slog.Info("Indexer stopped.")
+}
+
+func runNatsPrinter(natsURL, subject string) {
+	nc, err := nats.Connect(natsURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to NATS: %v\n", err)
+		os.Exit(1)
+	}
+	defer nc.Close()
+
+	fmt.Printf("Subscribed to subject: %s\n", subject)
+
+	_, err = nc.Subscribe(subject, func(msg *nats.Msg) {
+		fmt.Printf("[%s] %s\n", msg.Subject, string(msg.Data))
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to subscribe: %v\n", err)
+		os.Exit(1)
+	}
+
+	select {} // Block forever
 }

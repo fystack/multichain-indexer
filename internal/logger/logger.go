@@ -16,7 +16,7 @@ var (
 type Options struct {
 	Level      slog.Leveler // slog.LevelInfo, slog.LevelDebug, etc.
 	Writer     *os.File     // default: os.Stdout
-	TimeFormat string       // default: 15:04:05
+	TimeFormat string       // default: 2025-07-25T10:41:10+07:00
 }
 
 func Init(opts *Options) {

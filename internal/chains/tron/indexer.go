@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/ratelimiter"
 	"github.com/fystack/indexer/internal/types"
 )
@@ -14,16 +15,16 @@ import (
 type Indexer struct {
 	client *Client
 	name   string
-	config types.ChainConfig
+	config config.ChainConfig
 }
 
 func NewIndexer(nodes []string) *Indexer {
-	return NewIndexerWithConfig(nodes, types.ChainConfig{
-		RateLimit: types.RateLimitConfig{
+	return NewIndexerWithConfig(nodes, config.ChainConfig{
+		RateLimit: config.RateLimitConfig{
 			RequestsPerSecond: 10,
 			BurstSize:         20,
 		},
-		Client: types.ClientConfig{
+		Client: config.ClientConfig{
 			RequestTimeout: 30 * time.Second,
 			MaxRetries:     3,
 			RetryDelay:     1 * time.Second,
@@ -31,7 +32,7 @@ func NewIndexer(nodes []string) *Indexer {
 	})
 }
 
-func NewIndexerWithConfig(nodes []string, config types.ChainConfig) *Indexer {
+func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
 	clientConfig := ClientConfig{
 		RequestTimeout: config.Client.RequestTimeout,
 		RateLimit: RateLimitConfig{

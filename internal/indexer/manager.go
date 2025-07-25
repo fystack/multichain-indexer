@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"fmt"
-	"log/slog"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/chains/evm"
@@ -29,14 +28,26 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	}, nil
 }
 
-func (m *Manager) Start() error {
-	for chainName, chainConfig := range m.config.Indexer.Chains {
-		var chainIndexer chains.ChainIndexer
+// Start starts all chains if chainName is empty, or a specific chain if chainName is provided.
+func (m *Manager) Start(chainNameOpt ...string) error {
+	var chainsToStart map[string]config.ChainConfig
+	if len(chainNameOpt) > 0 && chainNameOpt[0] != "" {
+		name := chainNameOpt[0]
+		cfg, ok := m.config.Indexer.Chains[name]
+		if !ok {
+			return fmt.Errorf("chain not found in config: %s", name)
+		}
+		chainsToStart = map[string]config.ChainConfig{name: cfg}
+	} else {
+		chainsToStart = m.config.Indexer.Chains
+	}
 
+	for chainName, chainConfig := range chainsToStart {
+		var chainIndexer chains.ChainIndexer
 		switch chainName {
-		// case "tron":
-		// 	chainIndexer = tron.NewIndexer(chainConfig.Nodes)
-		case "evm":
+		case chains.ChainTron:
+			chainIndexer = tron.NewIndexer(chainConfig.Nodes)
+		case chains.ChainEVM:
 			chainIndexer = evm.NewIndexer(chainConfig.Nodes)
 		default:
 			return fmt.Errorf("unsupported chain: %s", chainName)
@@ -47,28 +58,6 @@ func (m *Manager) Start() error {
 		m.workers = append(m.workers, worker)
 	}
 
-	slog.Info("Started indexer", "chains", len(m.workers))
-	return nil
-}
-
-func (m *Manager) StartSelectedChain(chainName string) error {
-	chainConfig := m.config.Indexer.Chains[chainName]
-	var chainIndexer chains.ChainIndexer
-
-	switch chainName {
-	case "tron":
-		chainIndexer = tron.NewIndexer(chainConfig.Nodes)
-	case "evm":
-		chainIndexer = evm.NewIndexer(chainConfig.Nodes)
-	default:
-		return fmt.Errorf("unsupported chain: %s", chainName)
-	}
-
-	worker := NewWorker(chainIndexer, chainConfig, m.emitter)
-	worker.Start()
-	m.workers = append(m.workers, worker)
-
-	slog.Info("Started indexer", "chains", len(m.workers))
 	return nil
 }
 

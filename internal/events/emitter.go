@@ -10,6 +10,16 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const (
+	EventBlockIndexed       = "block.indexed"
+	EventTransactionIndexed = "transaction.indexed"
+	EventIndexerError       = "indexer.error"
+)
+
+type ErrorEvent struct {
+	Error string `json:"error"`
+}
+
 type Emitter struct {
 	conn          *nats.Conn
 	subjectPrefix string
@@ -29,7 +39,7 @@ func NewEmitter(natsURL, subjectPrefix string) (*Emitter, error) {
 
 func (e *Emitter) EmitBlock(chain string, block *types.Block) error {
 	event := types.IndexerEvent{
-		Type:      "block.indexed",
+		Type:      EventBlockIndexed,
 		Chain:     chain,
 		Data:      block,
 		Timestamp: time.Now().Unix(),
@@ -39,7 +49,7 @@ func (e *Emitter) EmitBlock(chain string, block *types.Block) error {
 
 func (e *Emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	event := types.IndexerEvent{
-		Type:      "transaction.indexed",
+		Type:      EventTransactionIndexed,
 		Chain:     chain,
 		Data:      tx,
 		Timestamp: time.Now().Unix(),
@@ -49,9 +59,9 @@ func (e *Emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 
 func (e *Emitter) EmitError(chain string, err error) error {
 	event := types.IndexerEvent{
-		Type:      "indexer.error",
+		Type:      EventIndexerError,
 		Chain:     chain,
-		Data:      map[string]string{"error": err.Error()},
+		Data:      ErrorEvent{Error: err.Error()},
 		Timestamp: time.Now().Unix(),
 	}
 	return e.emit(event)

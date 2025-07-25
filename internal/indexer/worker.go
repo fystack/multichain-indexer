@@ -9,20 +9,20 @@ import (
 	"time"
 
 	"github.com/fystack/indexer/internal/chains"
+	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/events"
-	"github.com/fystack/indexer/internal/types"
 )
 
 type Worker struct {
 	chain        chains.ChainIndexer
-	config       types.ChainConfig
+	config       config.ChainConfig
 	emitter      *events.Emitter
 	currentBlock int64
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
 
-func NewWorker(chain chains.ChainIndexer, config types.ChainConfig, emitter *events.Emitter) *Worker {
+func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, emitter *events.Emitter) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Worker{
 		chain:        chain,
@@ -75,9 +75,7 @@ func (w *Worker) processBlocks() error {
 	}
 
 	endBlock := w.currentBlock + int64(w.config.BatchSize) - 1
-	if endBlock > latestBlock {
-		endBlock = latestBlock
-	}
+	endBlock = min(endBlock, latestBlock)
 
 	var lastSuccessBlock int64 = w.currentBlock - 1
 
@@ -130,6 +128,7 @@ func failedBlockLogger() (*os.File, error) {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return nil, err
 	}
-	logFile := filepath.Join(logDir, "failed_blocks.log")
+	today := time.Now().Format("2006-01-02")
+	logFile := filepath.Join(logDir, fmt.Sprintf("failed_blocks_%s.log", today))
 	return os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 }

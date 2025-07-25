@@ -46,6 +46,8 @@ func TestRateLimiter_TryAcquire(t *testing.T) {
 	if !rl.TryAcquire() {
 		t.Error("Failed to acquire second token")
 	}
+	available, capacity, rate := rl.GetStats()
+	t.Logf("Available: %d, Capacity: %d, Rate: %v\n", available, capacity, rate)
 
 	// 3rd attempt should fail
 	if rl.TryAcquire() {
