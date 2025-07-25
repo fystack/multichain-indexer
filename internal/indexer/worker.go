@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,19 +12,34 @@ import (
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/events"
+	"github.com/fystack/indexer/internal/types"
 )
 
+type FailedBlock struct {
+	Chain string `json:"chain"`
+	Block int64  `json:"block"`
+	Error string `json:"error"`
+}
+
 type Worker struct {
-	chain        chains.ChainIndexer
 	config       config.ChainConfig
+	chain        chains.ChainIndexer
 	emitter      *events.Emitter
 	currentBlock int64
 	ctx          context.Context
 	cancel       context.CancelFunc
+	logFile      *os.File
+	logFileDate  string
 }
 
 func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, emitter *events.Emitter) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	logFile, date, err := createLogFile()
+	if err != nil {
+		slog.Error("Failed to create failed block logger", "error", err)
+	}
+
 	return &Worker{
 		chain:        chain,
 		config:       config,
@@ -31,6 +47,8 @@ func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, emitter *ev
 		currentBlock: config.StartBlock,
 		ctx:          ctx,
 		cancel:       cancel,
+		logFile:      logFile,
+		logFileDate:  date,
 	}
 }
 
@@ -40,95 +58,102 @@ func (w *Worker) Start() {
 
 func (w *Worker) Stop() {
 	w.cancel()
+	if w.logFile != nil {
+		_ = w.logFile.Close()
+	}
 }
 
 func (w *Worker) run() {
 	ticker := time.NewTicker(w.config.PollInterval)
 	defer ticker.Stop()
 
-	slog.Info("Starting indexer for chain", "chain", w.chain.GetName())
+	slog.Info("Starting indexer", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 
 	for {
 		select {
 		case <-w.ctx.Done():
 			return
 		case <-ticker.C:
+			slog.Info("Processing blocks", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 			if err := w.processBlocks(); err != nil {
-				slog.Error("Error processing blocks for chain", "chain", w.chain.GetName(), "error", err)
-				if err := w.emitter.EmitError(w.chain.GetName(), err); err != nil {
-					slog.Error("Failed to emit error event", "chain", w.chain.GetName(), "error", err)
-				}
+				slog.Error("Error processing blocks", "chain", w.chain.GetName(), "error", err)
+				_ = w.emitter.EmitError(w.chain.GetName(), err)
 			}
 		}
 	}
 }
 
 func (w *Worker) processBlocks() error {
-	latestBlock, err := w.chain.GetLatestBlockNumber()
+	latest, err := w.chain.GetLatestBlockNumber()
 	if err != nil {
-		return fmt.Errorf("failed to get latest block: %w", err)
+		return fmt.Errorf("get latest block: %w", err)
 	}
-	slog.Info("Latest block", "chain", w.chain.GetName(), "block", latestBlock)
-
-	if w.currentBlock >= latestBlock {
-		return nil // Nothing to process
+	if w.currentBlock > latest {
+		return nil
 	}
 
-	endBlock := w.currentBlock + int64(w.config.BatchSize) - 1
-	endBlock = min(endBlock, latestBlock)
+	end := min(w.currentBlock+int64(w.config.BatchSize)-1, latest)
+	lastSuccess := w.currentBlock - 1
 
-	var lastSuccessBlock int64 = w.currentBlock - 1
-
-	// Prepare log file
-	logFile, err := failedBlockLogger()
-	if err != nil {
-		return fmt.Errorf("failed to prepare log file: %w", err)
-	}
-	defer logFile.Close()
-
-	for blockNumber := w.currentBlock; blockNumber <= endBlock; blockNumber++ {
-		block, err := w.chain.GetBlock(blockNumber)
+	for i := w.currentBlock; i <= end; i++ {
+		block, err := w.chain.GetBlock(i)
 		if err != nil {
-			msg := fmt.Sprintf("Failed to fetch block: chain=%s block=%d err=%v\n", w.chain.GetName(), blockNumber, err)
-			slog.Error(msg)
-
-			// write to log file
-			_, _ = logFile.WriteString(msg)
-
-			// emit error for observability
-			_ = w.emitter.EmitError(w.chain.GetName(), fmt.Errorf("failed block %d: %w", blockNumber, err))
+			w.logFailedBlock(i, err)
 			continue
 		}
 
-		if err := w.emitter.EmitBlock(w.chain.GetName(), block); err != nil {
-			slog.Error("Failed to emit block event", "chain", w.chain.GetName(), "error", err)
-		}
-
-		for _, tx := range block.Transactions {
-			if err := w.emitter.EmitTransaction(w.chain.GetName(), &tx); err != nil {
-				slog.Error("Failed to emit transaction event", "chain", w.chain.GetName(), "tx", tx.Hash, "error", err)
-			}
-		}
-
-		slog.Info("Processed block", "chain", w.chain.GetName(), "block", block.Number, "transactions", len(block.Transactions))
-		lastSuccessBlock = block.Number
+		w.emitBlock(block)
+		lastSuccess = i
 	}
 
-	// Move currentBlock forward only to last successfully processed block
-	if lastSuccessBlock >= w.currentBlock {
-		w.currentBlock = lastSuccessBlock + 1
+	if lastSuccess >= w.currentBlock {
+		w.currentBlock = lastSuccess + 1
 	}
-
 	return nil
 }
 
-// failedBlockLogger returns a file handle for appending block errors
-func failedBlockLogger() (*os.File, error) {
+func (w *Worker) logFailedBlock(blockNumber int64, err error) {
+	// Rotate log file daily if needed
+	currentDate := time.Now().Format("2006-01-02")
+	if currentDate != w.logFileDate {
+		_ = w.logFile.Close()
+		w.logFile, w.logFileDate, _ = createLogFile()
+	}
+
+	msg := FailedBlock{
+		Chain: w.chain.GetName(),
+		Block: blockNumber,
+		Error: err.Error(),
+	}
+	if data, err := json.Marshal(msg); err == nil {
+		_, _ = w.logFile.WriteString(string(data) + "\n")
+	}
+	slog.Error("Failed block", "chain", w.chain.GetName(), "block", blockNumber, "error", err)
+	_ = w.emitter.EmitError(w.chain.GetName(), fmt.Errorf("failed block %d: %w", blockNumber, err))
+}
+
+func (w *Worker) emitBlock(block *types.Block) {
+	if err := w.emitter.EmitBlock(w.chain.GetName(), block); err != nil {
+		slog.Error("Emit block failed", "chain", w.chain.GetName(), "err", err)
+	}
+
+	for _, tx := range block.Transactions {
+		if err := w.emitter.EmitTransaction(w.chain.GetName(), &tx); err != nil {
+			slog.Error("Emit transaction failed", "chain", w.chain.GetName(), "tx", tx.Hash, "err", err)
+		}
+	}
+
+	slog.Info("Processed block", "chain", w.chain.GetName(), "block", block.Number, "txs", len(block.Transactions))
+}
+
+// createLogFile opens the daily failed block log file.
+func createLogFile() (*os.File, string, error) {
+	date := time.Now().Format("2006-01-02")
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	today := time.Now().Format("2006-01-02")
-	logFile := filepath.Join(logDir, fmt.Sprintf("failed_blocks_%s.log", today))
-	return os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	path := filepath.Join(logDir, fmt.Sprintf("failed_blocks_%s.log", date))
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	return f, date, err
 }
