@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,9 +17,10 @@ import (
 )
 
 type FailedBlock struct {
-	Chain string `json:"chain"`
-	Block int64  `json:"block"`
-	Error string `json:"error"`
+	Timestamp string `json:"timestamp"`
+	Chain     string `json:"chain"`
+	Block     int64  `json:"block"`
+	Error     string `json:"error"`
 }
 
 type Worker struct {
@@ -95,35 +97,50 @@ func (w *Worker) processBlocks() error {
 	end := min(w.currentBlock+int64(w.config.BatchSize)-1, latest)
 	lastSuccess := w.currentBlock - 1
 
-	for i := w.currentBlock; i <= end; i++ {
-		block, err := w.chain.GetBlock(i)
-		if err != nil {
-			w.logFailedBlock(i, err)
+	results, err := w.chain.GetBlocks(w.currentBlock, end)
+	if err != nil {
+		return fmt.Errorf("get batch blocks: %w", err)
+	}
+
+	for _, result := range results {
+		if result.Error != nil {
+			w.logFailedBlock(result.Number, errors.New(result.Error.Message))
 			continue
 		}
 
-		w.emitBlock(block)
-		lastSuccess = i
+		if result.Block == nil {
+			slog.Error("Block is nil",
+				"chain", w.chain.GetName(),
+				"block", result.Number,
+			)
+			w.logFailedBlock(result.Number, fmt.Errorf("block is nil"))
+			continue
+		}
+
+		w.emitBlock(result.Block)
+		lastSuccess = result.Number
 	}
 
 	if lastSuccess >= w.currentBlock {
 		w.currentBlock = lastSuccess + 1
 	}
+
 	return nil
 }
 
 func (w *Worker) logFailedBlock(blockNumber int64, err error) {
 	// Rotate log file daily if needed
-	currentDate := time.Now().Format("2006-01-02")
+	currentDate := time.Now().Format(time.DateOnly)
 	if currentDate != w.logFileDate {
 		_ = w.logFile.Close()
 		w.logFile, w.logFileDate, _ = createLogFile()
 	}
 
 	msg := FailedBlock{
-		Chain: w.chain.GetName(),
-		Block: blockNumber,
-		Error: err.Error(),
+		Timestamp: time.Now().Format(time.RFC3339),
+		Chain:     w.chain.GetName(),
+		Block:     blockNumber,
+		Error:     err.Error(),
 	}
 	if data, err := json.Marshal(msg); err == nil {
 		_, _ = w.logFile.WriteString(string(data) + "\n")
@@ -148,7 +165,7 @@ func (w *Worker) emitBlock(block *types.Block) {
 
 // createLogFile opens the daily failed block log file.
 func createLogFile() (*os.File, string, error) {
-	date := time.Now().Format("2006-01-02")
+	date := time.Now().Format(time.DateOnly)
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return nil, "", err

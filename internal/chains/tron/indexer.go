@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
 	"github.com/fystack/indexer/internal/ratelimiter"
 	"github.com/fystack/indexer/internal/types"
@@ -83,16 +84,43 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	return i.parseBlock(result)
 }
 
-func (i *Indexer) GetBlocks(from, to int64) ([]*types.Block, error) {
-	var blocks []*types.Block
+func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
+	var results []chains.BlockResult
+
 	for blockNum := from; blockNum <= to; blockNum++ {
 		block, err := i.GetBlock(blockNum)
 		if err != nil {
-			return nil, fmt.Errorf("failed to get block %d: %w", blockNum, err)
+			results = append(results, chains.BlockResult{
+				Number: blockNum,
+				Block:  nil,
+				Error: &chains.Error{
+					ErrorType: chains.ErrorTypeBlockNotFound,
+					Message:   fmt.Sprintf("failed to get block: %v", err),
+				},
+			})
+			continue
 		}
-		blocks = append(blocks, block)
+
+		if block == nil {
+			results = append(results, chains.BlockResult{
+				Number: blockNum,
+				Block:  nil,
+				Error: &chains.Error{
+					ErrorType: chains.ErrorTypeBlockNil,
+					Message:   "block is nil",
+				},
+			})
+			continue
+		}
+
+		results = append(results, chains.BlockResult{
+			Number: blockNum,
+			Block:  block,
+			Error:  nil,
+		})
 	}
-	return blocks, nil
+
+	return results, nil
 }
 
 func (i *Indexer) IsHealthy() bool {

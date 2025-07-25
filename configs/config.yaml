@@ -4,14 +4,15 @@ indexer:
       name: "tron"
       nodes:
         - "https://api.trongrid.io"
-      start_block: 74228620
+        - "https://tron-rpc.publicnode.com"
+      start_block: 74228736
       batch_size: 10
-      poll_interval: "5s"
+      poll_interval: "1s"
       rate_limit:
-        requests_per_second: 5 # Maximum 10 requests per second per node
-        burst_size: 10 # Allow burst of up to 20 requests
+        requests_per_second: 10 # Maximum 10 requests per second per node
+        burst_size: 20 # Allow burst of up to 20 requests
       client:
-        request_timeout: "30s" # Timeout for individual requests
+        request_timeout: "10s" # Timeout for individual requests
         max_retries: 3 # Maximum retry attempts
         retry_delay: "10s" # Delay between retries
     evm:
