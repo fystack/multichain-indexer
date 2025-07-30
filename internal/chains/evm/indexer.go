@@ -3,9 +3,9 @@ package evm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
-	"time"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
@@ -21,17 +21,7 @@ type Indexer struct {
 }
 
 func NewIndexer(nodes []string) *Indexer {
-	return NewIndexerWithConfig(nodes, config.ChainConfig{
-		RateLimit: config.RateLimitConfig{
-			RequestsPerSecond: 10,
-			BurstSize:         20,
-		},
-		Client: config.ClientConfig{
-			RequestTimeout: 30 * time.Second,
-			MaxRetries:     3,
-			RetryDelay:     1 * time.Second,
-		},
-	})
+	return NewIndexerWithConfig(nodes, chains.DefaultChainConfig)
 }
 
 func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
@@ -128,6 +118,11 @@ func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 
 	return results, nil
 }
+
+func (i *Indexer) GetBlocksParallel(from, to int64, numWorkers int) ([]chains.BlockResult, error) {
+	return nil, errors.New("not implemented")
+}
+
 func (i *Indexer) IsHealthy() bool {
 	_, err := i.GetLatestBlockNumber()
 	return err == nil

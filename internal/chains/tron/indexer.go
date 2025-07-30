@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"time"
+	"sync"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
@@ -20,18 +20,8 @@ type Indexer struct {
 	config config.ChainConfig
 }
 
-func NewIndexer(nodes []string) *Indexer {
-	return NewIndexerWithConfig(nodes, config.ChainConfig{
-		RateLimit: config.RateLimitConfig{
-			RequestsPerSecond: 10,
-			BurstSize:         20,
-		},
-		Client: config.ClientConfig{
-			RequestTimeout: 30 * time.Second,
-			MaxRetries:     3,
-			RetryDelay:     1 * time.Second,
-		},
-	})
+func NewDefaultIndexer(nodes []string) *Indexer {
+	return NewIndexerWithConfig(nodes, chains.DefaultChainConfig)
 }
 
 func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
@@ -49,7 +39,7 @@ func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
 		client: &TronClient{
 			HTTPClient: rpc.NewHTTPClientWithConfig(nodes, clientConfig),
 		},
-		name:   "tron",
+		name:   chains.ChainTron,
 		config: config,
 	}
 }
@@ -123,6 +113,82 @@ func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 			Block:  block,
 			Error:  nil,
 		})
+	}
+
+	return results, nil
+}
+
+func (i *Indexer) GetBlocksParallel(from, to int64, numWorkers int) ([]chains.BlockResult, error) {
+	blockCount := to - from + 1
+	if blockCount <= 0 {
+		return nil, nil
+	}
+
+	type indexedResult struct {
+		index  int
+		result chains.BlockResult
+	}
+
+	results := make([]chains.BlockResult, blockCount)
+	blockChan := make(chan int64, blockCount)
+	resultChan := make(chan indexedResult, blockCount)
+
+	numWorkers = min(numWorkers, int(blockCount))
+
+	var wg sync.WaitGroup
+
+	// Worker pool
+	for w := 0; w < numWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for blockNum := range blockChan {
+				block, err := i.GetBlock(blockNum)
+
+				result := chains.BlockResult{
+					Number: blockNum,
+				}
+
+				switch {
+				case err != nil:
+					result.Error = &chains.Error{
+						ErrorType: chains.ErrorTypeBlockNotFound,
+						Message:   fmt.Sprintf("failed to get block: %v", err),
+					}
+				case block == nil:
+					result.Error = &chains.Error{
+						ErrorType: chains.ErrorTypeBlockNil,
+						Message:   "block is nil",
+					}
+				default:
+					result.Block = block
+				}
+
+				resultChan <- indexedResult{
+					index:  int(blockNum - from),
+					result: result,
+				}
+			}
+		}()
+	}
+
+	// Send block numbers to workers
+	go func() {
+		for blockNum := from; blockNum <= to; blockNum++ {
+			blockChan <- blockNum
+		}
+		close(blockChan)
+	}()
+
+	// Close result channel once all workers are done
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	for res := range resultChan {
+		results[res.index] = res.result
 	}
 
 	return results, nil

@@ -46,9 +46,9 @@ func (m *Manager) Start(chainNameOpt ...string) error {
 		var chainIndexer chains.ChainIndexer
 		switch chainName {
 		case chains.ChainTron:
-			chainIndexer = tron.NewIndexer(chainConfig.Nodes)
+			chainIndexer = tron.NewIndexerWithConfig(chainConfig.Nodes, chainConfig)
 		case chains.ChainEVM:
-			chainIndexer = evm.NewIndexer(chainConfig.Nodes)
+			chainIndexer = evm.NewIndexerWithConfig(chainConfig.Nodes, chainConfig)
 		default:
 			return fmt.Errorf("unsupported chain: %s", chainName)
 		}

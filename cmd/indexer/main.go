@@ -29,6 +29,7 @@ func setupRootCmd() *cobra.Command {
 		configPath string
 		natsURL    string
 		subject    string
+		debug      bool
 	)
 
 	rootCmd := &cobra.Command{
@@ -40,11 +41,12 @@ func setupRootCmd() *cobra.Command {
 		Use:   "index",
 		Short: "Run the indexer",
 		Run: func(cmd *cobra.Command, args []string) {
-			runIndexer(chainName, configPath)
+			runIndexer(chainName, configPath, debug)
 		},
 	}
 	indexCmd.Flags().StringVar(&chainName, "chain", "", "Chain to index (e.g. tron, evm, or empty for all)")
 	indexCmd.Flags().StringVar(&configPath, "config", "configs/config.yaml", "Path to configuration file")
+	indexCmd.Flags().BoolVar(&debug, "d", false, "Enable debug mode")
 
 	natsPrinterCmd := &cobra.Command{
 		Use:   "nats-printer",
@@ -60,15 +62,19 @@ func setupRootCmd() *cobra.Command {
 	return rootCmd
 }
 
-func runIndexer(chainName, configPath string) {
+func runIndexer(chainName, configPath string, debug bool) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("Failed to load config", "err", err)
 		os.Exit(1)
 	}
 
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
 	logger.Init(&logger.Options{
-		Level:      slog.LevelInfo,
+		Level:      level,
 		TimeFormat: time.RFC3339,
 	})
 

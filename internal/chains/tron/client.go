@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -78,6 +79,7 @@ func (c *TronClient) makeRequest(ctx context.Context, method string, params []an
 	}
 
 	node := c.Pool.GetNext()
+	slog.Debug("Making RPC request", "method", method, "node", node)
 
 	// Wait for rate limit permission
 	if err := c.RateLimiter.Wait(ctx, node); err != nil {
