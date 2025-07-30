@@ -18,7 +18,9 @@ indexer:
     evm:
       name: "evm"
       nodes:
+        - "https://ethereum-rpc.publicnode.com"
         - "https://1rpc.io/eth"
+        - "https://eth-mainnet.g.alchemy.com/v2/demo"
       start_block: 22988209
       batch_size: 10
       poll_interval: "5s"

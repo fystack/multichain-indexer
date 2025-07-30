@@ -122,6 +122,83 @@ func (c *Client) Call(ctx context.Context, method string, params any) (json.RawM
 	return nil, fmt.Errorf("RPC call %q failed after %d attempts: %w", method, c.Config.MaxRetries+1, lastErr)
 }
 
+// Only for EVM
+func (c *Client) BatchCall(ctx context.Context, batch []Request) ([]Response, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= c.Config.MaxRetries; attempt++ {
+		node := c.Pool.GetNext()
+		if node == "" {
+			return nil, fmt.Errorf("no available nodes")
+		}
+
+		if err := c.RateLimiter.Wait(ctx, node); err != nil {
+			return nil, fmt.Errorf("rate limiter blocked: %w", err)
+		}
+
+		responses, err := c.doBatchRequest(ctx, node, batch)
+		if err == nil {
+			c.Pool.MarkHealthy(node)
+			return responses, nil
+		}
+
+		c.Pool.MarkFailed(node)
+		lastErr = err
+
+		time.Sleep(c.Config.RetryDelay)
+
+		if ctx.Err() != nil {
+			break
+		}
+	}
+
+	return nil, fmt.Errorf("batch call failed after %d attempts: %w", c.Config.MaxRetries+1, lastErr)
+}
+
+func (c *Client) doBatchRequest(ctx context.Context, node string, batch []Request) ([]Response, error) {
+	url := node
+	if c.FormatURL != nil {
+		url = c.FormatURL(node)
+	}
+
+	payload, err := json.Marshal(batch)
+	if err != nil {
+		return nil, fmt.Errorf("marshal batch: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(payload))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	start := time.Now()
+	resp, err := c.HTTP.Do(req)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		slog.Warn("batch request failed", "node", node, "duration", elapsed, "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+
+	var responses []Response
+	if err := json.Unmarshal(body, &responses); err != nil {
+		return nil, fmt.Errorf("parse batch response: %w", err)
+	}
+
+	return responses, nil
+}
+
 func (c *Client) doRequest(ctx context.Context, node, method string, params any) (json.RawMessage, error) {
 	reqBody := Request{
 		JSONRPC: "2.0",

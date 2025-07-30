@@ -5,10 +5,11 @@ import "github.com/fystack/indexer/internal/types"
 type ErrorType string
 
 const (
-	ErrorTypeBlockNotFound ErrorType = "block_not_found"
-	ErrorTypeBlockNil      ErrorType = "block_nil"
-	ErrorTypeTimeout       ErrorType = "timeout"
-	ErrorTypeUnknown       ErrorType = "unknown"
+	ErrorTypeBlockUnmarshal ErrorType = "block_unmarshal"
+	ErrorTypeBlockNotFound  ErrorType = "block_not_found"
+	ErrorTypeBlockNil       ErrorType = "block_nil"
+	ErrorTypeTimeout        ErrorType = "timeout"
+	ErrorTypeUnknown        ErrorType = "unknown"
 )
 
 type Error struct {

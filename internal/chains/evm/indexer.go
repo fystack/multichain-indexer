@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
@@ -80,22 +83,70 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 	var results []chains.BlockResult
 
+	if from > to {
+		return results, nil
+	}
+
+	ctx := context.Background()
+	batch := make([]rpc.Request, 0, to-from+1)
+	idToNumber := make(map[int]int64)
+
+	id := 1
 	for n := from; n <= to; n++ {
-		block, err := i.GetBlock(n)
-		if err != nil {
-			slog.Warn("failed to fetch block", "number", n, "err", err)
+		batch = append(batch, rpc.Request{
+			JSONRPC: "2.0",
+			Method:  "eth_getBlockByNumber",
+			Params:  []any{fmt.Sprintf("0x%x", n), true},
+			ID:      id,
+		})
+		idToNumber[id] = n
+		id++
+	}
+
+	start := time.Now()
+	responses, err := i.client.BatchCall(ctx, batch)
+	duration := time.Since(start)
+	slog.Info("BatchCall duration", "count", len(batch), "took", duration)
+
+	if err != nil {
+		return nil, fmt.Errorf("batch call failed: %w", err)
+	}
+
+	// Map response by ID
+	responseMap := make(map[int]rpc.Response)
+	for _, resp := range responses {
+		responseMap[resp.ID] = resp
+	}
+
+	for _, req := range batch {
+
+		number := idToNumber[req.ID]
+		resp, ok := responseMap[req.ID]
+		if !ok {
 			results = append(results, chains.BlockResult{
-				Number: n,
+				Number: number,
 				Error: &chains.Error{
 					ErrorType: chains.ErrorTypeBlockNotFound,
-					Message:   err.Error(),
+					Message:   "missing response",
 				},
 			})
 			continue
 		}
-		if block == nil {
+
+		if resp.Error != nil {
 			results = append(results, chains.BlockResult{
-				Number: n,
+				Number: number,
+				Error: &chains.Error{
+					ErrorType: chains.ErrorTypeBlockNotFound,
+					Message:   resp.Error.Message,
+				},
+			})
+			continue
+		}
+
+		if len(resp.Result) == 0 || string(resp.Result) == "null" {
+			results = append(results, chains.BlockResult{
+				Number: number,
 				Error: &chains.Error{
 					ErrorType: chains.ErrorTypeBlockNil,
 					Message:   "block is nil",
@@ -104,9 +155,33 @@ func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 			continue
 		}
 
+		var block rawBlock
+		if err := json.Unmarshal(resp.Result, &block); err != nil {
+			results = append(results, chains.BlockResult{
+				Number: number,
+				Error: &chains.Error{
+					ErrorType: chains.ErrorTypeBlockUnmarshal,
+					Message:   err.Error(),
+				},
+			})
+			continue
+		}
+
+		parsedBlock, err := i.parseBlock(resp.Result)
+		if err != nil {
+			results = append(results, chains.BlockResult{
+				Number: number,
+				Error: &chains.Error{
+					ErrorType: chains.ErrorTypeBlockUnmarshal,
+					Message:   err.Error(),
+				},
+			})
+			continue
+		}
+
 		results = append(results, chains.BlockResult{
-			Number: n,
-			Block:  block,
+			Number: number,
+			Block:  parsedBlock,
 		})
 	}
 
@@ -132,35 +207,40 @@ func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 		return nil, fmt.Errorf("invalid block data: %w", err)
 	}
 
-	num, err := strconv.ParseInt(raw.Number, 0, 64)
+	number, err := types.ParseUint64(raw.Number)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block number: %w", err)
 	}
 
-	timestamp, err := strconv.ParseInt(raw.Timestamp, 0, 64)
+	timestamp, err := types.ParseUint64(raw.Timestamp)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timestamp: %w", err)
 	}
 
-	block := &types.Block{
-		Hash:       raw.Hash,
-		ParentHash: raw.ParentHash,
-		Number:     num,
-		Timestamp:  timestamp,
-	}
+	// Pre-allocate transactions slice
+	transactions := make([]types.Transaction, len(raw.Transactions))
 
+	// Parse transactions in parallel or sequentially
 	for idx, tx := range raw.Transactions {
-		block.Transactions = append(block.Transactions, types.Transaction{
+		value, _ := new(big.Int).SetString(strings.TrimPrefix(tx.Value, "0x"), 16)
+
+		transactions[idx] = types.Transaction{
 			Hash:             tx.Hash,
 			From:             tx.From,
 			To:               tx.To,
-			Value:            tx.Value,
-			BlockNumber:      num,
+			Value:            value,
+			BlockNumber:      number,
 			BlockHash:        raw.Hash,
 			TransactionIndex: idx,
-			Status:           "success", // TODO: consider checking tx receipt
-		})
+			Status:           true, // default true; real status in receipt
+		}
 	}
 
-	return block, nil
+	return &types.Block{
+		Number:       number,
+		Hash:         raw.Hash,
+		ParentHash:   raw.ParentHash,
+		Timestamp:    timestamp,
+		Transactions: transactions,
+	}, nil
 }

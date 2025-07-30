@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"strconv"
+	"strings"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
@@ -108,46 +110,46 @@ func (i *Indexer) Close() {
 	i.client.Close()
 }
 
-func (i *Indexer) parseBlock(data any) (*types.Block, error) {
-	blockBytes, err := json.Marshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("marshal block failed: %w", err)
-	}
-
+func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 	var raw rawBlock
-	if err := json.Unmarshal(blockBytes, &raw); err != nil {
-		return nil, fmt.Errorf("unmarshal block failed: %w", err)
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("invalid block data: %w", err)
 	}
 
-	number, err := strconv.ParseInt(raw.Number, 0, 64)
+	number, err := types.ParseUint64(raw.Number)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block number: %w", err)
 	}
 
-	timestamp, err := strconv.ParseInt(raw.Timestamp, 0, 64)
+	timestamp, err := types.ParseUint64(raw.Timestamp)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timestamp: %w", err)
 	}
 
-	block := &types.Block{
-		Hash:         raw.Hash,
-		ParentHash:   raw.ParentHash,
-		Number:       number,
-		Timestamp:    timestamp,
-		Transactions: make([]types.Transaction, 0, len(raw.Transactions)),
-	}
+	// Pre-allocate transactions slice
+	transactions := make([]types.Transaction, len(raw.Transactions))
 
-	for i, tx := range raw.Transactions {
-		block.Transactions = append(block.Transactions, types.Transaction{
+	// Parse transactions in parallel or sequentially
+	for idx, tx := range raw.Transactions {
+		value, _ := new(big.Int).SetString(strings.TrimPrefix(tx.Value, "0x"), 16)
+
+		transactions[idx] = types.Transaction{
 			Hash:             tx.Hash,
 			From:             tx.From,
 			To:               tx.To,
-			Value:            tx.Value,
+			Value:            value,
 			BlockNumber:      number,
 			BlockHash:        raw.Hash,
-			TransactionIndex: i,
-			Status:           "success",
-		})
+			TransactionIndex: idx,
+			Status:           true, // default true; real status in receipt
+		}
 	}
-	return block, nil
+
+	return &types.Block{
+		Number:       number,
+		Hash:         raw.Hash,
+		ParentHash:   raw.ParentHash,
+		Timestamp:    timestamp,
+		Transactions: transactions,
+	}, nil
 }
