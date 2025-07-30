@@ -29,6 +29,5 @@ type ChainIndexer interface {
 
 	// batch version: each block can have its own error
 	GetBlocks(from, to int64) ([]BlockResult, error)
-	GetBlocksParallel(from, to int64, numWorkers int) ([]BlockResult, error)
 	IsHealthy() bool
 }

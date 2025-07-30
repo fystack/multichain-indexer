@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -13,28 +14,27 @@ import (
 )
 
 type JSONRPCRequest struct {
-	JSONRPC string      `json:"jsonrpc"`
-	Method  string      `json:"method"`
-	Params  interface{} `json:"params"`
-	ID      int         `json:"id"`
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params"`
+	ID      int    `json:"id"`
 }
 
 type JSONRPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	Result  json.RawMessage `json:"result"`
-	Error   *RPCError       `json:"error"`
-	ID      int             `json:"id"`
+	Error   *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+	ID int `json:"id"`
 }
 
-type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
 type EvmClient struct {
 	rpc.HTTPClient
 }
 
-func (c *EvmClient) callWithContext(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
+func (c *EvmClient) callWithContext(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.Config.MaxRetries; attempt++ {
@@ -46,79 +46,72 @@ func (c *EvmClient) callWithContext(ctx context.Context, method string, params i
 			}
 		}
 
-		result, err := c.makeRequest(ctx, method, params)
+		res, err := c.makeRequest(ctx, method, params)
 		if err == nil {
-			return result, nil
+			return res, nil
 		}
 
 		lastErr = err
-
 		if ctx.Err() != nil {
 			break
 		}
 	}
 
-	return nil, fmt.Errorf("failed after %d attempts: %w", c.Config.MaxRetries+1, lastErr)
+	return nil, fmt.Errorf("call to %q failed after %d attempts: %w", method, c.Config.MaxRetries+1, lastErr)
 }
 
-func (c *EvmClient) makeRequest(ctx context.Context, method string, params interface{}) (json.RawMessage, error) {
-	request := JSONRPCRequest{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-		ID:      1,
-	}
-
-	data, err := json.Marshal(request)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
+func (c *EvmClient) makeRequest(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	node := c.Pool.GetNext()
-
 	if err := c.RateLimiter.Wait(ctx, node); err != nil {
 		return nil, fmt.Errorf("rate limit wait failed: %w", err)
 	}
 
-	url := node // EVM chains dùng trực tiếp root URL
+	reqBody, _ := json.Marshal(JSONRPCRequest{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+		ID:      1,
+	})
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, node, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	startTime := time.Now()
-	resp, err := c.HTTPClient.Do(req)
-	duration := time.Since(startTime)
+	start := time.Now()
+	resp, err := c.Client.Do(req)
+	elapsed := time.Since(start)
 
 	if err != nil {
+		slog.Warn("request failed", "node", node, "method", method, "duration", elapsed, "err", err)
 		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("request failed to %s (took %v): %w", node, duration, err)
+		return nil, err
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("HTTP error %d from %s", resp.StatusCode, node)
-	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("read body: %w", err)
 	}
 
-	var response JSONRPCResponse
-	if err := json.Unmarshal(body, &response); err != nil {
+	if resp.StatusCode != http.StatusOK {
 		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, node)
 	}
 
-	if response.Error != nil {
-		return nil, fmt.Errorf("RPC error from %s: %s (code: %d)", node, response.Error.Message, response.Error.Code)
+	var rpcResp JSONRPCResponse
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		c.Pool.MarkFailed(node)
+		return nil, fmt.Errorf("unmarshal response: %w", err)
+	}
+
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("RPC error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
 	}
 
 	c.Pool.MarkHealthy(node)
-	return response.Result, nil
+	slog.Debug("RPC success", "method", method, "node", node, "duration", elapsed)
+	return rpcResp.Result, nil
 }

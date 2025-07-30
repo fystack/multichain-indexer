@@ -3,8 +3,8 @@ package evm
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/fystack/indexer/internal/chains"
@@ -20,27 +20,23 @@ type Indexer struct {
 	config config.ChainConfig
 }
 
-func NewIndexer(nodes []string) *Indexer {
-	return NewIndexerWithConfig(nodes, chains.DefaultChainConfig)
-}
-
-func NewIndexerWithConfig(nodes []string, config config.ChainConfig) *Indexer {
-	clientConfig := rpc.ClientConfig{
-		RequestTimeout: config.Client.RequestTimeout,
+func NewIndexerWithConfig(nodes []string, cfg config.ChainConfig) *Indexer {
+	clientCfg := rpc.ClientConfig{
+		RequestTimeout: cfg.Client.RequestTimeout,
 		RateLimit: rpc.RateLimitConfig{
-			RequestsPerSecond: config.RateLimit.RequestsPerSecond,
-			BurstSize:         config.RateLimit.BurstSize,
+			RequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
+			BurstSize:         cfg.RateLimit.BurstSize,
 		},
-		MaxRetries: config.Client.MaxRetries,
-		RetryDelay: config.Client.RetryDelay,
+		MaxRetries: cfg.Client.MaxRetries,
+		RetryDelay: cfg.Client.RetryDelay,
 	}
 
 	return &Indexer{
 		client: &EvmClient{
-			HTTPClient: *rpc.NewHTTPClientWithConfig(nodes, clientConfig),
+			HTTPClient: *rpc.NewHTTPClientWithConfig(nodes, clientCfg),
 		},
 		name:   chains.ChainEVM,
-		config: config,
+		config: cfg,
 	}
 }
 
@@ -54,7 +50,7 @@ func (i *Indexer) GetLatestBlockNumber() (int64, error) {
 
 	result, err := i.client.callWithContext(ctx, "eth_blockNumber", []any{})
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("eth_blockNumber failed: %w", err)
 	}
 
 	var hexStr string
@@ -62,45 +58,46 @@ func (i *Indexer) GetLatestBlockNumber() (int64, error) {
 		return 0, fmt.Errorf("failed to decode block number: %w", err)
 	}
 
-	return strconv.ParseInt(hexStr, 0, 64)
+	num, err := strconv.ParseInt(hexStr, 0, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid block number: %w", err)
+	}
+
+	return num, nil
 }
 
 func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), i.config.Client.RequestTimeout)
 	defer cancel()
 
-	hexNumber := fmt.Sprintf("0x%x", number)
-	result, err := i.client.callWithContext(ctx, "eth_getBlockByNumber", []any{hexNumber, true})
+	hexNum := fmt.Sprintf("0x%x", number)
+	result, err := i.client.callWithContext(ctx, "eth_getBlockByNumber", []any{hexNum, true})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("eth_getBlockByNumber failed: %w", err)
 	}
 
 	return i.parseBlock(result)
 }
 
-// TODO: Implement batch fetching
-// Might be implemented in the future
 func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 	var results []chains.BlockResult
 
-	for blockNum := from; blockNum <= to; blockNum++ {
-		block, err := i.GetBlock(blockNum)
+	for n := from; n <= to; n++ {
+		block, err := i.GetBlock(n)
 		if err != nil {
+			slog.Warn("failed to fetch block", "number", n, "err", err)
 			results = append(results, chains.BlockResult{
-				Number: blockNum,
-				Block:  nil,
+				Number: n,
 				Error: &chains.Error{
 					ErrorType: chains.ErrorTypeBlockNotFound,
-					Message:   fmt.Sprintf("failed to get block: %v", err),
+					Message:   err.Error(),
 				},
 			})
 			continue
 		}
-
 		if block == nil {
 			results = append(results, chains.BlockResult{
-				Number: blockNum,
-				Block:  nil,
+				Number: n,
 				Error: &chains.Error{
 					ErrorType: chains.ErrorTypeBlockNil,
 					Message:   "block is nil",
@@ -110,17 +107,12 @@ func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 		}
 
 		results = append(results, chains.BlockResult{
-			Number: blockNum,
+			Number: n,
 			Block:  block,
-			Error:  nil,
 		})
 	}
 
 	return results, nil
-}
-
-func (i *Indexer) GetBlocksParallel(from, to int64, numWorkers int) ([]chains.BlockResult, error) {
-	return nil, errors.New("not implemented")
 }
 
 func (i *Indexer) IsHealthy() bool {
@@ -142,7 +134,7 @@ func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 		return nil, fmt.Errorf("invalid block data: %w", err)
 	}
 
-	number, err := strconv.ParseInt(raw.Number, 0, 64)
+	num, err := strconv.ParseInt(raw.Number, 0, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid block number: %w", err)
 	}
@@ -155,22 +147,21 @@ func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 	block := &types.Block{
 		Hash:       raw.Hash,
 		ParentHash: raw.ParentHash,
-		Number:     number,
+		Number:     num,
 		Timestamp:  timestamp,
 	}
 
 	for idx, tx := range raw.Transactions {
-		transaction := types.Transaction{
+		block.Transactions = append(block.Transactions, types.Transaction{
 			Hash:             tx.Hash,
 			From:             tx.From,
 			To:               tx.To,
 			Value:            tx.Value,
-			BlockNumber:      number,
+			BlockNumber:      num,
 			BlockHash:        raw.Hash,
 			TransactionIndex: idx,
-			Status:           "success",
-		}
-		block.Transactions = append(block.Transactions, transaction)
+			Status:           "success", // TODO: consider checking tx receipt
+		})
 	}
 
 	return block, nil

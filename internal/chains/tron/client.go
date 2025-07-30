@@ -36,98 +36,85 @@ type TronClient struct {
 	*rpc.HTTPClient
 }
 
-func (c *TronClient) callWithContext(ctx context.Context, method string, params []any) (any, error) {
+func (c *TronClient) Call(ctx context.Context, method string, params []any) (any, error) {
 	var lastErr error
 
 	for attempt := 0; attempt <= c.Config.MaxRetries; attempt++ {
-		if attempt > 0 {
-			// Wait before retry
-			select {
-			case <-time.After(c.Config.RetryDelay):
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			}
+		node := c.Pool.GetNext()
+		if node == "" {
+			return nil, fmt.Errorf("no available nodes")
 		}
 
-		result, err := c.makeRequest(ctx, method, params)
+		slog.Debug("Calling RPC", "method", method, "node", node, "attempt", attempt+1)
+
+		// Rate limiting
+		if err := c.RateLimiter.Wait(ctx, node); err != nil {
+			return nil, fmt.Errorf("rate limiter blocked request: %w", err)
+		}
+
+		result, err := c.doRequest(ctx, node, method, params)
 		if err == nil {
+			c.Pool.MarkHealthy(node)
 			return result, nil
 		}
 
+		c.Pool.MarkFailed(node)
 		lastErr = err
 
-		// Don't retry on context cancellation
+		// Wait before retry
+		time.Sleep(c.Config.RetryDelay)
+
 		if ctx.Err() != nil {
 			break
 		}
 	}
 
-	return nil, fmt.Errorf("failed after %d attempts: %w", c.Config.MaxRetries+1, lastErr)
+	return nil, fmt.Errorf("RPC call %q failed after %d attempts: %w", method, c.Config.MaxRetries+1, lastErr)
 }
 
-func (c *TronClient) makeRequest(ctx context.Context, method string, params []any) (any, error) {
-	request := JSONRPCRequest{
+func (c *TronClient) doRequest(ctx context.Context, node, method string, params []any) (any, error) {
+	reqBody := JSONRPCRequest{
 		JSONRPC: "2.0",
 		Method:  method,
 		Params:  params,
 		ID:      1,
 	}
 
-	data, err := json.Marshal(request)
+	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	node := c.Pool.GetNext()
-	slog.Debug("Making RPC request", "method", method, "node", node)
-
-	// Wait for rate limit permission
-	if err := c.RateLimiter.Wait(ctx, node); err != nil {
-		return nil, fmt.Errorf("rate limit wait failed: %w", err)
-	}
-
 	url := fmt.Sprintf("%s/jsonrpc", node)
-
-	// Create request with context
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(payload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	startTime := time.Now()
 	resp, err := c.Client.Do(req)
-	duration := time.Since(startTime)
-
 	if err != nil {
-		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("request failed to %s (took %v): %w", node, duration, err)
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {
-		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("HTTP error %d from %s", resp.StatusCode, node)
+		return nil, fmt.Errorf("unexpected status code %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read body: %w", err)
 	}
 
-	var response JSONRPCResponse
-	if err := json.Unmarshal(body, &response); err != nil {
-		c.Pool.MarkFailed(node)
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	var rpcResp JSONRPCResponse
+	if err := json.Unmarshal(body, &rpcResp); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON response: %w", err)
 	}
 
-	if response.Error != nil {
-		// Don't mark node as failed for RPC errors (might be request-specific)
-		return nil, fmt.Errorf("RPC error from %s: %s (code: %d)", node, response.Error.Message, response.Error.Code)
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("RPC error: %s (code: %d)", rpcResp.Error.Message, rpcResp.Error.Code)
 	}
 
-	c.Pool.MarkHealthy(node)
-	return response.Result, nil
+	return rpcResp.Result, nil
 }
