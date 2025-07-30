@@ -31,9 +31,7 @@ func NewIndexerWithConfig(nodes []string, cfg config.ChainConfig) *Indexer {
 	}
 
 	return &Indexer{
-		client: &TronClient{
-			HTTPClient: rpc.NewHTTPClientWithConfig(nodes, clientCfg),
-		},
+		client: NewTronClient(nodes, clientCfg),
 		name:   chains.ChainTron,
 		config: cfg,
 	}
@@ -52,9 +50,9 @@ func (i *Indexer) GetLatestBlockNumber() (int64, error) {
 		return 0, err
 	}
 
-	hexStr, ok := result.(string)
-	if !ok {
-		return 0, fmt.Errorf("invalid block number format")
+	var hexStr string
+	if err := json.Unmarshal(result, &hexStr); err != nil {
+		return 0, fmt.Errorf("failed to decode block number: %w", err)
 	}
 
 	return strconv.ParseInt(hexStr, 0, 64)

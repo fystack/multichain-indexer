@@ -32,9 +32,7 @@ func NewIndexerWithConfig(nodes []string, cfg config.ChainConfig) *Indexer {
 	}
 
 	return &Indexer{
-		client: &EvmClient{
-			HTTPClient: *rpc.NewHTTPClientWithConfig(nodes, clientCfg),
-		},
+		client: NewEvmClient(nodes, clientCfg),
 		name:   chains.ChainEVM,
 		config: cfg,
 	}
@@ -48,7 +46,7 @@ func (i *Indexer) GetLatestBlockNumber() (int64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), i.config.Client.RequestTimeout)
 	defer cancel()
 
-	result, err := i.client.callWithContext(ctx, "eth_blockNumber", []any{})
+	result, err := i.client.Call(ctx, "eth_blockNumber", []any{})
 	if err != nil {
 		return 0, fmt.Errorf("eth_blockNumber failed: %w", err)
 	}
@@ -71,7 +69,7 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	defer cancel()
 
 	hexNum := fmt.Sprintf("0x%x", number)
-	result, err := i.client.callWithContext(ctx, "eth_getBlockByNumber", []any{hexNum, true})
+	result, err := i.client.Call(ctx, "eth_getBlockByNumber", []any{hexNum, true})
 	if err != nil {
 		return nil, fmt.Errorf("eth_getBlockByNumber failed: %w", err)
 	}
