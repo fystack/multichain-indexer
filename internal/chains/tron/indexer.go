@@ -66,6 +66,7 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 
 	hexNumber := fmt.Sprintf("0x%x", number)
 	result, err := i.client.Call(ctx, "eth_getBlockByNumber", []any{hexNumber, true})
+
 	if err != nil {
 		return nil, err
 	}

@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"math/big"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/config"
@@ -103,11 +101,7 @@ func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
 		id++
 	}
 
-	start := time.Now()
 	responses, err := i.client.BatchCall(ctx, batch)
-	duration := time.Since(start)
-	slog.Info("BatchCall duration", "count", len(batch), "took", duration)
-
 	if err != nil {
 		return nil, fmt.Errorf("batch call failed: %w", err)
 	}

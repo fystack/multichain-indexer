@@ -3,8 +3,9 @@ indexer:
     tron:
       name: "tron"
       nodes:
-        - "https://api.trongrid.io"
         - "https://tron-rpc.publicnode.com"
+        - "https://api.trongrid.io"
+        - "https://tron.drpc.org"
       start_block: 74399849
       batch_size: 10
       poll_interval: "3s" # the TRON network produces a block around every 3s
