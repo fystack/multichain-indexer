@@ -2,6 +2,7 @@ package indexer
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/fystack/indexer/internal/chains"
 	"github.com/fystack/indexer/internal/chains/evm"
@@ -21,7 +22,7 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create event emitter: %w", err)
 	}
-
+	slog.Info("Event emitter created successfully")
 	return &Manager{
 		config:  cfg,
 		emitter: emitter,
