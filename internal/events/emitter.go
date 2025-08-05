@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fystack/indexer/internal/types"
+	"github.com/fystack/transaction-indexer/internal/types"
 
 	"github.com/nats-io/nats.go"
 )

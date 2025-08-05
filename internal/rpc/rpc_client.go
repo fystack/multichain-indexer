@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fystack/indexer/internal/pool"
-	"github.com/fystack/indexer/internal/ratelimiter"
+	"github.com/fystack/transaction-indexer/internal/pool"
+	"github.com/fystack/transaction-indexer/internal/ratelimiter"
 )
 
 type Request struct {

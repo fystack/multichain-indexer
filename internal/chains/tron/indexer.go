@@ -8,11 +8,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/fystack/indexer/internal/chains"
-	"github.com/fystack/indexer/internal/config"
-	"github.com/fystack/indexer/internal/ratelimiter"
-	"github.com/fystack/indexer/internal/rpc"
-	"github.com/fystack/indexer/internal/types"
+	"github.com/fystack/transaction-indexer/internal/chains"
+	"github.com/fystack/transaction-indexer/internal/config"
+	"github.com/fystack/transaction-indexer/internal/ratelimiter"
+	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/internal/types"
 )
 
 type Indexer struct {

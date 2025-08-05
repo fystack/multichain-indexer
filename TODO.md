@@ -2,7 +2,7 @@
 
 1. **Batch Block Fetching**
    - [x] **Current:** Fetches blocks one-by-one in a loop (`GetBlocks` calls `GetBlock` repeatedly).
-   - [ ] **Suggestion:** If the chain supports batch RPC (e.g., EVM with `eth_getBlockByNumber` batch), implement true batch fetching to reduce RPC roundtrips and improve throughput.
+   - [x] **Suggestion:** If the chain supports batch RPC (e.g., EVM with `eth_getBlockByNumber` batch), implement true batch fetching to reduce RPC roundtrips and improve throughput.
 
 2. **Error Handling & Retries**
    - [x] **Current:** Retries are per-request, but a single block fetch failure aborts the whole batch.

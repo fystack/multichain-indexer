@@ -10,10 +10,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fystack/indexer/internal/chains"
-	"github.com/fystack/indexer/internal/config"
-	"github.com/fystack/indexer/internal/events"
-	"github.com/fystack/indexer/internal/types"
+	"github.com/fystack/transaction-indexer/internal/chains"
+	"github.com/fystack/transaction-indexer/internal/config"
+	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/types"
 )
 
 type FailedBlock struct {

@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/fystack/indexer/internal/chains"
-	"github.com/fystack/indexer/internal/chains/evm"
-	"github.com/fystack/indexer/internal/chains/tron"
-	"github.com/fystack/indexer/internal/config"
-	"github.com/fystack/indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/chains"
+	"github.com/fystack/transaction-indexer/internal/chains/evm"
+	"github.com/fystack/transaction-indexer/internal/chains/tron"
+	"github.com/fystack/transaction-indexer/internal/config"
+	"github.com/fystack/transaction-indexer/internal/events"
 )
 
 type Manager struct {

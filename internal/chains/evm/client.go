@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/fystack/indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/internal/rpc"
 )
 
 type EvmClient struct {

@@ -1,6 +1,6 @@
 package chains
 
-import "github.com/fystack/indexer/internal/types"
+import "github.com/fystack/transaction-indexer/internal/types"
 
 type ErrorType string
 

@@ -24,7 +24,7 @@ A modular, high-performance blockchain indexer supporting multiple chains with r
 1. Clone the repository:
 
 ```bash
-git clone github.com/fystack/indexer
+git clone github.com/fystack/transaction-indexer
 cd indexer
 ```
 

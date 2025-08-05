@@ -1,4 +1,4 @@
-module github.com/fystack/indexer
+module github.com/fystack/transaction-indexer
 
 go 1.24.2
 

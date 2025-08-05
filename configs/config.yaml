@@ -35,7 +35,7 @@ indexer:
 
   nats:
     url: "nats://localhost:4222"
-    subject_prefix: "blockchain.indexer"
+    subject_prefix: "indexer.transaction"
 
   storage:
     type: "memory"

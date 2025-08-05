@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fystack/indexer/internal/config"
-	"github.com/fystack/indexer/internal/indexer"
-	"github.com/fystack/indexer/internal/logger"
+	"github.com/fystack/transaction-indexer/internal/config"
+	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/internal/logger"
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
 )
