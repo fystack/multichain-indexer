@@ -1,9 +1,12 @@
 package types
 
 import (
-	"math/big"
+	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
 
 type Block struct {
@@ -15,15 +18,33 @@ type Block struct {
 }
 
 type Transaction struct {
-	Hash             string   `json:"hash"`
-	From             string   `json:"from"`
-	To               string   `json:"to"`
-	Value            *big.Int `json:"value"` // parsed from hex
-	GasUsed          int64    `json:"gas_used,omitempty"`
-	Status           bool     `json:"status"` // true if "0x1", false if "0x0"
-	BlockNumber      uint64   `json:"block_number"`
-	BlockHash        string   `json:"block_hash"`
-	TransactionIndex int      `json:"transaction_index"`
+	TxHash       string          `json:"txHash"`
+	NetworkId    string          `json:"networkId"`
+	BlockNumber  uint64          `json:"blockNumber"`
+	FromAddress  string          `json:"fromAddress"`
+	ToAddress    string          `json:"toAddress"`
+	AssetAddress string          `json:"assetAddress"`
+	Amount       string          `json:"amount"`
+	Type         string          `json:"type"`
+	TxFee        decimal.Decimal `json:"txFee"`
+	Timestamp    uint64          `json:"timestamp"`
+}
+
+func (t Transaction) MarshalBinary() ([]byte, error) {
+	bytes, err := json.Marshal(t)
+	if err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
+func (t *Transaction) UnmarshalBinary(data []byte) error {
+	return json.Unmarshal(data, &t)
+}
+
+func (t Transaction) String() string {
+	return fmt.Sprintf("{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d}",
+		t.TxHash, t.NetworkId, t.BlockNumber, t.FromAddress, t.ToAddress, t.AssetAddress, t.Amount, t.Type, t.TxFee, t.Timestamp)
 }
 
 type IndexerEvent struct {

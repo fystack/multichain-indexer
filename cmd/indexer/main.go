@@ -11,6 +11,7 @@ import (
 	"github.com/fystack/transaction-indexer/internal/config"
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/internal/logger"
+	"github.com/fystack/transaction-indexer/internal/types"
 	"github.com/nats-io/nats.go"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +30,7 @@ func setupRootCmd() *cobra.Command {
 		configPath string
 		natsURL    string
 		subject    string
+		isLatest   bool
 		debug      bool
 	)
 
@@ -41,10 +43,11 @@ func setupRootCmd() *cobra.Command {
 		Use:   "index",
 		Short: "Run the indexer",
 		Run: func(cmd *cobra.Command, args []string) {
-			runIndexer(chainName, configPath, debug)
+			runIndexer(chainName, configPath, isLatest, debug)
 		},
 	}
 	indexCmd.Flags().StringVar(&chainName, "chain", "", "Chain to index (e.g. tron, evm, or empty for all)")
+	indexCmd.Flags().BoolVar(&isLatest, "latest", false, "Index from the latest block")
 	indexCmd.Flags().StringVar(&configPath, "config", "configs/config.yaml", "Path to configuration file")
 	indexCmd.Flags().BoolVar(&debug, "d", false, "Enable debug mode")
 
@@ -56,13 +59,13 @@ func setupRootCmd() *cobra.Command {
 		},
 	}
 	natsPrinterCmd.Flags().StringVar(&natsURL, "nats-url", nats.DefaultURL, "NATS server URL")
-	natsPrinterCmd.Flags().StringVar(&subject, "subject", "blockchain.indexer.>", "NATS subject to subscribe to")
+	natsPrinterCmd.Flags().StringVar(&subject, "subject", "indexer.transaction", "NATS subject to subscribe to")
 
 	rootCmd.AddCommand(indexCmd, natsPrinterCmd)
 	return rootCmd
 }
 
-func runIndexer(chainName, configPath string, debug bool) {
+func runIndexer(chainName, configPath string, isLatest, debug bool) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("Failed to load config", "err", err)
@@ -79,7 +82,11 @@ func runIndexer(chainName, configPath string, debug bool) {
 	})
 
 	slog.Info("Config loaded")
-
+	if chainName != "" {
+		chainConfig := cfg.Indexer.Chains[chainName]
+		chainConfig.IsLatest = isLatest
+		cfg.Indexer.Chains[chainName] = chainConfig
+	}
 	manager, err := indexer.NewManager(cfg)
 	if err != nil {
 		slog.Error("Failed to create indexer manager", "error", err)
@@ -113,7 +120,13 @@ func runNatsPrinter(natsURL, subject string) {
 	fmt.Printf("Subscribed to subject: %s\n", subject)
 
 	_, err = nc.Subscribe(subject, func(msg *nats.Msg) {
-		fmt.Printf("[%s] %s\n", msg.Subject, string(msg.Data))
+		txn := types.Transaction{}
+		err := txn.UnmarshalBinary(msg.Data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to unmarshal transaction: %v\n", err)
+			return
+		}
+		fmt.Printf("[%s] %s\n", msg.Subject, txn.String())
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to subscribe: %v\n", err)

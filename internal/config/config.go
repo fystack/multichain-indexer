@@ -11,6 +11,7 @@ type ChainConfig struct {
 	Name         string          `yaml:"name"`
 	Nodes        []string        `yaml:"nodes"`
 	StartBlock   int64           `yaml:"start_block"`
+	IsLatest     bool            `yaml:"is_latest"`
 	BatchSize    int             `yaml:"batch_size"`
 	PollInterval time.Duration   `yaml:"poll_interval"`
 	RateLimit    RateLimitConfig `yaml:"rate_limit"`
@@ -66,6 +67,7 @@ func Load(path string) (*Config, error) {
 		if chain.PollInterval == 0 {
 			chain.PollInterval = 3 * time.Second
 		}
+		chain.IsLatest = false
 		config.Indexer.Chains[name] = chain
 	}
 

@@ -4,27 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math/big"
-	"strconv"
-	"strings"
+	"log/slog"
 
 	"github.com/fystack/transaction-indexer/internal/chains"
 	"github.com/fystack/transaction-indexer/internal/config"
 	"github.com/fystack/transaction-indexer/internal/ratelimiter"
-	"github.com/fystack/transaction-indexer/internal/rpc"
 	"github.com/fystack/transaction-indexer/internal/types"
 )
 
+// Indexer represents an EVM chain indexer
 type Indexer struct {
-	client *EvmClient
-	name   string
-	config config.ChainConfig
+	client    *EvmClient
+	name      string
+	networkId string
+	config    config.ChainConfig
 }
 
+// NewIndexerWithConfig creates a new EVM indexer with configuration
 func NewIndexerWithConfig(nodes []string, cfg config.ChainConfig) *Indexer {
-	clientCfg := rpc.ClientConfig{
+	clientCfg := EvmClientConfig{
 		RequestTimeout: cfg.Client.RequestTimeout,
-		RateLimit: rpc.RateLimitConfig{
+		RateLimit: RateLimitConfig{
 			RequestsPerSecond: cfg.RateLimit.RequestsPerSecond,
 			BurstSize:         cfg.RateLimit.BurstSize,
 		},
@@ -33,44 +33,26 @@ func NewIndexerWithConfig(nodes []string, cfg config.ChainConfig) *Indexer {
 	}
 
 	return &Indexer{
-		client: NewEvmClient(nodes, clientCfg),
-		name:   chains.ChainEVM,
-		config: cfg,
+		client:    NewEvmClient(nodes, clientCfg, nil), // EVM doesn't need URL formatting
+		name:      chains.ChainEVM,
+		networkId: "1", // Default to Ethereum mainnet
+		config:    cfg,
 	}
 }
 
+// GetName returns the chain name
 func (i *Indexer) GetName() string {
 	return i.name
 }
 
-func (i *Indexer) GetLatestBlockNumber() (int64, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), i.config.Client.RequestTimeout)
-	defer cancel()
-
-	result, err := i.client.Call(ctx, "eth_blockNumber", []any{})
-	if err != nil {
-		return 0, fmt.Errorf("eth_blockNumber failed: %w", err)
-	}
-
-	var hexStr string
-	if err := json.Unmarshal(result, &hexStr); err != nil {
-		return 0, fmt.Errorf("failed to decode block number: %w", err)
-	}
-
-	num, err := strconv.ParseInt(hexStr, 0, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid block number: %w", err)
-	}
-
-	return num, nil
+// GetLatestBlockNumber returns the latest block number
+func (i *Indexer) GetLatestBlockNumber(ctx context.Context) (int64, error) {
+	return i.client.GetLatestBlockNumber(ctx)
 }
 
-func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), i.config.Client.RequestTimeout)
-	defer cancel()
-
-	hexNum := fmt.Sprintf("0x%x", number)
-	result, err := i.client.Call(ctx, "eth_getBlockByNumber", []any{hexNum, true})
+// GetBlock returns a single block by number
+func (i *Indexer) GetBlock(ctx context.Context, number int64) (*types.Block, error) {
+	result, err := i.client.GetBlock(ctx, number)
 	if err != nil {
 		return nil, fmt.Errorf("eth_getBlockByNumber failed: %w", err)
 	}
@@ -78,123 +60,89 @@ func (i *Indexer) GetBlock(number int64) (*types.Block, error) {
 	return i.parseBlock(result)
 }
 
-func (i *Indexer) GetBlocks(from, to int64) ([]chains.BlockResult, error) {
+// GetBlocks returns multiple blocks in a batch
+func (i *Indexer) GetBlocks(ctx context.Context, from, to int64) ([]chains.BlockResult, error) {
 	var results []chains.BlockResult
 
 	if from > to {
 		return results, nil
 	}
 
-	ctx := context.Background()
-	batch := make([]rpc.Request, 0, to-from+1)
-	idToNumber := make(map[int]int64)
-
-	id := 1
-	for n := from; n <= to; n++ {
-		batch = append(batch, rpc.Request{
-			JSONRPC: "2.0",
-			Method:  "eth_getBlockByNumber",
-			Params:  []any{fmt.Sprintf("0x%x", n), true},
-			ID:      id,
-		})
-		idToNumber[id] = n
-		id++
-	}
-
-	responses, err := i.client.BatchCall(ctx, batch)
+	// Use client's batch functionality for better performance
+	blockMap, err := i.client.GetBlocksBatch(ctx, from, to)
 	if err != nil {
-		return nil, fmt.Errorf("batch call failed: %w", err)
-	}
+		// Fallback to individual calls if batch fails
+		for blockNum := from; blockNum <= to; blockNum++ {
+			block, err := i.GetBlock(ctx, blockNum)
+			result := chains.BlockResult{Number: blockNum}
 
-	// Map response by ID
-	responseMap := make(map[int]rpc.Response)
-	for _, resp := range responses {
-		responseMap[resp.ID] = resp
-	}
-
-	for _, req := range batch {
-
-		number := idToNumber[req.ID]
-		resp, ok := responseMap[req.ID]
-		if !ok {
-			results = append(results, chains.BlockResult{
-				Number: number,
-				Error: &chains.Error{
+			if err != nil {
+				result.Error = &chains.Error{
 					ErrorType: chains.ErrorTypeBlockNotFound,
-					Message:   "missing response",
-				},
-			})
-			continue
-		}
-
-		if resp.Error != nil {
-			results = append(results, chains.BlockResult{
-				Number: number,
-				Error: &chains.Error{
-					ErrorType: chains.ErrorTypeBlockNotFound,
-					Message:   resp.Error.Message,
-				},
-			})
-			continue
-		}
-
-		if len(resp.Result) == 0 || string(resp.Result) == "null" {
-			results = append(results, chains.BlockResult{
-				Number: number,
-				Error: &chains.Error{
+					Message:   fmt.Sprintf("failed to get block: %v", err),
+				}
+			} else if block == nil {
+				result.Error = &chains.Error{
 					ErrorType: chains.ErrorTypeBlockNil,
 					Message:   "block is nil",
-				},
-			})
-			continue
+				}
+			} else {
+				result.Block = block
+			}
+			results = append(results, result)
 		}
+		return results, nil
+	}
 
-		var block rawBlock
-		if err := json.Unmarshal(resp.Result, &block); err != nil {
-			results = append(results, chains.BlockResult{
-				Number: number,
-				Error: &chains.Error{
+	// Process batch results
+	for blockNum := from; blockNum <= to; blockNum++ {
+		blockData, ok := blockMap[blockNum]
+		result := chains.BlockResult{Number: blockNum}
+
+		if !ok {
+			result.Error = &chains.Error{
+				ErrorType: chains.ErrorTypeBlockNotFound,
+				Message:   "missing response",
+			}
+		} else if len(blockData) == 0 || string(blockData) == "null" {
+			result.Error = &chains.Error{
+				ErrorType: chains.ErrorTypeBlockNil,
+				Message:   "block is nil",
+			}
+		} else {
+			parsedBlock, err := i.parseBlock(blockData)
+			if err != nil {
+				result.Error = &chains.Error{
 					ErrorType: chains.ErrorTypeBlockUnmarshal,
 					Message:   err.Error(),
-				},
-			})
-			continue
+				}
+			} else {
+				result.Block = parsedBlock
+			}
 		}
-
-		parsedBlock, err := i.parseBlock(resp.Result)
-		if err != nil {
-			results = append(results, chains.BlockResult{
-				Number: number,
-				Error: &chains.Error{
-					ErrorType: chains.ErrorTypeBlockUnmarshal,
-					Message:   err.Error(),
-				},
-			})
-			continue
-		}
-
-		results = append(results, chains.BlockResult{
-			Number: number,
-			Block:  parsedBlock,
-		})
+		results = append(results, result)
 	}
 
 	return results, nil
 }
 
+// IsHealthy checks if the indexer is healthy
 func (i *Indexer) IsHealthy() bool {
-	_, err := i.GetLatestBlockNumber()
+	_, err := i.GetLatestBlockNumber(context.Background())
 	return err == nil
 }
 
+// GetRateLimitStats returns rate limiting statistics
 func (i *Indexer) GetRateLimitStats() map[string]ratelimiter.Stats {
-	return i.client.GetRateLimitStats()
+	return i.client.RateLimiter.GetStats()
 }
 
+// Close closes the indexer and releases resources
 func (i *Indexer) Close() {
 	i.client.Close()
 }
 
+// parseBlock parses a raw block response into a types.Block
 func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 	var raw rawBlock
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -211,23 +159,41 @@ func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 		return nil, fmt.Errorf("invalid timestamp: %w", err)
 	}
 
-	// Pre-allocate transactions slice
-	transactions := make([]types.Transaction, len(raw.Transactions))
+	var txs []types.Transaction
+	var highProbabilityERC20Txs []rawTx
+	var highProbabilityIndices []int
 
-	// Parse transactions in parallel or sequentially
-	for idx, tx := range raw.Transactions {
-		value, _ := new(big.Int).SetString(strings.TrimPrefix(tx.Value, "0x"), 16)
-
-		transactions[idx] = types.Transaction{
-			Hash:             tx.Hash,
-			From:             tx.From,
-			To:               tx.To,
-			Value:            value,
-			BlockNumber:      number,
-			BlockHash:        raw.Hash,
-			TransactionIndex: idx,
-			Status:           true, // default true; real status in receipt
+	// First pass: parse native transfers and identify high-probability ERC-20 transfers
+	for idx, rawTx := range raw.Transactions {
+		// Parse native transfers immediately
+		if nativeTx := parseNativeTransfer(rawTx, number, timestamp, i.networkId); nativeTx != nil {
+			txs = append(txs, *nativeTx)
 		}
+
+		// Only fetch receipts for high-probability ERC-20 transfers
+		if isHighProbabilityERC20Transfer(rawTx) {
+			highProbabilityERC20Txs = append(highProbabilityERC20Txs, rawTx)
+			highProbabilityIndices = append(highProbabilityIndices, idx)
+		}
+	}
+
+	// Second pass: fetch receipts only for high-probability ERC-20 transactions
+	if len(highProbabilityERC20Txs) > 0 {
+		slog.Debug("Found high-probability ERC-20 transactions, fetching receipts...", "count", len(highProbabilityERC20Txs))
+		receipts, err := i.client.GetTransactionReceiptsBatch(highProbabilityERC20Txs)
+		if err != nil {
+			slog.Warn("Failed to get transaction receipts", "error", err)
+		} else {
+			// Parse ERC-20 transfers from receipts
+			for idx, receipt := range receipts {
+				if receipt != nil {
+					erc20Txs := parseERC20TransfersFromReceipt(raw.Transactions[highProbabilityIndices[idx]], receipt, number, timestamp, i.networkId)
+					txs = append(txs, erc20Txs...)
+				}
+			}
+		}
+	} else {
+		slog.Debug("No high-probability ERC-20 transactions found, skipping receipt fetching")
 	}
 
 	return &types.Block{
@@ -235,6 +201,6 @@ func (i *Indexer) parseBlock(data json.RawMessage) (*types.Block, error) {
 		Hash:         raw.Hash,
 		ParentHash:   raw.ParentHash,
 		Timestamp:    timestamp,
-		Transactions: transactions,
+		Transactions: txs,
 	}, nil
 }

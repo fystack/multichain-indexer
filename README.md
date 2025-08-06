@@ -1,72 +1,34 @@
-# Multi-Chain Blockchain Indexer
+# Transaction Indexer
 
-A modular, high-performance blockchain indexer supporting multiple chains with round-robin node selection, NATS event emission, and clean architecture.
+A unified blockchain indexer that supports multiple chains (TRON, EVM) with real-time transaction indexing and NATS event publishing.
 
 ## Features
 
-- **Multi-Chain Support**: Extensible architecture for multiple blockchains
-- **TRON Implementation**: Full TRON blockchain indexing support
-- **Round-Robin Load Balancing**: Automatic failover between RPC nodes
-- **Event-Driven Architecture**: Real-time events via NATS
-- **Modular Design**: Easy to extend with new chains and storage backends
-- **Health Monitoring**: Automatic node health detection and recovery
+- **Multi-chain support**: TRON and EVM chains
+- **Real-time indexing**: Continuous block processing with configurable polling
+- **Event streaming**: NATS-based event publishing
+- **Fault tolerance**: Automatic retry and error handling
+- **Rate limiting**: Configurable rate limits per node
+- **Latest block indexing**: Start from the latest block instead of a specific block number
 
 ## Quick Start
 
 ### Prerequisites
 
 - Go 1.21+
-- NATS Server
-- Docker (optional)
+- NATS server (optional, for event streaming)
 
 ### Installation
 
-1. Clone the repository:
-
 ```bash
-git clone github.com/fystack/transaction-indexer
-cd indexer
+git clone <repository>
+cd transaction-indexer
+go build ./cmd/indexer
 ```
 
-2. Install dependencies:
+### Configuration
 
-```bash
-go mod download
-```
-
-3. Start NATS server:
-
-```bash
-# Using Docker
-docker run -p 4222:4222 -p 8222:8222 nats:latest --http_port 8222 --js
-
-# Or install locally
-# https://docs.nats.io/running-a-nats-service/introduction/installation
-```
-
-4. Configure the indexer:
-
-```bash
-cp configs/config.yaml.example configs/config.yaml
-# Edit configs/config.yaml with your settings
-```
-
-5. Run the indexer:
-
-```bash
-go run cmd/indexer/main.go
-```
-
-### Docker Setup
-
-```bash
-# Build and run with Docker Compose
-docker-compose up --build
-```
-
-## Configuration
-
-### Chain Configuration
+Edit `configs/config.yaml`:
 
 ```yaml
 indexer:
@@ -75,44 +37,62 @@ indexer:
       name: "tron"
       nodes:
         - "https://api.trongrid.io"
-      start_block: 74228620
+      start_block: 74399849
+      is_latest: false  # Set to true to start from latest block
       batch_size: 10
-      poll_interval: "5s"
+      poll_interval: "3s"
       rate_limit:
-        requests_per_second: 5 # Maximum 10 requests per second per node
-        burst_size: 10 # Allow burst of up to 20 requests
+        requests_per_second: 10
+        burst_size: 20
       client:
-        request_timeout: "30s" # Timeout for individual requests
-        max_retries: 3 # Maximum retry attempts
-        retry_delay: "10s" # Delay between retries
+        request_timeout: "10s"
+        max_retries: 3
+        retry_delay: "5s"
 ```
 
-### NATS Configuration
+### Running the Indexer
 
-```yaml
-nats:
-  url: "nats://localhost:4222"
-  subject_prefix: "blockchain.indexer"
+#### Index from specific block (default)
+```bash
+./indexer index --chain tron
 ```
 
-## Event Types
+#### Index from latest block
+```bash
+./indexer index --chain tron --latest
+```
 
-The indexer emits the following event types via NATS:
+#### Index all chains from latest blocks
+```bash
+./indexer index --latest
+```
 
-### Block Events
+### Latest Block Feature
 
-- **Subject**: `blockchain.indexer.{chain}.block.indexed`
-- **Data**: Complete block information with transactions
+The indexer supports starting from the latest block instead of a configured start block:
 
-### Transaction Events
+1. **Command line flag**: Use `--latest` flag
+   ```bash
+   ./indexer index --chain tron --latest
+   ```
 
-- **Subject**: `blockchain.indexer.{chain}.transaction.indexed`
-- **Data**: Individual transaction details
+2. **Configuration file**: Set `is_latest: true` in config
+   ```yaml
+   tron:
+     is_latest: true  # Start from latest block
+     start_block: 74399849  # Fallback if latest block fetch fails
+   ```
 
-### Error Events
+3. **Programmatic**: Set `IsLatest` field in chain config
+   ```go
+   chainConfig.IsLatest = true
+   ```
 
-- **Subject**: `blockchain.indexer.{chain}.indexer.error`
-- **Data**: Error information and context
+When `is_latest` is enabled:
+- The indexer fetches the current latest block number
+- Starts indexing from that block
+- Falls back to `start_block` if latest block fetch fails
+- Logs the starting block number for transparency
 
 ## Architecture
 
@@ -131,9 +111,9 @@ The indexer emits the following event types via NATS:
 ```go
 type ChainIndexer interface {
     GetName() string
-    GetLatestBlockNumber() (int64, error)
-    GetBlock(number int64) (*types.Block, error)
-    GetBlocks(from, to int64) ([]*types.Block, error)
+    GetLatestBlockNumber(ctx context.Context) (int64, error)
+    GetBlock(ctx context.Context, number int64) (*types.Block, error)
+    GetBlocks(ctx context.Context, from, to int64) ([]chains.BlockResult, error)
     IsHealthy() bool
 }
 ```
@@ -142,10 +122,10 @@ type ChainIndexer interface {
 
 ```go
 switch chainName {
-case "tron":
-    chainIndexer = tron.NewIndexer(chainConfig.Nodes)
-case "evm":
-    chainIndexer = evm.NewIndexer(chainConfig.Nodes)
+case chains.ChainTron:
+    chainIndexer = tron.NewIndexerWithConfig(chainConfig.Nodes, chainConfig)
+case chains.ChainEVM:
+    chainIndexer = evm.NewIndexerWithConfig(chainConfig.Nodes, chainConfig)
 // Add your new chain here
 }
 ```
@@ -162,7 +142,7 @@ case "evm":
 
 Monitor the indexer through:
 
-- NATS monitoring endpoint: `http://localhost:8222`
+- NATS monitoring endpoint (local development): `http://localhost:8222`
 - Application logs
 - Event stream monitoring
 
@@ -188,42 +168,6 @@ Set `poll_interval` considering:
 
 Use multiple nodes for:
 
-- Load distribution
 - High availability
-- Rate limit avoidance
-
-## Development
-
-### Project Structure
-
-```
-blockchain-indexer/
-├── cmd/indexer/           # Application entry point
-├── internal/
-│   ├── config/           # Configuration management
-│   ├── types/            # Common types
-│   ├── pool/             # Round-robin node pool
-│   ├── events/           # NATS event emitter
-│   ├── chains/           # Chain implementations
-│   └── indexer/          # Core indexing logic
-└── configs/              # Configuration files
-```
-
-### Testing
-
-```bash
-# Run tests
-go test ./...
-
-# Run with coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement your changes
-4. Add tests
-5. Submit a pull request
+- Load distribution
+- Geographic proximity

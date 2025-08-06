@@ -42,11 +42,25 @@ func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, emitter *ev
 		slog.Error("Failed to create failed block logger", "error", err)
 	}
 
+	// Determine starting block
+	startBlock := config.StartBlock
+	if config.IsLatest {
+		// Get the latest block number when IsLatest is true
+		latestBlock, err := chain.GetLatestBlockNumber(ctx)
+		if err != nil {
+			slog.Error("Failed to get latest block number, using configured start block",
+				"chain", chain.GetName(), "error", err, "fallback_block", startBlock)
+		} else {
+			startBlock = latestBlock
+			slog.Info("Starting from latest block", "chain", chain.GetName(), "latest_block", startBlock)
+		}
+	}
+
 	return &Worker{
 		chain:        chain,
 		config:       config,
 		emitter:      emitter,
-		currentBlock: config.StartBlock,
+		currentBlock: startBlock,
 		ctx:          ctx,
 		cancel:       cancel,
 		logFile:      logFile,
@@ -86,7 +100,7 @@ func (w *Worker) run() {
 }
 
 func (w *Worker) processBlocks() error {
-	latest, err := w.chain.GetLatestBlockNumber()
+	latest, err := w.chain.GetLatestBlockNumber(w.ctx)
 	if err != nil {
 		return fmt.Errorf("get latest block: %w", err)
 	}
@@ -97,7 +111,7 @@ func (w *Worker) processBlocks() error {
 	end := min(w.currentBlock+int64(w.config.BatchSize)-1, latest)
 	lastSuccess := w.currentBlock - 1
 
-	results, err := w.chain.GetBlocks(w.currentBlock, end)
+	results, err := w.chain.GetBlocks(w.ctx, w.currentBlock, end)
 	if err != nil {
 		return fmt.Errorf("get batch blocks: %w", err)
 	}
@@ -146,17 +160,17 @@ func (w *Worker) logFailedBlock(blockNumber int64, err error) {
 		_, _ = w.logFile.WriteString(string(data) + "\n")
 	}
 	slog.Error("Failed block", "chain", w.chain.GetName(), "block", blockNumber, "error", err)
-	_ = w.emitter.EmitError(w.chain.GetName(), fmt.Errorf("failed block %d: %w", blockNumber, err))
+	// _ = w.emitter.EmitError(w.chain.GetName(), fmt.Errorf("failed block %d: %w", blockNumber, err))
 }
 
 func (w *Worker) emitBlock(block *types.Block) {
-	if err := w.emitter.EmitBlock(w.chain.GetName(), block); err != nil {
-		slog.Error("Emit block failed", "chain", w.chain.GetName(), "err", err)
-	}
+	// if err := w.emitter.EmitBlock(w.chain.GetName(), block); err != nil {
+	// 	slog.Error("Emit block failed", "chain", w.chain.GetName(), "err", err)
+	// }
 
 	for _, tx := range block.Transactions {
 		if err := w.emitter.EmitTransaction(w.chain.GetName(), &tx); err != nil {
-			slog.Error("Emit transaction failed", "chain", w.chain.GetName(), "tx", tx.Hash, "err", err)
+			slog.Error("Emit transaction failed", "chain", w.chain.GetName(), "tx", tx.TxHash, "err", err)
 		}
 	}
 

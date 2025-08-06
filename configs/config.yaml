@@ -7,6 +7,7 @@ indexer:
         - "https://api.trongrid.io"
         - "https://tron.drpc.org"
       start_block: 74399849
+      is_latest: false # Set to true to start from latest block instead of start_block
       batch_size: 10
       poll_interval: "3s" # the TRON network produces a block around every 3s
       rate_limit:
@@ -23,6 +24,7 @@ indexer:
         - "https://1rpc.io/eth"
         - "https://eth-mainnet.g.alchemy.com/v2/demo"
       start_block: 22988209
+      is_latest: false # Set to true to start from latest block instead of start_block
       batch_size: 10
       poll_interval: "5s"
       rate_limit:

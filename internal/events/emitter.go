@@ -3,7 +3,6 @@ package events
 import (
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/fystack/transaction-indexer/internal/types"
 
@@ -38,33 +37,21 @@ func NewEmitter(natsURL, subjectPrefix string) (*Emitter, error) {
 }
 
 func (e *Emitter) EmitBlock(chain string, block *types.Block) error {
-	event := types.IndexerEvent{
-		Type:      EventBlockIndexed,
-		Chain:     chain,
-		Data:      block,
-		Timestamp: time.Now().Unix(),
-	}
-	return e.emit(event)
+	// TODO: implement
+	return nil
 }
 
 func (e *Emitter) EmitTransaction(chain string, tx *types.Transaction) error {
-	event := types.IndexerEvent{
-		Type:      EventTransactionIndexed,
-		Chain:     chain,
-		Data:      tx,
-		Timestamp: time.Now().Unix(),
+	txBytes, err := tx.MarshalBinary()
+	if err != nil {
+		return err
 	}
-	return e.emit(event)
+	return e.conn.Publish(e.subjectPrefix, txBytes)
 }
 
 func (e *Emitter) EmitError(chain string, err error) error {
-	event := types.IndexerEvent{
-		Type:      EventIndexerError,
-		Chain:     chain,
-		Data:      ErrorEvent{Error: err.Error()},
-		Timestamp: time.Now().Unix(),
-	}
-	return e.emit(event)
+	// TODO: implement
+	return nil
 }
 
 func (e *Emitter) emit(event types.IndexerEvent) error {
@@ -72,9 +59,8 @@ func (e *Emitter) emit(event types.IndexerEvent) error {
 	if err != nil {
 		return err
 	}
-
-	subject := fmt.Sprintf("%s.%s.%s", e.subjectPrefix, event.Chain, event.Type)
-	return e.conn.Publish(subject, data)
+	// All chains emit to the same subject
+	return e.conn.Publish(e.subjectPrefix, data)
 }
 
 func (e *Emitter) Close() {

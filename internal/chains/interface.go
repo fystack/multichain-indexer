@@ -1,6 +1,10 @@
 package chains
 
-import "github.com/fystack/transaction-indexer/internal/types"
+import (
+	"context"
+
+	"github.com/fystack/transaction-indexer/internal/types"
+)
 
 type ErrorType string
 
@@ -25,10 +29,10 @@ type BlockResult struct {
 
 type ChainIndexer interface {
 	GetName() string
-	GetLatestBlockNumber() (int64, error)
-	GetBlock(number int64) (*types.Block, error)
+	GetLatestBlockNumber(ctx context.Context) (int64, error)
+	GetBlock(ctx context.Context, number int64) (*types.Block, error)
 
 	// batch version: each block can have its own error
-	GetBlocks(from, to int64) ([]BlockResult, error)
+	GetBlocks(ctx context.Context, from, to int64) ([]BlockResult, error)
 	IsHealthy() bool
 }
