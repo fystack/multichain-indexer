@@ -32,16 +32,13 @@ func (p *Pool) GetNext() string {
 		return ""
 	}
 
-	// Check current node first
-	if p.isNodeHealthy(p.nodes[p.currentIdx]) {
-		return p.useNode(p.nodes[p.currentIdx])
-	}
-
-	// Try next nodes in round-robin
+	// Try all nodes starting from current index
+	startIdx := p.currentIdx
 	for i := 0; i < len(p.nodes); i++ {
-		p.currentIdx = (p.currentIdx + 1) % len(p.nodes)
-		node := p.nodes[p.currentIdx]
+		idx := (startIdx + i) % len(p.nodes)
+		node := p.nodes[idx]
 		if p.isNodeHealthy(node) {
+			p.currentIdx = idx
 			return p.useNode(node)
 		}
 	}
@@ -58,6 +55,12 @@ func (p *Pool) MarkFailed(node string) {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 	p.failedNodes[node] = time.Now()
+
+	// If this is the current node, move to the next one
+	if p.currentIdx < len(p.nodes) && p.nodes[p.currentIdx] == node {
+		p.currentIdx = (p.currentIdx + 1) % len(p.nodes)
+	}
+
 	slog.Debug("Node marked as failed", "node", node)
 }
 

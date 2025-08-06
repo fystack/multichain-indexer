@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -59,8 +60,14 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if len(config.Indexer.Chains) == 0 {
+		return nil, fmt.Errorf("no chains found in config")
+	}
 	// Set defaults
 	for name, chain := range config.Indexer.Chains {
+		if chain.Name == "" {
+			return nil, fmt.Errorf("chain name is required")
+		}
 		if chain.BatchSize == 0 {
 			chain.BatchSize = 10
 		}
