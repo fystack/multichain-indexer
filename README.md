@@ -21,7 +21,7 @@ A unified blockchain indexer that supports multiple chains (TRON, EVM) with real
 ### Installation
 
 ```bash
-git clone <repository>
+git clone github.com/fystasck/transaction-indexer
 cd transaction-indexer
 go build ./cmd/indexer
 ```
