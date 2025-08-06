@@ -9,10 +9,12 @@ import (
 	"github.com/fystack/transaction-indexer/internal/chains/tron"
 	"github.com/fystack/transaction-indexer/internal/config"
 	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/kvstore"
 )
 
 type Manager struct {
 	config  *config.Config
+	kvstore *kvstore.BadgerStore
 	emitter *events.Emitter
 	workers []*Worker
 }
@@ -23,8 +25,14 @@ func NewManager(cfg *config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("failed to create event emitter: %w", err)
 	}
 	slog.Info("Event emitter created successfully")
+	// Initialize BadgerStore (use a path like ./badger_data)
+	store, err := kvstore.NewBadgerStore("badger_data")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open badger store: %w", err)
+	}
 	return &Manager{
 		config:  cfg,
+		kvstore: store,
 		emitter: emitter,
 	}, nil
 }
@@ -54,7 +62,7 @@ func (m *Manager) Start(chainNameOpt ...string) error {
 			return fmt.Errorf("unsupported chain: %s", chainName)
 		}
 
-		worker := NewWorker(chainIndexer, chainConfig, m.emitter)
+		worker := NewWorker(chainIndexer, chainConfig, m.kvstore, m.emitter)
 		worker.Start()
 		m.workers = append(m.workers, worker)
 	}

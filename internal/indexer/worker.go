@@ -8,11 +8,13 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/chains"
 	"github.com/fystack/transaction-indexer/internal/config"
 	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/kvstore"
 	"github.com/fystack/transaction-indexer/internal/types"
 )
 
@@ -26,6 +28,7 @@ type FailedBlock struct {
 type Worker struct {
 	config       config.ChainConfig
 	chain        chains.ChainIndexer
+	kvstore      *kvstore.BadgerStore
 	emitter      *events.Emitter
 	currentBlock int64
 	ctx          context.Context
@@ -34,7 +37,7 @@ type Worker struct {
 	logFileDate  string
 }
 
-func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, emitter *events.Emitter) *Worker {
+func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, kvstore *kvstore.BadgerStore, emitter *events.Emitter) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	logFile, date, err := createLogFile()
@@ -42,30 +45,39 @@ func NewWorker(chain chains.ChainIndexer, config config.ChainConfig, emitter *ev
 		slog.Error("Failed to create failed block logger", "error", err)
 	}
 
-	// Determine starting block
-	startBlock := config.StartBlock
-	if config.IsLatest {
-		// Get the latest block number when IsLatest is true
-		latestBlock, err := chain.GetLatestBlockNumber(ctx)
-		if err != nil {
-			slog.Error("Failed to get latest block number, using configured start block",
-				"chain", chain.GetName(), "error", err, "fallback_block", startBlock)
-		} else {
-			startBlock = latestBlock
-			slog.Info("Starting from latest block", "chain", chain.GetName(), "latest_block", startBlock)
-		}
+	w := &Worker{
+		chain:       chain,
+		config:      config,
+		kvstore:     kvstore,
+		emitter:     emitter,
+		ctx:         ctx,
+		cancel:      cancel,
+		logFile:     logFile,
+		logFileDate: date,
 	}
 
-	return &Worker{
-		chain:        chain,
-		config:       config,
-		emitter:      emitter,
-		currentBlock: startBlock,
-		ctx:          ctx,
-		cancel:       cancel,
-		logFile:      logFile,
-		logFileDate:  date,
+	// Determine starting block
+	// First try to get from kvstore
+	// If not found, then get from config
+	// If latest flag is true, then get the latest block number from chain
+	latestBlock, err := w.getLatestBlockNumber()
+	if err != nil {
+		slog.Error("Failed to get latest block number from kvstore, using configured start block",
+			"chain", chain.GetName(), "error", err, "fallback_block", config.StartBlock)
 	}
+	if latestBlock == 0 {
+		latestBlock = config.StartBlock
+	}
+	if config.IsLatest {
+		latestBlock, err = chain.GetLatestBlockNumber(ctx)
+		if err != nil {
+			slog.Error("Failed to get latest block number, using configured start block",
+				"chain", chain.GetName(), "error", err, "fallback_block", config.StartBlock)
+		}
+	}
+	w.currentBlock = latestBlock
+
+	return w
 }
 
 func (w *Worker) Start() {
@@ -73,6 +85,7 @@ func (w *Worker) Start() {
 }
 
 func (w *Worker) Stop() {
+	w.saveLatestBlockNumber(w.currentBlock - 1)
 	w.cancel()
 	if w.logFile != nil {
 		_ = w.logFile.Close()
@@ -88,6 +101,7 @@ func (w *Worker) run() {
 	for {
 		select {
 		case <-w.ctx.Done():
+			w.saveLatestBlockNumber(w.currentBlock - 1)
 			return
 		case <-ticker.C:
 			slog.Info("Processing blocks", "chain", w.chain.GetName(), "start_block", w.currentBlock)
@@ -139,6 +153,7 @@ func (w *Worker) processBlocks() error {
 
 	if lastSuccess >= w.currentBlock {
 		w.currentBlock = lastSuccess + 1
+		w.saveLatestBlockNumber(lastSuccess)
 	}
 
 	return nil
@@ -177,6 +192,21 @@ func (w *Worker) emitBlock(block *types.Block) {
 	}
 
 	slog.Info("Processed block", "chain", w.chain.GetName(), "block", block.Number, "txs", len(block.Transactions))
+}
+
+func (w *Worker) getLatestBlockNumber() (int64, error) {
+	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
+	latestBlock, err := w.kvstore.Get(key)
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseInt(string(latestBlock), 10, 64)
+}
+
+func (w *Worker) saveLatestBlockNumber(blockNumber int64) {
+	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
+	_ = w.kvstore.Set(key, []byte(strconv.FormatInt(blockNumber, 10)))
+	slog.Debug("Saved latest processed block", "chain", w.chain.GetName(), "block", blockNumber)
 }
 
 // createLogFile opens the daily failed block log file.
