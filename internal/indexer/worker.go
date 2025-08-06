@@ -105,6 +105,8 @@ func (w *Worker) processBlocks() error {
 		return fmt.Errorf("get latest block: %w", err)
 	}
 	if w.currentBlock > latest {
+		slog.Info("Current block is greater than latest block, waiting for new block", "chain", w.chain.GetName(), "current_block", w.currentBlock, "latest_block", latest)
+		time.Sleep(3 * time.Second)
 		return nil
 	}
 
