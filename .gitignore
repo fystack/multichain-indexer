@@ -47,3 +47,4 @@ coverage.*
 
 # KVStore
 /badger_data/
+*/*/badger_data/

@@ -205,7 +205,10 @@ func (w *Worker) getLatestBlockNumber() (int64, error) {
 
 func (w *Worker) saveLatestBlockNumber(blockNumber int64) {
 	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
-	_ = w.kvstore.Set(key, []byte(strconv.FormatInt(blockNumber, 10)))
+	err := w.kvstore.Set(key, []byte(strconv.FormatInt(blockNumber, 10)))
+	if err != nil {
+		slog.Error("Failed to save latest block number", "chain", w.chain.GetName(), "block", blockNumber, "error", err)
+	}
 	slog.Debug("Saved latest processed block", "chain", w.chain.GetName(), "block", blockNumber)
 }
 
