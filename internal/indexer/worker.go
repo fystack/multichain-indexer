@@ -64,9 +64,9 @@ func NewWorker(chain Indexer, config core.ChainConfig, kvstore kvstore.KVStore, 
 			"chain", chain.GetName(), "error", err, "fallback_block", config.StartBlock)
 	}
 	if latestBlock == 0 {
-		latestBlock = config.StartBlock
+		latestBlock = int64(config.StartBlock)
 	}
-	if config.IsLatest {
+	if config.FromLatest {
 		latestBlock, err = chain.GetLatestBlockNumber(ctx)
 		if err != nil {
 			slog.Error("Failed to get latest block number, using configured start block",

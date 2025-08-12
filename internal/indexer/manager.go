@@ -18,13 +18,13 @@ type Manager struct {
 }
 
 func NewManager(cfg *core.Config) (*Manager, error) {
-	emitter, err := events.NewEmitter(cfg.Indexer.NATS.URL, cfg.Indexer.NATS.SubjectPrefix)
+	emitter, err := events.NewEmitter(cfg.NATS.URL, cfg.NATS.SubjectPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create event emitter: %w", err)
 	}
 	slog.Info("Event emitter created successfully")
 	// Initialize BadgerStore (load from config)
-	store, err := kvstore.NewBadgerStore(cfg.Indexer.Storage.Directory)
+	store, err := kvstore.NewBadgerStore(cfg.Storage.Directory)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open badger store: %w", err)
 	}
@@ -40,13 +40,13 @@ func (m *Manager) Start(chainNameOpt ...string) error {
 	var chainsToStart map[string]core.ChainConfig
 	if len(chainNameOpt) > 0 && chainNameOpt[0] != "" {
 		name := chainNameOpt[0]
-		cfg, ok := m.config.Indexer.Chains[name]
+		cfg, ok := m.config.Chains.Items[name]
 		if !ok {
 			return fmt.Errorf("chain not found in config: %s", name)
 		}
 		chainsToStart = map[string]core.ChainConfig{name: cfg}
 	} else {
-		chainsToStart = m.config.Indexer.Chains
+		chainsToStart = m.config.Chains.Items
 	}
 
 	for chainName, chainConfig := range chainsToStart {

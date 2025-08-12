@@ -25,9 +25,9 @@ type EVMIndexer struct {
 
 func NewEVMIndexer(config core.ChainConfig) (*EVMIndexer, error) {
 	var rl *ratelimiter.PooledRateLimiter
-	if config.RateLimit.RequestsPerSecond > 0 {
-		interval := time.Second / time.Duration(config.RateLimit.RequestsPerSecond)
-		burst := config.RateLimit.BurstSize
+	if config.Client.Throttle.RPS > 0 {
+		interval := time.Second / time.Duration(config.Client.Throttle.RPS)
+		burst := config.Client.Throttle.Burst
 		if burst <= 0 {
 			burst = 1
 		}
@@ -37,8 +37,8 @@ func NewEVMIndexer(config core.ChainConfig) (*EVMIndexer, error) {
 	fm := rpc.NewFailoverManager(rpc.DefaultFailoverConfig())
 
 	for i, nodeURL := range config.Nodes {
-		name := fmt.Sprintf("evm-%s-%d", config.Name, i)
-		if err := fm.AddEthereumProvider(name, nodeURL, nil, rl); err != nil {
+		name := fmt.Sprintf("evm-%s-%d", "evm", i)
+		if err := fm.AddEthereumProvider(name, nodeURL.URL, nil, rl); err != nil {
 			return nil, fmt.Errorf("add provider: %w", err)
 		}
 	}
@@ -50,7 +50,7 @@ func NewEVMIndexer(config core.ChainConfig) (*EVMIndexer, error) {
 	}, nil
 }
 
-func (e *EVMIndexer) GetName() string { return e.config.Name }
+func (e *EVMIndexer) GetName() string { return "evm" }
 
 func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (int64, error) {
 	var latest uint64
@@ -76,7 +76,7 @@ func (e *EVMIndexer) GetBlock(ctx context.Context, number int64) (*core.Block, e
 		if err != nil {
 			return err
 		}
-		cb, err := convertEthBlockToCore(e.config.Name, b)
+		cb, err := convertEthBlockToCore("evm", b)
 		if err != nil {
 			return err
 		}

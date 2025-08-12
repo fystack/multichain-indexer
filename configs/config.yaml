@@ -1,0 +1,52 @@
+chains:
+  defaults:
+    batch_size: 10
+    poll_interval: "5s"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "5s"
+      throttle:
+        rps: 8
+        burst: 16
+
+  tron:
+    nodes:
+      - url: "https://tron-rpc.publicnode.com"
+      - url: "https://api.trongrid.io"
+        headers:
+          Authorization: "Bearer ${API_KEY}"
+        api_key_env: "TRONGRID_TOKEN"
+      - url: "https://tron.drpc.org"
+    start_block: 74399849
+    from_latest: false
+    poll_interval: "3s"
+    client:
+      timeout: "10s"
+      throttle:
+        rps: 10
+        burst: 20
+
+  evm:
+    nodes:
+      - url: "https://ethereum-rpc.publicnode.com"
+      - url: "https://1rpc.io/eth"
+      - url: "https://eth-mainnet.g.alchemy.com/v2/${API_KEY}"
+        api_key_env: "ALCHEMY_KEY"
+      - url: "wss://mainnet.infura.io/ws/v3/${API_KEY}"
+        api_key_env: "INFURA_KEY"
+    start_block: 23080871
+    from_latest: false
+    client:
+      timeout: "30s"
+      throttle:
+        rps: 5
+        burst: 10
+
+nats:
+  url: "nats://localhost:4222"
+  subject_prefix: "indexer.transaction"
+
+storage:
+  type: "memory"           # memory | badger | postgres
+  directory: "data/badger" # only used for badger
