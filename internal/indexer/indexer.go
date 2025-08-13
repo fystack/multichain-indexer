@@ -22,17 +22,17 @@ type Error struct {
 }
 
 type BlockResult struct {
-	Number int64 // Block number for debug
+	Number uint64 // Block number for debug
 	Block  *core.Block
 	Error  *Error // Nil if OK
 }
 
 type Indexer interface {
 	GetName() string
-	GetLatestBlockNumber(ctx context.Context) (int64, error)
-	GetBlock(ctx context.Context, number int64) (*core.Block, error)
+	GetLatestBlockNumber(ctx context.Context) (uint64, error)
+	GetBlock(ctx context.Context, number uint64) (*core.Block, error)
 
 	// batch version: each block can have its own error
-	GetBlocks(ctx context.Context, from, to int64) ([]BlockResult, error)
+	GetBlocks(ctx context.Context, from, to uint64) ([]BlockResult, error)
 	IsHealthy() bool
 }

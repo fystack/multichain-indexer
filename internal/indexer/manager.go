@@ -58,7 +58,13 @@ func (m *Manager) Start(chainNameOpt ...string) error {
 				return fmt.Errorf("create EVM indexer: %w", err)
 			}
 			chainIndexer = evmIdx
-		case rpc.NetworkTron, rpc.NetworkSolana, rpc.NetworkBitcoin, rpc.NetworkGeneric:
+		case rpc.NetworkTron:
+			tronIdx, err := NewTronIndexer(chainConfig)
+			if err != nil {
+				return fmt.Errorf("create Tron indexer: %w", err)
+			}
+			chainIndexer = tronIdx
+		case rpc.NetworkSolana, rpc.NetworkBitcoin, rpc.NetworkGeneric:
 			return fmt.Errorf("indexer not implemented for chain: %s", chainName)
 		default:
 			return fmt.Errorf("unsupported chain: %s", chainName)

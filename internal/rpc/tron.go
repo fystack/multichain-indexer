@@ -44,18 +44,17 @@ type TronBlockRawData struct {
 }
 
 // GetNowBlock returns the latest block
-func (t *TronClient) GetNowBlock(ctx context.Context) (*TronBlock, error) {
+func (t *TronClient) GetNowBlock(ctx context.Context) (uint64, error) {
 	data, err := t.Post(ctx, "/wallet/getnowblock", nil)
 	if err != nil {
-		return nil, fmt.Errorf("getNowBlock failed: %w", err)
+		return 0, fmt.Errorf("getNowBlock failed: %w", err)
 	}
 
 	var block TronBlock
 	if err := json.Unmarshal(data, &block); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal block: %w", err)
+		return 0, fmt.Errorf("failed to unmarshal block: %w", err)
 	}
-
-	return &block, nil
+	return uint64(block.BlockHeader.RawData.Number), nil
 }
 
 // GetBlockByNumber returns a block by its number
@@ -71,7 +70,6 @@ func (t *TronClient) GetBlockByNumber(ctx context.Context, blockNumber string, d
 	}
 
 	var block TronBlock
-	fmt.Println(string(data))
 	if err := json.Unmarshal(data, &block); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal block: %w", err)
 	}

@@ -19,7 +19,7 @@ import (
 type FailedBlock struct {
 	Timestamp string `json:"timestamp"`
 	Chain     string `json:"chain"`
-	Block     int64  `json:"block"`
+	Block     uint64 `json:"block"`
 	Error     string `json:"error"`
 }
 
@@ -28,7 +28,7 @@ type Worker struct {
 	chain        Indexer
 	kvstore      kvstore.KVStore
 	emitter      *events.Emitter
-	currentBlock int64
+	currentBlock uint64
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logFile      *os.File
@@ -64,7 +64,7 @@ func NewWorker(chain Indexer, config core.ChainConfig, kvstore kvstore.KVStore, 
 			"chain", chain.GetName(), "error", err, "fallback_block", config.StartBlock)
 	}
 	if latestBlock == 0 {
-		latestBlock = int64(config.StartBlock)
+		latestBlock = uint64(config.StartBlock)
 	}
 	if config.FromLatest {
 		latestBlock, err = chain.GetLatestBlockNumber(ctx)
@@ -102,7 +102,6 @@ func (w *Worker) run() {
 			w.saveLatestBlockNumber(w.currentBlock - 1)
 			return
 		case <-ticker.C:
-			slog.Info("Processing blocks", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 			if err := w.processBlocks(); err != nil {
 				slog.Error("Error processing blocks", "chain", w.chain.GetName(), "error", err)
 				_ = w.emitter.EmitError(w.chain.GetName(), err)
@@ -122,8 +121,9 @@ func (w *Worker) processBlocks() error {
 		return nil
 	}
 
-	end := min(w.currentBlock+int64(w.config.BatchSize)-1, latest)
+	end := min(w.currentBlock+uint64(w.config.BatchSize)-1, latest)
 	lastSuccess := w.currentBlock - 1
+	slog.Info("Processing blocks", "chain", w.chain.GetName(), "start_block", w.currentBlock, "end_block", end)
 
 	results, err := w.chain.GetBlocks(w.ctx, w.currentBlock, end)
 	if err != nil {
@@ -137,10 +137,6 @@ func (w *Worker) processBlocks() error {
 		}
 
 		if result.Block == nil {
-			slog.Error("Block is nil",
-				"chain", w.chain.GetName(),
-				"block", result.Number,
-			)
 			w.logFailedBlock(result.Number, fmt.Errorf("block is nil"))
 			continue
 		}
@@ -157,7 +153,7 @@ func (w *Worker) processBlocks() error {
 	return nil
 }
 
-func (w *Worker) logFailedBlock(blockNumber int64, err error) {
+func (w *Worker) logFailedBlock(blockNumber uint64, err error) {
 	// Rotate log file daily if needed
 	currentDate := time.Now().Format(time.DateOnly)
 	if currentDate != w.logFileDate {
@@ -192,18 +188,18 @@ func (w *Worker) emitBlock(block *core.Block) {
 	slog.Info("Processed block", "chain", w.chain.GetName(), "block", block.Number, "txs", len(block.Transactions))
 }
 
-func (w *Worker) getLatestBlockNumber() (int64, error) {
+func (w *Worker) getLatestBlockNumber() (uint64, error) {
 	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
 	latestBlock, err := w.kvstore.Get(key)
 	if err != nil {
 		return 0, err
 	}
-	return strconv.ParseInt(string(latestBlock), 10, 64)
+	return strconv.ParseUint(string(latestBlock), 10, 64)
 }
 
-func (w *Worker) saveLatestBlockNumber(blockNumber int64) {
+func (w *Worker) saveLatestBlockNumber(blockNumber uint64) {
 	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
-	_ = w.kvstore.Set(key, []byte(strconv.FormatInt(blockNumber, 10)))
+	_ = w.kvstore.Set(key, []byte(strconv.FormatUint(blockNumber, 10)))
 	slog.Debug("Saved latest processed block", "chain", w.chain.GetName(), "block", blockNumber)
 }
 
