@@ -2,7 +2,6 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"testing"
 )
 
@@ -14,7 +13,7 @@ func TestTronGetLatestBlockNumber(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		fmt.Println(blockNumber)
+		t.Logf("blockNumber: %d", blockNumber)
 		return nil
 	})
 	if err != nil {
@@ -31,7 +30,7 @@ func TestTronGetBlockByNumber(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		fmt.Println(block)
+		t.Logf("block: %+v", block)
 		return nil
 	})
 	if err != nil {
@@ -48,7 +47,7 @@ func TestTronGetTransactionByHash(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		fmt.Println(tx)
+		t.Logf("tx: %+v", tx)
 		return nil
 	})
 	if err != nil {

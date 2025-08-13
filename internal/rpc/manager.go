@@ -170,11 +170,15 @@ func (c *GenericClient) CallRPC(ctx context.Context, method string, params any) 
 	c.setAuthHeaders(httpReq)
 
 	// Execute request
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	elapsed := time.Since(startTime)
+	slog.Debug("RPC request completed", "method", method, "elapsed", elapsed)
 
 	// Check HTTP status
 	if resp.StatusCode != http.StatusOK {
@@ -334,11 +338,15 @@ func (c *GenericClient) makeRequestWithBody(ctx context.Context, method, endpoin
 }
 
 func (c *GenericClient) executeRequest(req *http.Request) ([]byte, error) {
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	elapsed := time.Since(startTime)
+	slog.Debug("HTTP request completed", "elapsed", elapsed)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

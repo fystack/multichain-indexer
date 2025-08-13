@@ -48,6 +48,7 @@ func (c *ChainsConfig) UnmarshalYAML(b []byte) error {
 }
 
 type ChainConfig struct {
+	Name         string        `yaml:"name"`
 	Nodes        []Node        `yaml:"nodes"` // supports http & ws
 	StartBlock   uint64        `yaml:"start_block"`
 	FromLatest   bool          `yaml:"from_latest" default:"true"`

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"idx/internal/common/ratelimiter"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -101,6 +102,35 @@ type EthTransaction struct {
 	Input            string `json:"input"`
 }
 
+// EthLog represents an Ethereum log entry
+type EthLog struct {
+	Address          string   `json:"address"`
+	Topics           []string `json:"topics"`
+	Data             string   `json:"data"`
+	BlockNumber      string   `json:"blockNumber,omitempty"`
+	TransactionHash  string   `json:"transactionHash,omitempty"`
+	TransactionIndex string   `json:"transactionIndex,omitempty"`
+	BlockHash        string   `json:"blockHash,omitempty"`
+	LogIndex         string   `json:"logIndex,omitempty"`
+	Removed          bool     `json:"removed,omitempty"`
+}
+
+// EthTransactionReceipt represents an Ethereum transaction receipt
+type EthTransactionReceipt struct {
+	TransactionHash   string   `json:"transactionHash"`
+	TransactionIndex  string   `json:"transactionIndex"`
+	BlockHash         string   `json:"blockHash"`
+	BlockNumber       string   `json:"blockNumber"`
+	From              string   `json:"from"`
+	To                string   `json:"to"`
+	CumulativeGasUsed string   `json:"cumulativeGasUsed"`
+	GasUsed           string   `json:"gasUsed"`
+	ContractAddress   string   `json:"contractAddress"`
+	Logs              []EthLog `json:"logs"`
+	Status            string   `json:"status"`
+	EffectiveGasPrice string   `json:"effectiveGasPrice"`
+}
+
 // GetTransactionByHash returns a transaction by its hash
 func (e *EthereumClient) GetTransactionByHash(ctx context.Context, txHash string) (*EthTransaction, error) {
 	resp, err := e.CallRPC(ctx, "eth_getTransactionByHash", []any{txHash})
@@ -114,6 +144,133 @@ func (e *EthereumClient) GetTransactionByHash(ctx context.Context, txHash string
 	}
 
 	return &tx, nil
+}
+
+// BatchGetTransactionReceipts gets multiple transaction receipts in a single batch call
+func (c *EthereumClient) BatchGetTransactionReceipts(ctx context.Context, txHashes []string) (map[string]*EthTransactionReceipt, error) {
+	results := make(map[string]*EthTransactionReceipt)
+	if len(txHashes) == 0 {
+		return results, nil
+	}
+
+	// Apply rate limiting
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx, c.baseURL); err != nil {
+			return nil, fmt.Errorf("rate limit wait failed: %w", err)
+		}
+	}
+
+	// Generate request IDs and build batch
+	c.mutex.Lock()
+	startID := c.rpcID
+	requests := make([]*RPCRequest, 0, len(txHashes))
+	idToHash := make(map[string]string, len(txHashes))
+	for i, h := range txHashes {
+		id := startID + int64(i)
+		requests = append(requests, &RPCRequest{
+			ID:      id,
+			JSONRPC: "2.0",
+			Method:  "eth_getTransactionReceipt",
+			Params:  []any{h},
+		})
+		idToHash[fmt.Sprint(id)] = h
+	}
+	c.rpcID += int64(len(txHashes))
+	c.mutex.Unlock()
+
+	resp, err := c.Post(ctx, "/", requests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to post batch request: %w", err)
+	}
+	var rpcResponses []RPCResponse
+	if err := json.Unmarshal(resp, &rpcResponses); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal batch RPC response: %w", err)
+	}
+	for _, r := range rpcResponses {
+		if r.Error != nil {
+			slog.Error("batch get transaction receipts failed", "error", r.Error)
+			// Skip errored entries; caller can decide how to handle missing ones
+			continue
+		}
+		hash, ok := idToHash[fmt.Sprint(r.ID)]
+		if !ok {
+			continue
+		}
+		if len(r.Result) == 0 || string(r.Result) == "null" {
+			continue
+		}
+		var receipt EthTransactionReceipt
+		if err := json.Unmarshal(r.Result, &receipt); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal receipt: %w", err)
+		}
+		results[hash] = &receipt
+	}
+
+	return results, nil
+}
+
+// BatchGetBlocksByNumber gets multiple blocks by their numbers in batch calls
+func (c *EthereumClient) BatchGetBlocksByNumber(ctx context.Context, blockNumbers []uint64, fullTxs bool) (map[uint64]*EthBlock, error) {
+	results := make(map[uint64]*EthBlock)
+	if len(blockNumbers) == 0 {
+		return results, nil
+	}
+
+	// Apply rate limiting
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx, c.baseURL); err != nil {
+			return nil, fmt.Errorf("rate limit wait failed: %w", err)
+		}
+	}
+
+	// Generate request IDs and build batch
+	c.mutex.Lock()
+	startID := c.rpcID
+	requests := make([]*RPCRequest, 0, len(blockNumbers))
+	idToBlockNum := make(map[string]uint64, len(blockNumbers))
+	for i, n := range blockNumbers {
+		id := startID + int64(i)
+		hexNum := fmt.Sprintf("0x%x", n)
+		requests = append(requests, &RPCRequest{
+			ID:      id,
+			JSONRPC: "2.0",
+			Method:  "eth_getBlockByNumber",
+			Params:  []any{hexNum, fullTxs},
+		})
+		idToBlockNum[fmt.Sprint(id)] = n
+	}
+	c.rpcID += int64(len(blockNumbers))
+	c.mutex.Unlock()
+
+	resp, err := c.Post(ctx, "/", requests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to post batch request: %w", err)
+	}
+	var rpcResponses []RPCResponse
+	if err := json.Unmarshal(resp, &rpcResponses); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal batch RPC response: %w", err)
+	}
+	for _, r := range rpcResponses {
+		if r.Error != nil {
+			slog.Error("batch get blocks failed", "error", r.Error)
+			// Skip errored entries
+			continue
+		}
+		if len(r.Result) == 0 || string(r.Result) == "null" {
+			continue
+		}
+		n, ok := idToBlockNum[fmt.Sprint(r.ID)]
+		if !ok {
+			continue
+		}
+		var block EthBlock
+		if err := json.Unmarshal(r.Result, &block); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal block: %w", err)
+		}
+		results[n] = &block
+	}
+
+	return results, nil
 }
 
 // FailoverManager helpers for Ethereum

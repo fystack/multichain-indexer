@@ -11,6 +11,7 @@ chains:
         burst: 16
 
   tron:
+    name: "tron-mainnet"
     nodes:
       - url: "https://tron-rpc.publicnode.com"
       - url: "https://api.trongrid.io"
@@ -28,6 +29,7 @@ chains:
         burst: 20
 
   evm:
+    name: "ethereum-mainnet"
     nodes:
       - url: "https://ethereum-rpc.publicnode.com"
       - url: "https://1rpc.io/eth"
