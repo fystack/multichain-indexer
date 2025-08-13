@@ -63,34 +63,39 @@ func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 }
 
 func (e *EVMIndexer) GetBlock(ctx context.Context, number uint64) (*core.Block, error) {
-	var block *core.Block
-	err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-		// Get block
-		hexNum := fmt.Sprintf("0x%x", number)
-		b, err := c.GetBlockByNumber(ctx, hexNum, true)
-		if err != nil {
-			return err
-		}
-
-		// Get receipts for contract calls only
-		receipts := make(map[string]*rpc.EthTransactionReceipt)
-		if len(b.Transactions) > 0 {
-			var txHashes []string
-			for _, tx := range b.Transactions {
-				if e.needsReceipt(tx) {
-					txHashes = append(txHashes, tx.Hash)
-				}
-			}
-			if len(txHashes) > 0 {
-				receipts, _ = c.BatchGetTransactionReceipts(ctx, txHashes)
-			}
-		}
-
-		// Convert
-		block, err = e.convertBlock(b, receipts)
+	// Fetch block
+	var eb *rpc.EthBlock
+	hexNum := fmt.Sprintf("0x%x", number)
+	if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+		var err error
+		eb, err = c.GetBlockByNumber(ctx, hexNum, true)
 		return err
-	})
-	return block, err
+	}); err != nil {
+		return nil, err
+	}
+
+	// Fetch receipts if needed
+	receipts := make(map[string]*rpc.EthTransactionReceipt)
+	if len(eb.Transactions) > 0 {
+		var txHashes []string
+		for _, tx := range eb.Transactions {
+			if e.needsReceipt(tx) {
+				txHashes = append(txHashes, tx.Hash)
+			}
+		}
+		if len(txHashes) > 0 {
+			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+				r, err := c.BatchGetTransactionReceipts(ctx, txHashes)
+				if err == nil && r != nil {
+					receipts = r
+				}
+				return nil
+			})
+		}
+	}
+
+	// Convert
+	return e.convertBlock(eb, receipts)
 }
 
 func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockResult, error) {
@@ -99,86 +104,100 @@ func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockRes
 	}
 
 	var results []BlockResult
-	err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-		// Get all blocks
-		blockNums := make([]uint64, 0, to-from+1)
-		for n := from; n <= to; n++ {
-			blockNums = append(blockNums, n)
-		}
+	var blocks map[uint64]*rpc.EthBlock
 
-		blocks, err := c.BatchGetBlocksByNumber(ctx, blockNums, true)
-		if err != nil {
-			return e.fallbackIndividual(ctx, c, from, to, &results)
-		}
+	// Prepare block numbers
+	blockNums := make([]uint64, 0, to-from+1)
+	for n := from; n <= to; n++ {
+		blockNums = append(blockNums, n)
+	}
 
-		// Collect tx hashes needing receipts
-		var allTxHashes []string
-		blockTxMap := make(map[uint64][]string)
-		for blockNum, block := range blocks {
-			if block == nil {
-				continue
+	// Try batch fetch
+	if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+		var err error
+		blocks, err = c.BatchGetBlocksByNumber(ctx, blockNums, true)
+		return err
+	}); err != nil {
+		if ferr := e.fallbackIndividual(ctx, from, to, &results); ferr != nil {
+			return nil, ferr
+		}
+		return results, nil
+	}
+
+	// Collect tx hashes needing receipts
+	var allTxHashes []string
+	blockTxMap := make(map[uint64][]string)
+	for blockNum, block := range blocks {
+		if block == nil {
+			continue
+		}
+		for _, tx := range block.Transactions {
+			if e.needsReceipt(tx) {
+				blockTxMap[blockNum] = append(blockTxMap[blockNum], tx.Hash)
+				allTxHashes = append(allTxHashes, tx.Hash)
 			}
-			for _, tx := range block.Transactions {
-				if e.needsReceipt(tx) {
-					blockTxMap[blockNum] = append(blockTxMap[blockNum], tx.Hash)
-					allTxHashes = append(allTxHashes, tx.Hash)
-				}
-			}
 		}
+	}
 
-		// Batch get all receipts
-		allReceipts := make(map[string]*rpc.EthTransactionReceipt)
-		if len(allTxHashes) > 0 {
-			chunkSize := 50
-			for i := 0; i < len(allTxHashes); i += chunkSize {
-				end := min(i+chunkSize, len(allTxHashes))
+	// Batch get all receipts
+	allReceipts := make(map[string]*rpc.EthTransactionReceipt)
+	if len(allTxHashes) > 0 {
+		chunkSize := 50
+		for i := 0; i < len(allTxHashes); i += chunkSize {
+			end := min(i+chunkSize, len(allTxHashes))
+			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
 				if receipts, err := c.BatchGetTransactionReceipts(ctx, allTxHashes[i:end]); err == nil {
 					maps.Copy(allReceipts, receipts)
 				}
+				return nil
+			})
+		}
+	}
+
+	// Process blocks
+	results = make([]BlockResult, 0, int(to-from+1))
+	for n := from; n <= to; n++ {
+		block := blocks[n]
+		if block == nil {
+			results = append(results, BlockResult{
+				Number: n, Block: nil,
+				Error: &Error{ErrorType: ErrorTypeUnknown, Message: "block not found"},
+			})
+			continue
+		}
+
+		// Get receipts for this block
+		blockReceipts := make(map[string]*rpc.EthTransactionReceipt)
+		for _, txHash := range blockTxMap[n] {
+			if receipt := allReceipts[txHash]; receipt != nil {
+				blockReceipts[txHash] = receipt
 			}
 		}
 
-		// Process blocks
-		results = make([]BlockResult, 0, int(to-from+1))
-		for n := from; n <= to; n++ {
-			block := blocks[n]
-			if block == nil {
-				results = append(results, BlockResult{
-					Number: n, Block: nil,
-					Error: &Error{ErrorType: ErrorTypeUnknown, Message: "block not found"},
-				})
-				continue
-			}
-
-			// Get receipts for this block
-			blockReceipts := make(map[string]*rpc.EthTransactionReceipt)
-			for _, txHash := range blockTxMap[n] {
-				if receipt := allReceipts[txHash]; receipt != nil {
-					blockReceipts[txHash] = receipt
-				}
-			}
-
-			coreBlock, err := e.convertBlock(block, blockReceipts)
-			if err != nil {
-				results = append(results, BlockResult{
-					Number: n, Block: nil,
-					Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
-				})
-			} else {
-				results = append(results, BlockResult{Number: n, Block: coreBlock})
-			}
+		coreBlock, err := e.convertBlock(block, blockReceipts)
+		if err != nil {
+			results = append(results, BlockResult{
+				Number: n, Block: nil,
+				Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
+			})
+		} else {
+			results = append(results, BlockResult{Number: n, Block: coreBlock})
 		}
-		return nil
-	})
-	return results, err
+	}
+
+	return results, nil
 }
 
-func (e *EVMIndexer) fallbackIndividual(ctx context.Context, c *rpc.EthereumClient, from, to uint64, results *[]BlockResult) error {
+func (e *EVMIndexer) fallbackIndividual(ctx context.Context, from, to uint64, results *[]BlockResult) error {
 	*results = make([]BlockResult, 0, int(to-from+1))
 	for n := from; n <= to; n++ {
 		hexNum := fmt.Sprintf("0x%x", n)
-		b, err := c.GetBlockByNumber(ctx, hexNum, true)
-		if err != nil {
+		var b *rpc.EthBlock
+		if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+			var err error
+			b, err = c.GetBlockByNumber(ctx, hexNum, true)
+			return err
+		}); err != nil {
 			*results = append(*results, BlockResult{
 				Number: n, Block: nil,
 				Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
@@ -194,7 +213,12 @@ func (e *EVMIndexer) fallbackIndividual(ctx context.Context, c *rpc.EthereumClie
 			}
 		}
 		if len(txHashes) > 0 {
-			receipts, _ = c.BatchGetTransactionReceipts(ctx, txHashes)
+			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+				if r, err := c.BatchGetTransactionReceipts(ctx, txHashes); err == nil && r != nil {
+					receipts = r
+				}
+				return nil
+			})
 		}
 
 		block, err := e.convertBlock(b, receipts)
