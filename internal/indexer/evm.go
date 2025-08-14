@@ -47,7 +47,11 @@ func NewEVMIndexer(config core.ChainConfig) (*EVMIndexer, error) {
 		}
 	}
 
-	return &EVMIndexer{config: config, failover: fm, rateLimiter: rl}, nil
+	return &EVMIndexer{
+		config:      config,
+		failover:    fm,
+		rateLimiter: rl,
+	}, nil
 }
 
 func (e *EVMIndexer) GetName() string { return e.config.Name }

@@ -6,9 +6,10 @@ import (
 	"idx/internal/common/ratelimiter"
 	"idx/internal/core"
 	"idx/internal/rpc"
-	"log/slog"
-	"strconv"
+	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 type TronIndexer struct {
@@ -30,7 +31,6 @@ func NewTronIndexer(config core.ChainConfig) (*TronIndexer, error) {
 	}
 
 	fm := rpc.NewFailoverManager(rpc.DefaultFailoverConfig())
-
 	for i, nodeURL := range config.Nodes {
 		name := fmt.Sprintf("%s-%d", config.Name, i)
 		if err := fm.AddTronProvider(name, nodeURL.URL, nil, rl); err != nil {
@@ -52,101 +52,164 @@ func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) 
 	var latest uint64
 	err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
 		n, err := c.GetNowBlock(ctx)
-		if err != nil {
-			return err
-		}
 		latest = n
-		return nil
+		return err
 	})
-
-	if err != nil {
-		return 0, err
-	}
-	return latest, nil
+	return latest, err
 }
 
 func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*core.Block, error) {
-	var block *core.Block
-	err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
-		b, err := c.GetBlockByNumber(ctx, strconv.FormatUint(blockNumber, 10), true)
+	// Fetch block metadata
+	var tronBlock *rpc.TronBlock
+	if err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
+		b, err := c.GetBlockByNumber(ctx, fmt.Sprintf("%d", blockNumber), true)
 		if err != nil {
 			return err
 		}
-		cb, err := convertTronBlockToCore(t.GetName(), b)
-		if err != nil {
-			return err
-		}
-		block = cb
+		tronBlock = b
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return nil, err
+	}
+
+	// Fetch transaction infos for the block (contains logs and fee info)
+	var txns []*rpc.TronTransactionInfo
+	if err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
+		var err error
+		txns, err = c.GetTransactionInfoByBlockNum(ctx, int64(blockNumber))
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	block := &core.Block{
+		Number:       uint64(tronBlock.BlockHeader.RawData.Number),
+		Hash:         tronBlock.BlockID,
+		ParentHash:   tronBlock.BlockHeader.RawData.ParentHash,
+		Timestamp:    uint64(tronBlock.BlockHeader.RawData.Timestamp),
+		Transactions: []core.Transaction{},
+	}
+
+	for _, tx := range txns {
+		// Native TRX fee as transaction fee
+		fee := decimal.NewFromInt(tx.Fee)
+		fmt.Println("tx", tx.ID, tx.Log)
+		// TRC20 logs
+		if len(tx.Log) > 0 {
+			transfers := t.parseTRC20Logs(tx)
+			for i := range transfers {
+				// Prefer the actual per-tx fee on first entry; others zero to avoid overcounting
+				if i == 0 {
+					transfers[i].TxFee = fee
+				}
+			}
+			block.Transactions = append(block.Transactions, transfers...)
+		}
+
+		// TRC10 and native TRX are not in logs; parse by inspecting internal transfers and receipt
+		// Native TRX is reflected in internal transactions with tokenName empty
+		for _, itx := range tx.InternalTransactions {
+			from := rpc.TronToHexAddress(itx.CallerAddress)
+			to := rpc.TronToHexAddress(itx.TransferToAddress)
+			for _, v := range itx.CallValueInfo {
+				amount := decimal.NewFromInt(v.CallValue)
+				if strings.TrimSpace(v.TokenName) == "" {
+					// Native TRX transfer
+					block.Transactions = append(block.Transactions, core.Transaction{
+						TxHash:       tx.ID,
+						NetworkId:    t.chainName,
+						BlockNumber:  uint64(tx.BlockNumber),
+						FromAddress:  from,
+						ToAddress:    to,
+						AssetAddress: "",
+						Amount:       amount.String(),
+						Type:         "transfer",
+						TxFee:        fee,
+						Timestamp:    uint64(tx.BlockTimestamp),
+					})
+				} else {
+					// TRC10 transfer (TokenName carries asset identifier)
+					block.Transactions = append(block.Transactions, core.Transaction{
+						TxHash:       tx.ID,
+						NetworkId:    t.chainName,
+						BlockNumber:  uint64(tx.BlockNumber),
+						FromAddress:  from,
+						ToAddress:    to,
+						AssetAddress: v.TokenName,
+						Amount:       amount.String(),
+						Type:         "trc10_transfer",
+						TxFee:        fee,
+						Timestamp:    uint64(tx.BlockTimestamp),
+					})
+				}
+			}
+		}
 	}
 	return block, nil
 }
 
-func (t *TronIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockResult, error) {
-	if to < from {
-		return nil, fmt.Errorf("invalid range: to < from")
-	}
-
-	results := make([]BlockResult, 0, to-from+1)
-	for n := from; n <= to; n++ {
-		b, err := t.GetBlock(ctx, n)
-		if err != nil {
-			results = append(results, BlockResult{
-				Number: n,
-				Block:  nil,
-				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
-			})
+// parseTRC20Logs converts Tron logs that represent ERC-20-compatible Transfer events into core.Transaction entries
+func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transaction {
+	var transfers []core.Transaction
+	for _, log := range tx.Log {
+		if len(log.Topics) < 3 {
 			continue
 		}
-		results = append(results, BlockResult{Number: n, Block: b, Error: nil})
+		// Topics are expected to be 0x-prefixed hex strings
+		topic0 := strings.ToLower(strings.TrimSpace(log.Topics[0]))
+		if topic0 != ERC20_TRANSFER_TOPIC {
+			continue
+		}
+		fromTopic := strings.ToLower(strings.TrimSpace(log.Topics[1]))
+		toTopic := strings.ToLower(strings.TrimSpace(log.Topics[2]))
+
+		from := "0x" + fromTopic[len(fromTopic)-40:]
+		to := "0x" + toTopic[len(toTopic)-40:]
+
+		amountBI, err := parseHexBigInt(log.Data)
+		if err != nil {
+			continue
+		}
+
+		assetHex := rpc.TronToHexAddress(log.Address)
+		transfers = append(transfers, core.Transaction{
+			TxHash:       tx.ID,
+			NetworkId:    t.chainName,
+			BlockNumber:  uint64(tx.BlockNumber),
+			FromAddress:  from,
+			ToAddress:    to,
+			AssetAddress: assetHex,
+			Amount:       amountBI.String(),
+			Type:         "erc20_transfer",
+			TxFee:        decimal.NewFromInt(tx.Fee),
+			Timestamp:    uint64(tx.BlockTimestamp),
+		})
 	}
-	return results, nil
+	return transfers
+}
+
+func (t *TronIndexer) GetBlocks(ctx context.Context, start, end uint64) ([]BlockResult, error) {
+	if start > end {
+		return nil, fmt.Errorf("start block number is greater than end block number")
+	}
+
+	blocks := make([]BlockResult, 0)
+	for i := start; i <= end; i++ {
+		block, err := t.GetBlock(ctx, i)
+		if err != nil {
+			return nil, fmt.Errorf("get block: %w", err)
+		}
+		blocks = append(blocks, BlockResult{
+			Number: i,
+			Block:  block,
+			Error:  nil,
+		})
+	}
+	return blocks, nil
 }
 
 func (t *TronIndexer) IsHealthy() bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// A light check by calling GetBlockNumber
-	if _, err := t.GetLatestBlockNumber(ctx); err != nil {
-		slog.Warn("Tron health check failed", "name", t.GetName(), "err", err)
-		return false
-	}
-	return true
-}
-
-func convertTronBlockToCore(networkName string, tb *rpc.TronBlock) (*core.Block, error) {
-	if tb == nil {
-		return nil, fmt.Errorf("nil tron block")
-	}
-	blockNumber := uint64(tb.BlockHeader.RawData.Number)
-	timestamp := uint64(tb.BlockHeader.RawData.Timestamp)
-	tsx := make([]core.Transaction, 0, len(tb.Transactions))
-	for _, tx := range tb.Transactions {
-		ct, err := convertTronTxToCore(networkName, &tx)
-		if err != nil {
-			// Skip malformed tx but continue other txs
-			slog.Warn("failed to convert transaction", "hash", tx.TxID, "err", err)
-			continue
-		}
-		ct.BlockNumber = blockNumber
-		ct.Timestamp = timestamp
-		tsx = append(tsx, ct)
-	}
-
-	b := &core.Block{
-		Number:       blockNumber,
-		Hash:         tb.BlockID,
-		ParentHash:   tb.BlockHeader.RawData.ParentHash,
-		Timestamp:    timestamp,
-		Transactions: tsx,
-	}
-	return b, nil
-}
-
-func convertTronTxToCore(networkName string, tx *rpc.TronTransaction) (core.Transaction, error) {
-
-	return core.Transaction{}, nil
+	_, err := t.GetLatestBlockNumber(ctx)
+	return err == nil
 }

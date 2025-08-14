@@ -82,6 +82,14 @@ type TronTransferContract struct {
 	Amount       int64  `json:"amount"`
 }
 
+// TRC10 transfer contract
+type TronTransferAssetContract struct {
+	OwnerAddress string `json:"owner_address"`
+	ToAddress    string `json:"to_address"`
+	AssetName    string `json:"asset_name"`
+	Amount       int64  `json:"amount"`
+}
+
 type TronTriggerSmartContract struct {
 	OwnerAddress    string `json:"owner_address"`
 	ContractAddress string `json:"contract_address"`
@@ -236,7 +244,6 @@ func (t *TronClient) GetTransactionInfoByBlockNum(ctx context.Context, blockNum 
 	if err != nil {
 		return nil, fmt.Errorf("getTransactionInfoByBlockNum failed: %w", err)
 	}
-	fmt.Println(string(data))
 	var txs []*TronTransactionInfo
 	if err := json.Unmarshal(data, &txs); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal transactions: %w", err)
@@ -247,6 +254,14 @@ func (t *TronClient) GetTransactionInfoByBlockNum(ctx context.Context, blockNum 
 // Helper method to parse contract parameter based on contract type
 func (cp *TronContractParameter) ParseTransferContract() (*TronTransferContract, error) {
 	var transfer TronTransferContract
+	if err := json.Unmarshal(cp.Value, &transfer); err != nil {
+		return nil, err
+	}
+	return &transfer, nil
+}
+
+func (cp *TronContractParameter) ParseTransferAssetContract() (*TronTransferAssetContract, error) {
+	var transfer TronTransferAssetContract
 	if err := json.Unmarshal(cp.Value, &transfer); err != nil {
 		return nil, err
 	}
