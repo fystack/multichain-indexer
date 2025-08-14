@@ -12,6 +12,9 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// keccak256("Transfer(address,address,uint256)")
+const ERC_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
 type TronIndexer struct {
 	chainName   string
 	config      core.ChainConfig
@@ -90,87 +93,94 @@ func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*core.B
 	}
 
 	for _, tx := range txns {
-		// Native TRX fee as transaction fee
 		fee := decimal.NewFromInt(tx.Fee)
-		fmt.Println("tx", tx.ID, tx.Log)
-		// TRC20 logs
+		assignedFee := false // only assign fee to the first entry of this tx
+
+		// TRC20/721 logs
 		if len(tx.Log) > 0 {
 			transfers := t.parseTRC20Logs(tx)
+
 			for i := range transfers {
-				// Prefer the actual per-tx fee on first entry; others zero to avoid overcounting
-				if i == 0 {
+				if !assignedFee {
 					transfers[i].TxFee = fee
+					assignedFee = true
 				}
 			}
 			block.Transactions = append(block.Transactions, transfers...)
 		}
 
-		// TRC10 and native TRX are not in logs; parse by inspecting internal transfers and receipt
-		// Native TRX is reflected in internal transactions with tokenName empty
+		// Internal: TRX & TRC10
 		for _, itx := range tx.InternalTransactions {
 			from := rpc.TronToHexAddress(itx.CallerAddress)
 			to := rpc.TronToHexAddress(itx.TransferToAddress)
+
 			for _, v := range itx.CallValueInfo {
 				amount := decimal.NewFromInt(v.CallValue)
-				if strings.TrimSpace(v.TokenName) == "" {
-					// Native TRX transfer
-					block.Transactions = append(block.Transactions, core.Transaction{
-						TxHash:       tx.ID,
-						NetworkId:    t.chainName,
-						BlockNumber:  uint64(tx.BlockNumber),
-						FromAddress:  from,
-						ToAddress:    to,
-						AssetAddress: "",
-						Amount:       amount.String(),
-						Type:         "transfer",
-						TxFee:        fee,
-						Timestamp:    uint64(tx.BlockTimestamp),
-					})
-				} else {
-					// TRC10 transfer (TokenName carries asset identifier)
-					block.Transactions = append(block.Transactions, core.Transaction{
-						TxHash:       tx.ID,
-						NetworkId:    t.chainName,
-						BlockNumber:  uint64(tx.BlockNumber),
-						FromAddress:  from,
-						ToAddress:    to,
-						AssetAddress: v.TokenName,
-						Amount:       amount.String(),
-						Type:         "trc10_transfer",
-						TxFee:        fee,
-						Timestamp:    uint64(tx.BlockTimestamp),
-					})
+
+				tr := core.Transaction{
+					TxHash:      tx.ID,
+					NetworkId:   t.chainName,
+					BlockNumber: uint64(tx.BlockNumber),
+					FromAddress: from,
+					ToAddress:   to,
+					Amount:      amount.String(),
+					Timestamp:   uint64(tx.BlockTimestamp),
 				}
+
+				if strings.TrimSpace(v.TokenName) == "" {
+					// Native TRX (internal)
+					tr.Type = "transfer"
+					tr.AssetAddress = ""
+				} else {
+					// TRC10 asset (InternalTransaction.TokenName)
+					tr.Type = "trc10_transfer"
+					tr.AssetAddress = v.TokenName
+				}
+
+				if !assignedFee {
+					tr.TxFee = fee
+					assignedFee = true
+				}
+				fmt.Println("tr", tr)
+				block.Transactions = append(block.Transactions, tr)
 			}
 		}
 	}
+
 	return block, nil
 }
 
 // parseTRC20Logs converts Tron logs that represent ERC-20-compatible Transfer events into core.Transaction entries
 func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transaction {
 	var transfers []core.Transaction
+
 	for _, log := range tx.Log {
+		// should have at least 3 topics: 0=event, 1=from, 2=to
 		if len(log.Topics) < 3 {
 			continue
 		}
-		// Topics are expected to be 0x-prefixed hex strings
+
 		topic0 := strings.ToLower(strings.TrimSpace(log.Topics[0]))
-		if topic0 != ERC20_TRANSFER_TOPIC {
+		// Normalize to compare without 0x prefix differences
+		topic0 = strings.TrimPrefix(topic0, "0x")
+		if topic0 != strings.TrimPrefix(ERC_TRANSFER_TOPIC, "0x") {
 			continue
 		}
-		fromTopic := strings.ToLower(strings.TrimSpace(log.Topics[1]))
-		toTopic := strings.ToLower(strings.TrimSpace(log.Topics[2]))
 
-		from := "0x" + fromTopic[len(fromTopic)-40:]
-		to := "0x" + toTopic[len(toTopic)-40:]
+		from, ok1 := extractAddressFromTopic(log.Topics[1])
+		to, ok2 := extractAddressFromTopic(log.Topics[2])
+		if !ok1 || !ok2 {
+			continue
+		}
 
 		amountBI, err := parseHexBigInt(log.Data)
 		if err != nil {
 			continue
 		}
 
+		// log.Address in Tron doesn't have 0x41 prefix; TronToHexAddress already handled it
 		assetHex := rpc.TronToHexAddress(log.Address)
+
 		transfers = append(transfers, core.Transaction{
 			TxHash:       tx.ID,
 			NetworkId:    t.chainName,
@@ -180,7 +190,7 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transac
 			AssetAddress: assetHex,
 			Amount:       amountBI.String(),
 			Type:         "erc20_transfer",
-			TxFee:        decimal.NewFromInt(tx.Fee),
+			TxFee:        decimal.Zero,
 			Timestamp:    uint64(tx.BlockTimestamp),
 		})
 	}
@@ -212,4 +222,18 @@ func (t *TronIndexer) IsHealthy() bool {
 	defer cancel()
 	_, err := t.GetLatestBlockNumber(ctx)
 	return err == nil
+}
+
+// extractAddressFromTopic get last 20 bytes of topic (32 bytes) -> "0x" + 40 hex chars
+func extractAddressFromTopic(topic string) (string, bool) {
+	s := strings.TrimSpace(topic)
+	s = strings.TrimPrefix(strings.ToLower(s), "0x")
+	if len(s) < 40 {
+		return "", false
+	}
+	if len(s) >= 64 {
+		return "0x" + s[len(s)-40:], true
+	}
+	// sometimes node returns already 20-byte (rare), fallback
+	return "0x" + s, true
 }

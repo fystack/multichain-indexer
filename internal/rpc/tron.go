@@ -160,32 +160,26 @@ func (t *TronClient) GetBlockByNumber(ctx context.Context, blockNumber string, d
 	return &block, nil
 }
 
-// TronTransactionInfo represents a Tron transaction
+// TronTransactionInfo là model đầy đủ cho gettransactioninfobyblocknum response
 type TronTransactionInfo struct {
 	ID                     string                    `json:"id"`
 	Fee                    int64                     `json:"fee"`
 	BlockNumber            int64                     `json:"blockNumber"`
-	BlockTimestamp         int64                     `json:"blockTimestamp"`
+	BlockTimestamp         int64                     `json:"blockTimeStamp"`
 	ContractResult         []string                  `json:"contractResult"`
 	ContractAddress        string                    `json:"contract_address"`
 	Receipt                TronResourceReceipt       `json:"receipt"`
 	Log                    []TronLog                 `json:"log"`
-	Result                 string                    `json:"result"`
-	ResMessage             string                    `json:"resMessage"`
-	WithdrawAmount         int64                     `json:"withdraw_amount"`
-	UnfreezeAmount         int64                     `json:"unfreeze_amount"`
-	InternalTransactions   []TronInternalTransaction `json:"internal_transactions"`
+	Result                 string                    `json:"result,omitempty"`      // "FAILED" if fail, if success usually no this field
+	ResMessage             string                    `json:"resMessage,omitempty"`  // hex string -> can decode to plaintext
+	WithdrawAmount         int64                     `json:"withdraw_amount"`       // sun
+	UnfreezeAmount         int64                     `json:"unfreeze_amount"`       // sun
+	InternalTransactions   []TronInternalTransaction `json:"internal_transactions"` // list internal tx
 	WithdrawExpireAmount   int64                     `json:"withdraw_expire_amount"`
-	CancelUnfreezeV2Amount int64                     `json:"cancel_unfreeze_v2_amount"`
-	// Additional fields that might be present in transaction info
-	PackingFee       int64 `json:"packing_fee,omitempty"`
-	EnergyUsage      int64 `json:"energy_usage,omitempty"`
-	EnergyFee        int64 `json:"energy_fee,omitempty"`
-	EnergyUsageTotal int64 `json:"energy_usage_total,omitempty"`
-	NetUsage         int64 `json:"net_usage,omitempty"`
-	NetFee           int64 `json:"net_fee,omitempty"`
+	CancelUnfreezeV2Amount map[string]int64          `json:"cancel_unfreezeV2_amount"` // key: BANDWIDTH / ENERGY / TRON_POWER
 }
 
+// TronResourceReceipt contains resource usage and fee info
 type TronResourceReceipt struct {
 	EnergyUsage        int64  `json:"energy_usage"`
 	EnergyFee          int64  `json:"energy_fee"`
@@ -197,19 +191,14 @@ type TronResourceReceipt struct {
 	EnergyPenaltyTotal int64  `json:"energy_penalty_total"`
 }
 
+// TronLog contains event log of smart contract call
 type TronLog struct {
-	Address string   `json:"address"`
+	Address string   `json:"address"` // hex address without 0x prefix
 	Topics  []string `json:"topics"`
 	Data    string   `json:"data"`
-	// Additional fields for log entries
-	BlockNumber      int64  `json:"blockNumber,omitempty"`
-	TransactionHash  string `json:"transactionHash,omitempty"`
-	TransactionIndex int    `json:"transactionIndex,omitempty"`
-	BlockHash        string `json:"blockHash,omitempty"`
-	LogIndex         int    `json:"logIndex,omitempty"`
-	Removed          bool   `json:"removed,omitempty"`
 }
 
+// TronInternalTransaction describes internal tx (TRX, TRC10, TRC20, ...)
 type TronInternalTransaction struct {
 	Hash              string              `json:"hash"`
 	CallerAddress     string              `json:"caller_address"`
@@ -220,9 +209,10 @@ type TronInternalTransaction struct {
 	Extra             string              `json:"extra"`
 }
 
+// TronCallValueInfo contains the value transferred in internal tx
 type TronCallValueInfo struct {
 	CallValue int64  `json:"callValue"`
-	TokenName string `json:"tokenName,omitempty"`
+	TokenName string `json:"tokenName,omitempty"` // if TRC10 then this is asset name
 }
 
 func (t *TronClient) GetTransactionInfoByID(ctx context.Context, txID string) (*TronTransactionInfo, error) {
