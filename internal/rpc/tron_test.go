@@ -40,14 +40,31 @@ func TestTronGetBlockByNumber(t *testing.T) {
 
 func TestTronGetTransactionByHash(t *testing.T) {
 	fm := NewFailoverManager(nil)
-	fm.AddTronProvider("test", "https://tron-rpc.publicnode.com", nil, nil)
+	fm.AddTronProvider("test", "https://api.trongrid.io", nil, nil)
 
 	err := fm.ExecuteTronCall(context.Background(), func(client *TronClient) error {
-		tx, err := client.GetTransactionByID(context.Background(), "851282965e98efe44db2a35aee6e1a038e929c08da2793d1276faf5a7a42db66")
+		tx, err := client.GetTransactionInfoByID(context.Background(), "50e6dd05c37b8666cf4a689fe6c0d52053b76b53d8649b256e6b9dca8c9df098")
 		if err != nil {
 			return err
 		}
 		t.Logf("tx: %+v", tx)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTronCall failed: %v", err)
+	}
+}
+
+func TestTronGetTransactionInfoByBlockNum(t *testing.T) {
+	fm := NewFailoverManager(nil)
+	fm.AddTronProvider("test", "https://api.trongrid.io", nil, nil)
+
+	err := fm.ExecuteTronCall(context.Background(), func(client *TronClient) error {
+		txs, err := client.GetTransactionInfoByBlockNum(context.Background(), 49469984)
+		if err != nil {
+			return err
+		}
+		t.Logf("txs: %+v", txs)
 		return nil
 	})
 	if err != nil {
