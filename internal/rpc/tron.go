@@ -162,21 +162,21 @@ func (t *TronClient) GetBlockByNumber(ctx context.Context, blockNumber string, d
 
 // TronTransactionInfo là model đầy đủ cho gettransactioninfobyblocknum response
 type TronTransactionInfo struct {
-	ID                     string                    `json:"id"`
-	Fee                    int64                     `json:"fee"`
-	BlockNumber            int64                     `json:"blockNumber"`
-	BlockTimestamp         int64                     `json:"blockTimeStamp"`
-	ContractResult         []string                  `json:"contractResult"`
-	ContractAddress        string                    `json:"contract_address"`
-	Receipt                TronResourceReceipt       `json:"receipt"`
-	Log                    []TronLog                 `json:"log"`
-	Result                 string                    `json:"result,omitempty"`      // "FAILED" if fail, if success usually no this field
-	ResMessage             string                    `json:"resMessage,omitempty"`  // hex string -> can decode to plaintext
-	WithdrawAmount         int64                     `json:"withdraw_amount"`       // sun
-	UnfreezeAmount         int64                     `json:"unfreeze_amount"`       // sun
-	InternalTransactions   []TronInternalTransaction `json:"internal_transactions"` // list internal tx
-	WithdrawExpireAmount   int64                     `json:"withdraw_expire_amount"`
-	CancelUnfreezeV2Amount map[string]int64          `json:"cancel_unfreezeV2_amount"` // key: BANDWIDTH / ENERGY / TRON_POWER
+	ID                   string                    `json:"id"`
+	Fee                  int64                     `json:"fee"`
+	BlockNumber          int64                     `json:"blockNumber"`
+	BlockTimestamp       int64                     `json:"blockTimeStamp"`
+	ContractResult       []string                  `json:"contractResult"`
+	ContractAddress      string                    `json:"contract_address"`
+	Receipt              TronResourceReceipt       `json:"receipt"`
+	Log                  []TronLog                 `json:"log"`
+	Result               string                    `json:"result,omitempty"`      // "FAILED" if fail, if success usually no this field
+	ResMessage           string                    `json:"resMessage,omitempty"`  // hex string -> can decode to plaintext
+	WithdrawAmount       int64                     `json:"withdraw_amount"`       // sun
+	UnfreezeAmount       int64                     `json:"unfreeze_amount"`       // sun
+	InternalTransactions []TronInternalTransaction `json:"internal_transactions"` // list internal tx
+	WithdrawExpireAmount int64                     `json:"withdraw_expire_amount"`
+	// CancelUnfreezeV2Amount map[string]int64          `json:"cancel_unfreezeV2_amount"` // key: BANDWIDTH / ENERGY / TRON_POWER
 }
 
 // TronResourceReceipt contains resource usage and fee info

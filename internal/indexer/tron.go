@@ -6,20 +6,25 @@ import (
 	"idx/internal/common/ratelimiter"
 	"idx/internal/core"
 	"idx/internal/rpc"
+	"math/big"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shopspring/decimal"
 )
 
 // keccak256("Transfer(address,address,uint256)")
-const ERC_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+const ERC_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 type TronIndexer struct {
 	chainName   string
 	config      core.ChainConfig
 	failover    *rpc.FailoverManager
 	rateLimiter *ratelimiter.PooledRateLimiter
+
+	// Caches for frequently accessed data
+	addrCache sync.Map // cache for address conversions
 }
 
 func NewTronIndexer(config core.ChainConfig) (*TronIndexer, error) {
@@ -37,7 +42,7 @@ func NewTronIndexer(config core.ChainConfig) (*TronIndexer, error) {
 	for i, nodeURL := range config.Nodes {
 		name := fmt.Sprintf("%s-%d", config.Name, i)
 		if err := fm.AddTronProvider(name, nodeURL.URL, nil, rl); err != nil {
-			return nil, fmt.Errorf("add provider: %w", err)
+			return nil, fmt.Errorf("add provider %q: %w", name, err)
 		}
 	}
 
@@ -62,59 +67,123 @@ func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) 
 }
 
 func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*core.Block, error) {
-	// Fetch block metadata
-	var tronBlock *rpc.TronBlock
-	if err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
-		b, err := c.GetBlockByNumber(ctx, fmt.Sprintf("%d", blockNumber), true)
-		if err != nil {
-			return err
-		}
-		tronBlock = b
-		return nil
-	}); err != nil {
-		return nil, err
+	// Fetch block and transaction info concurrently
+	type blockData struct {
+		block *rpc.TronBlock
+		txns  []*rpc.TronTransactionInfo
+		err   error
 	}
 
-	// Fetch transaction infos for the block (contains logs and fee info)
-	var txns []*rpc.TronTransactionInfo
-	if err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
-		var err error
-		txns, err = c.GetTransactionInfoByBlockNum(ctx, int64(blockNumber))
-		return err
-	}); err != nil {
-		return nil, err
+	blockCh := make(chan blockData, 1)
+
+	go func() {
+		var tronBlock *rpc.TronBlock
+		var txns []*rpc.TronTransactionInfo
+		var blockErr, txnErr error
+
+		// Fetch block metadata and transaction infos concurrently
+		var wg sync.WaitGroup
+		wg.Add(2)
+
+		go func() {
+			defer wg.Done()
+			blockErr = t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
+				b, err := c.GetBlockByNumber(ctx, fmt.Sprintf("%d", blockNumber), true)
+				if err != nil {
+					return err
+				}
+				tronBlock = b
+				return nil
+			})
+		}()
+
+		go func() {
+			defer wg.Done()
+			txnErr = t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
+				var err error
+				txns, err = c.GetTransactionInfoByBlockNum(ctx, int64(blockNumber))
+				return err
+			})
+		}()
+
+		wg.Wait()
+
+		// Return first error encountered
+		if blockErr != nil {
+			blockCh <- blockData{err: blockErr}
+			return
+		}
+		if txnErr != nil {
+			blockCh <- blockData{err: txnErr}
+			return
+		}
+
+		blockCh <- blockData{block: tronBlock, txns: txns}
+	}()
+
+	select {
+	case data := <-blockCh:
+		if data.err != nil {
+			return nil, data.err
+		}
+		return t.processBlock(data.block, data.txns)
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
+}
+
+func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTransactionInfo) (*core.Block, error) {
+	// Pre-allocate slices with estimated capacity
+	estimatedTxCount := len(txns) * 2 // rough estimate
+	transactions := make([]core.Transaction, 0, estimatedTxCount)
+
+	// Index tx info by txID for O(1) lookup
+	infoByID := make(map[string]*rpc.TronTransactionInfo, len(txns))
+	for _, ti := range txns {
+		if ti != nil && ti.ID != "" {
+			infoByID[ti.ID] = ti
+		}
+	}
+
 	block := &core.Block{
 		Number:       uint64(tronBlock.BlockHeader.RawData.Number),
 		Hash:         tronBlock.BlockID,
 		ParentHash:   tronBlock.BlockHeader.RawData.ParentHash,
 		Timestamp:    uint64(tronBlock.BlockHeader.RawData.Timestamp),
-		Transactions: []core.Transaction{},
+		Transactions: transactions,
 	}
 
+	// Process transaction info logs and internal transactions
+	feeAssigned := make(map[string]bool, len(txns))
+
 	for _, tx := range txns {
-		fee := decimal.NewFromInt(tx.Fee)
-		assignedFee := false // only assign fee to the first entry of this tx
-
-		// TRC20/721 logs
-		if len(tx.Log) > 0 {
-			transfers := t.parseTRC20Logs(tx)
-
-			for i := range transfers {
-				if !assignedFee {
-					transfers[i].TxFee = fee
-					assignedFee = true
-				}
-			}
-			block.Transactions = append(block.Transactions, transfers...)
+		if tx == nil {
+			continue
 		}
 
-		// Internal: TRX & TRC10
-		for _, itx := range tx.InternalTransactions {
-			from := rpc.TronToHexAddress(itx.CallerAddress)
-			to := rpc.TronToHexAddress(itx.TransferToAddress)
+		fee := decimal.NewFromInt(tx.Fee)
 
-			for _, v := range itx.CallValueInfo {
+		// Process TRC20/721 logs
+		if len(tx.Log) > 0 {
+			transfers := t.parseTRC20Logs(tx)
+			if len(transfers) > 0 {
+				// Assign fee to first transfer of this transaction
+				transfers[0].TxFee = fee
+				feeAssigned[tx.ID] = true
+				block.Transactions = append(block.Transactions, transfers...)
+			}
+		}
+
+		// Process internal transactions (TRX & TRC10)
+		for _, itx := range tx.InternalTransactions {
+			if len(itx.CallValueInfo) == 0 {
+				continue
+			}
+
+			from := t.tronToHexAddressCached(itx.CallerAddress)
+			to := t.tronToHexAddressCached(itx.TransferToAddress)
+
+			for i, v := range itx.CallValueInfo {
 				amount := decimal.NewFromInt(v.CallValue)
 
 				tr := core.Transaction{
@@ -128,42 +197,132 @@ func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*core.B
 				}
 
 				if strings.TrimSpace(v.TokenName) == "" {
-					// Native TRX (internal)
 					tr.Type = "transfer"
 					tr.AssetAddress = ""
 				} else {
-					// TRC10 asset (InternalTransaction.TokenName)
 					tr.Type = "trc10_transfer"
 					tr.AssetAddress = v.TokenName
 				}
 
-				if !assignedFee {
+				// Assign fee only to first transaction of this txID
+				if i == 0 && !feeAssigned[tx.ID] {
 					tr.TxFee = fee
-					assignedFee = true
+					feeAssigned[tx.ID] = true
 				}
-				fmt.Println("tr", tr)
+
 				block.Transactions = append(block.Transactions, tr)
 			}
+		}
+	}
+
+	// Process top-level transactions
+	for _, rawTx := range tronBlock.Transactions {
+		// Get transaction info or use defaults
+		ts := uint64(tronBlock.BlockHeader.RawData.Timestamp)
+		blkNum := uint64(tronBlock.BlockHeader.RawData.Number)
+		fee := decimal.Zero
+
+		if ti := infoByID[rawTx.TxID]; ti != nil {
+			ts = uint64(ti.BlockTimestamp)
+			blkNum = uint64(ti.BlockNumber)
+			fee = decimal.NewFromInt(ti.Fee)
+		}
+
+		for _, contract := range rawTx.RawData.Contract {
+			var tr *core.Transaction
+			var err error
+
+			switch contract.Type {
+			case "TransferContract":
+				tr, err = t.processTransferContract(&contract.Parameter, rawTx.TxID, blkNum, ts)
+			case "TransferAssetContract":
+				tr, err = t.processTransferAssetContract(&contract.Parameter, rawTx.TxID, blkNum, ts)
+			default:
+				continue
+			}
+
+			if err != nil {
+				continue // Skip malformed contracts
+			}
+
+			// Assign fee only if not already assigned to this transaction
+			if !feeAssigned[rawTx.TxID] {
+				tr.TxFee = fee
+				feeAssigned[rawTx.TxID] = true
+			}
+
+			block.Transactions = append(block.Transactions, *tr)
 		}
 	}
 
 	return block, nil
 }
 
-// parseTRC20Logs converts Tron logs that represent ERC-20-compatible Transfer events into core.Transaction entries
+func (t *TronIndexer) processTransferContract(param *rpc.TronContractParameter, txID string, blockNum, timestamp uint64) (*core.Transaction, error) {
+	transfer, err := param.ParseTransferContract()
+	if err != nil {
+		return nil, err
+	}
+
+	return &core.Transaction{
+		TxHash:       txID,
+		NetworkId:    t.chainName,
+		BlockNumber:  blockNum,
+		FromAddress:  t.tronToHexAddressCached(transfer.OwnerAddress),
+		ToAddress:    t.tronToHexAddressCached(transfer.ToAddress),
+		AssetAddress: "",
+		Amount:       decimal.NewFromInt(transfer.Amount).String(),
+		Type:         "transfer",
+		Timestamp:    timestamp,
+	}, nil
+}
+
+func (t *TronIndexer) processTransferAssetContract(param *rpc.TronContractParameter, txID string, blockNum, timestamp uint64) (*core.Transaction, error) {
+	asset, err := param.ParseTransferAssetContract()
+	if err != nil {
+		return nil, err
+	}
+
+	return &core.Transaction{
+		TxHash:       txID,
+		NetworkId:    t.chainName,
+		BlockNumber:  blockNum,
+		FromAddress:  t.tronToHexAddressCached(asset.OwnerAddress),
+		ToAddress:    t.tronToHexAddressCached(asset.ToAddress),
+		AssetAddress: asset.AssetName,
+		Amount:       decimal.NewFromInt(asset.Amount).String(),
+		Type:         "trc10_transfer",
+		Timestamp:    timestamp,
+	}, nil
+}
+
+// tronToHexAddressCached caches address conversions to avoid repeated computation
+func (t *TronIndexer) tronToHexAddressCached(tronAddr string) string {
+	if cached, ok := t.addrCache.Load(tronAddr); ok {
+		return cached.(string)
+	}
+
+	hexAddr := rpc.TronToHexAddress(tronAddr)
+	t.addrCache.Store(tronAddr, hexAddr)
+	return hexAddr
+}
+
+// parseTRC20Logs converts Tron logs that represent ERC-20-compatible Transfer events
 func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transaction {
-	var transfers []core.Transaction
+	if len(tx.Log) == 0 {
+		return nil
+	}
+
+	transfers := make([]core.Transaction, 0, len(tx.Log))
 
 	for _, log := range tx.Log {
-		// should have at least 3 topics: 0=event, 1=from, 2=to
 		if len(log.Topics) < 3 {
 			continue
 		}
 
-		topic0 := strings.ToLower(strings.TrimSpace(log.Topics[0]))
-		// Normalize to compare without 0x prefix differences
-		topic0 = strings.TrimPrefix(topic0, "0x")
-		if topic0 != strings.TrimPrefix(ERC_TRANSFER_TOPIC, "0x") {
+		// Normalize topic for comparison (remove 0x prefix)
+		topic0 := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(log.Topics[0])), "0x")
+		if topic0 != ERC_TRANSFER_TOPIC {
 			continue
 		}
 
@@ -173,13 +332,10 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transac
 			continue
 		}
 
-		amountBI, err := parseHexBigInt(log.Data)
-		if err != nil {
+		amount, ok := parseHexToBigInt(log.Data)
+		if !ok {
 			continue
 		}
-
-		// log.Address in Tron doesn't have 0x41 prefix; TronToHexAddress already handled it
-		assetHex := rpc.TronToHexAddress(log.Address)
 
 		transfers = append(transfers, core.Transaction{
 			TxHash:       tx.ID,
@@ -187,33 +343,76 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transac
 			BlockNumber:  uint64(tx.BlockNumber),
 			FromAddress:  from,
 			ToAddress:    to,
-			AssetAddress: assetHex,
-			Amount:       amountBI.String(),
+			AssetAddress: t.tronToHexAddressCached(log.Address),
+			Amount:       amount.String(),
 			Type:         "erc20_transfer",
-			TxFee:        decimal.Zero,
+			TxFee:        decimal.Zero, // Fee assigned later
 			Timestamp:    uint64(tx.BlockTimestamp),
 		})
 	}
+
 	return transfers
 }
 
 func (t *TronIndexer) GetBlocks(ctx context.Context, start, end uint64) ([]BlockResult, error) {
 	if start > end {
-		return nil, fmt.Errorf("start block number is greater than end block number")
+		return nil, fmt.Errorf("start block (%d) > end block (%d)", start, end)
 	}
 
-	blocks := make([]BlockResult, 0)
-	for i := start; i <= end; i++ {
-		block, err := t.GetBlock(ctx, i)
-		if err != nil {
-			return nil, fmt.Errorf("get block: %w", err)
-		}
-		blocks = append(blocks, BlockResult{
-			Number: i,
-			Block:  block,
-			Error:  nil,
-		})
+	count := end - start + 1
+	blocks := make([]BlockResult, count)
+
+	// Use worker pool for concurrent processing
+	const maxWorkers = 10
+	workers := int(count)
+	if workers > maxWorkers {
+		workers = maxWorkers
 	}
+
+	type job struct {
+		blockNum uint64
+		index    int
+	}
+
+	jobs := make(chan job, count)
+	var wg sync.WaitGroup
+
+	// Start workers
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				block, _ := t.GetBlock(ctx, job.blockNum)
+				blocks[job.index] = BlockResult{
+					Number: job.blockNum,
+					Block:  block,
+					Error:  nil,
+				}
+			}
+		}()
+	}
+
+	// Send jobs
+	go func() {
+		defer close(jobs)
+		for i := uint64(0); i < count; i++ {
+			blockNum := start + i
+			select {
+			case jobs <- job{blockNum: blockNum, index: int(i)}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	return blocks, nil
 }
 
@@ -224,16 +423,37 @@ func (t *TronIndexer) IsHealthy() bool {
 	return err == nil
 }
 
-// extractAddressFromTopic get last 20 bytes of topic (32 bytes) -> "0x" + 40 hex chars
+// extractAddressFromTopic extracts address from 32-byte topic (last 20 bytes)
 func extractAddressFromTopic(topic string) (string, bool) {
-	s := strings.TrimSpace(topic)
-	s = strings.TrimPrefix(strings.ToLower(s), "0x")
-	if len(s) < 40 {
+	topic = strings.TrimSpace(topic)
+	topic = strings.TrimPrefix(strings.ToLower(topic), "0x")
+
+	if len(topic) < 40 {
 		return "", false
 	}
-	if len(s) >= 64 {
-		return "0x" + s[len(s)-40:], true
+
+	// Extract last 40 hex chars (20 bytes) for address
+	if len(topic) >= 64 {
+		return "0x" + topic[len(topic)-40:], true
 	}
-	// sometimes node returns already 20-byte (rare), fallback
-	return "0x" + s, true
+
+	// Fallback for already 20-byte format
+	return "0x" + topic, true
+}
+
+// parseHexToBigInt parses hex string to big.Int more efficiently
+func parseHexToBigInt(hexStr string) (*big.Int, bool) {
+	hexStr = strings.TrimSpace(hexStr)
+	hexStr = strings.TrimPrefix(hexStr, "0x")
+
+	if hexStr == "" {
+		return big.NewInt(0), true
+	}
+
+	amount := new(big.Int)
+	if _, ok := amount.SetString(hexStr, 16); !ok {
+		return nil, false
+	}
+
+	return amount, true
 }
