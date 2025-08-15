@@ -34,5 +34,6 @@ type Indexer interface {
 
 	// batch version: each block can have its own error
 	GetBlocks(ctx context.Context, from, to uint64) ([]BlockResult, error)
+	GetBlocksByNumbers(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error)
 	IsHealthy() bool
 }

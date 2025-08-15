@@ -17,18 +17,23 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
-// --- CLI definitions --- //
-
 type CLI struct {
 	Index       IndexCmd       `cmd:"" help:"Run the indexer."`
+	IndexFailed IndexFailedCmd `cmd:"" name:"index-failed" help:"Process failed blocks."`
 	NATSPrinter NATSPrinterCmd `cmd:"" name:"nats-printer" help:"Print NATS messages."`
 }
 
 type IndexCmd struct {
 	Chain      string `help:"Chain to index." required:"" name:"chain"`
 	ConfigPath string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
-	FromLatest bool   `help:"Start from latest block." name:"latest"`
 	Debug      bool   `help:"Enable debug logs." name:"debug"`
+}
+
+type IndexFailedCmd struct {
+	Chain      string `help:"Chain to index." required:"" name:"chain"`
+	ConfigPath string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
+	Debug      bool   `help:"Enable debug logs." name:"debug"`
+	Continuous bool   `help:"Run continuously instead of one-shot." name:"continuous"`
 }
 
 type NATSPrinterCmd struct {
@@ -37,10 +42,13 @@ type NATSPrinterCmd struct {
 	LogFile string `help:"Append logs to this file." default:"nats.log" name:"log"`
 }
 
-// Run methods wire subcommands to your existing functions.
-
 func (c *IndexCmd) Run() error {
-	runIndexer(c.Chain, c.ConfigPath, c.FromLatest, c.Debug)
+	runIndexer(c.Chain, c.ConfigPath, c.Debug)
+	return nil
+}
+
+func (c *IndexFailedCmd) Run() error {
+	runIndexFailedBlocks(c.Chain, c.ConfigPath, c.Debug, c.Continuous)
 	return nil
 }
 
@@ -48,8 +56,6 @@ func (c *NATSPrinterCmd) Run() error {
 	runNatsPrinter(c.NATSURL, c.Subject)
 	return nil
 }
-
-// --- Your existing app code --- //
 
 func main() {
 	var cli CLI
@@ -62,7 +68,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func runIndexer(chain, configPath string, fromLatest, debug bool) {
+func runIndexer(chain, configPath string, debug bool) {
 	cfg, err := core.Load(configPath)
 	if err != nil {
 		slog.Error("Load config failed", "err", err)
@@ -94,6 +100,57 @@ func runIndexer(chain, configPath string, fromLatest, debug bool) {
 	waitForShutdown()
 	manager.Stop()
 	slog.Info("Indexer stopped")
+}
+
+func runIndexFailedBlocks(chain, configPath string, debug, continuous bool) {
+	cfg, err := core.Load(configPath)
+	if err != nil {
+		slog.Error("Load config failed", "err", err)
+		os.Exit(1)
+	}
+
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	core.Init(&core.Options{
+		Level:      level,
+		TimeFormat: time.RFC3339,
+	})
+	slog.Info("Config loaded")
+
+	manager, err := indexer.NewManager(&cfg)
+	if err != nil {
+		slog.Error("Create failed blocks indexer manager failed", "err", err)
+		os.Exit(1)
+	}
+
+	// Show current failed blocks status before starting
+	status, err := manager.GetFailedBlocksStatus()
+	if err != nil {
+		slog.Error("Failed to get failed blocks status", "err", err)
+	} else {
+		for chainName, count := range status {
+			slog.Info("Failed blocks status", "chain", chainName, "count", count)
+		}
+	}
+
+	if continuous {
+		if err := manager.StartFailedBlocksContinuous(chain); err != nil {
+			slog.Error("Start failed blocks (continuous) failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("Failed blocks indexer is running continuously... Press Ctrl+C to stop")
+		waitForShutdown()
+		manager.StopFailedBlocks()
+		slog.Info("Failed blocks indexer stopped")
+	} else {
+		if err := manager.StartFailedBlocks(chain); err != nil {
+			slog.Error("Start failed blocks (one-shot) failed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("Failed blocks processing completed (one-shot mode)")
+	}
 }
 
 func runNatsPrinter(natsURL, subject string) {

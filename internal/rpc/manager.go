@@ -349,7 +349,7 @@ func (c *GenericClient) executeRequest(req *http.Request) ([]byte, error) {
 	defer resp.Body.Close()
 
 	elapsed := time.Since(startTime)
-	slog.Debug("HTTP request completed", "elapsed", elapsed)
+	slog.Debug("HTTP request completed", "url", req.URL.String(), "elapsed", elapsed)
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -512,23 +512,19 @@ func (fm *FailoverManager) AddProvider(name, url, network, clientType string, au
 	if fm.currentIndex == -1 {
 		fm.currentIndex = 0
 	}
+	attrs := []any{
+		"name", name,
+		"url", url,
+		"network", network,
+		"client_type", clientType,
+		"total_providers", len(fm.providers),
+	}
 
 	if auth != nil {
-		slog.Info("Added provider",
-			"name", name,
-			"url", url,
-			"network", network,
-			"client_type", clientType,
-			"auth", auth,
-			"total_providers", len(fm.providers))
-	} else {
-		slog.Info("Added provider",
-			"name", name,
-			"url", url,
-			"network", network,
-			"client_type", clientType,
-			"total_providers", len(fm.providers))
+		attrs = append(attrs, "auth", auth.Type)
 	}
+
+	slog.With(attrs...).Info("Added provider")
 
 	return nil
 }

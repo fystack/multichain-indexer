@@ -292,15 +292,26 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transac
 }
 
 func (t *TronIndexer) GetBlocks(ctx context.Context, start, end uint64) ([]BlockResult, error) {
-	if start > end {
-		return nil, fmt.Errorf("start block (%d) > end block (%d)", start, end)
+	blockNumbers := make([]uint64, 0, end-start+1)
+	for i := start; i <= end; i++ {
+		blockNumbers = append(blockNumbers, i)
+	}
+	return t.GetBlocksByNumbers(ctx, blockNumbers)
+}
+
+func (t *TronIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
+	return t.getBlocks(ctx, blockNumbers)
+}
+
+func (t *TronIndexer) getBlocks(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
+	if len(blockNumbers) == 0 {
+		return nil, nil
 	}
 
-	count := end - start + 1
-	blocks := make([]BlockResult, count)
+	blocks := make([]BlockResult, len(blockNumbers))
 
 	const maxWorkers = 10
-	workers := int(count)
+	workers := len(blockNumbers)
 	if workers > maxWorkers {
 		workers = maxWorkers
 	}
@@ -345,30 +356,31 @@ func (t *TronIndexer) GetBlocks(ctx context.Context, start, end uint64) ([]Block
 	// producer
 	go func() {
 		defer close(jobs)
-		for i := uint64(0); i < count; i++ {
+		for i, num := range blockNumbers {
 			select {
 			case <-ctx.Done():
 				return
-			case jobs <- job{blockNum: start + i, index: int(i)}:
+			case jobs <- job{blockNum: num, index: i}:
 			}
 		}
 	}()
 
 	wg.Wait()
 
-	// short-circuit on ctx
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 
-	// Check for any errors
+	// if want to fail when there is an error
+	var firstErr error
 	for _, block := range blocks {
 		if block.Error != nil {
-			return blocks, fmt.Errorf("block %d: %s", block.Number, block.Error.Message)
+			firstErr = fmt.Errorf("block %d: %s", block.Number, block.Error.Message)
+			break
 		}
 	}
 
-	return blocks, nil
+	return blocks, firstErr
 }
 
 func (t *TronIndexer) IsHealthy() bool {

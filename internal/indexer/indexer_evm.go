@@ -107,14 +107,26 @@ func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockRes
 		return nil, fmt.Errorf("invalid range")
 	}
 
-	var results []BlockResult
-	var blocks map[uint64]*rpc.EthBlock
-
 	// Prepare block numbers
 	blockNums := make([]uint64, 0, to-from+1)
 	for n := from; n <= to; n++ {
 		blockNums = append(blockNums, n)
 	}
+
+	return e.getBlocks(ctx, blockNums)
+}
+
+func (e *EVMIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
+	return e.getBlocks(ctx, blockNumbers)
+}
+
+func (e *EVMIndexer) getBlocks(ctx context.Context, blockNums []uint64) ([]BlockResult, error) {
+	if len(blockNums) == 0 {
+		return nil, nil
+	}
+
+	var results []BlockResult
+	var blocks map[uint64]*rpc.EthBlock
 
 	// Try batch fetch
 	if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
@@ -122,7 +134,8 @@ func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockRes
 		blocks, err = c.BatchGetBlocksByNumber(ctx, blockNums, true)
 		return err
 	}); err != nil {
-		if ferr := e.fallbackIndividual(ctx, from, to, &results); ferr != nil {
+		// fallback to individual if batch fails
+		if ferr := e.fallbackIndividual(ctx, blockNums, &results); ferr != nil {
 			return nil, ferr
 		}
 		return results, nil
@@ -146,7 +159,7 @@ func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockRes
 	// Batch get all receipts
 	allReceipts := make(map[string]*rpc.EthTransactionReceipt)
 	if len(allTxHashes) > 0 {
-		chunkSize := 50
+		const chunkSize = 50
 		for i := 0; i < len(allTxHashes); i += chunkSize {
 			end := min(i+chunkSize, len(allTxHashes))
 			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
@@ -158,9 +171,9 @@ func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockRes
 		}
 	}
 
-	// Process blocks
-	results = make([]BlockResult, 0, int(to-from+1))
-	for n := from; n <= to; n++ {
+	// Process results in the order of blockNums
+	results = make([]BlockResult, 0, len(blockNums))
+	for _, n := range blockNums {
 		block := blocks[n]
 		if block == nil {
 			results = append(results, BlockResult{
@@ -192,9 +205,10 @@ func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockRes
 	return results, nil
 }
 
-func (e *EVMIndexer) fallbackIndividual(ctx context.Context, from, to uint64, results *[]BlockResult) error {
-	*results = make([]BlockResult, 0, int(to-from+1))
-	for n := from; n <= to; n++ {
+func (e *EVMIndexer) fallbackIndividual(ctx context.Context, blockNums []uint64, results *[]BlockResult) error {
+	*results = make([]BlockResult, 0, len(blockNums))
+
+	for _, n := range blockNums {
 		hexNum := fmt.Sprintf("0x%x", n)
 		var b *rpc.EthBlock
 		if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
