@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"log/slog"
 
-	"idx/internal/core"
-	"idx/internal/events"
-	"idx/internal/kvstore"
-	"idx/internal/rpc"
+	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/kvstore"
+	"github.com/fystack/transaction-indexer/internal/rpc"
 )
 
 type Manager struct {

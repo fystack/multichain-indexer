@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"idx/internal/core"
-	"idx/internal/indexer"
+	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/internal/indexer"
 
 	"github.com/alecthomas/kong"
 	"github.com/nats-io/nats.go"

@@ -1,4 +1,4 @@
-module idx
+module github.com/fystack/transaction-indexer
 
 go 1.24.5
 

@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"idx/internal/common/ratelimiter"
-	"idx/internal/core"
-	"idx/internal/rpc"
 	"math/big"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/internal/rpc"
 
 	"github.com/shopspring/decimal"
 )

@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"idx/internal/common/ratelimiter"
 	"time"
+
+	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 )
 
 // Bitcoin specific types and methods

@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"idx/internal/core"
+	"github.com/fystack/transaction-indexer/internal/core"
 
 	"github.com/nats-io/nats.go"
 )

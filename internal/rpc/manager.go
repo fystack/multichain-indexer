@@ -5,9 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"idx/internal/common/ratelimiter"
-	"idx/internal/common/retry"
-	"idx/internal/core"
 	"io"
 	"log/slog"
 	"maps"
@@ -15,6 +12,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/internal/common/retry"
+	"github.com/fystack/transaction-indexer/internal/core"
 )
 
 // Provider states

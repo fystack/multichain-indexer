@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"idx/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 )
 
 // Solana specific types and methods

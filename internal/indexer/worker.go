@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"time"
 
-	"idx/internal/core"
-	"idx/internal/events"
-	"idx/internal/kvstore"
+	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/kvstore"
 )
 
 type FailedBlock struct {

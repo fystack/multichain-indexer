@@ -3,7 +3,7 @@ package indexer
 import (
 	"context"
 
-	"idx/internal/core"
+	"github.com/fystack/transaction-indexer/internal/core"
 )
 
 type ErrorType string

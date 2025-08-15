@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"idx/internal/common/ratelimiter"
-	"idx/internal/core"
-	"idx/internal/rpc"
+	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/internal/rpc"
 
 	"github.com/shopspring/decimal"
 )

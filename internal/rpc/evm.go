@@ -4,11 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"idx/internal/common/ratelimiter"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 )
 
 type EthereumClient struct {
