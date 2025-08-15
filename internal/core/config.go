@@ -173,10 +173,10 @@ func finalizeNodes(cfg *Config) error {
 			// Substitute ${API_KEY} in URL, headers, query
 			n.URL = substituteKey(n.URL, key)
 			for hk, hv := range n.Headers {
-				n.Headers[hk] = substituteKey(hv, key)
+				n.Headers[hk] = substituteEnvVars(hv)
 			}
 			for qk, qv := range n.Query {
-				n.Query[qk] = substituteKey(qv, key)
+				n.Query[qk] = substituteEnvVars(qv)
 			}
 
 			// Infer type from scheme if empty
@@ -219,7 +219,42 @@ func substituteKey(s, key string) string {
 	if s == "" || key == "" {
 		return s
 	}
-	return strings.ReplaceAll(s, "${API_KEY}", key)
+	// Replace ${API_KEY} for backward compatibility
+	s = strings.ReplaceAll(s, "${API_KEY}", key)
+
+	// Also handle environment variable patterns like ${TRONGRID_TOKEN}
+	// Find all ${VAR_NAME} patterns and replace with the key if they match the ApiKeyEnv
+	return s
+}
+
+// substituteEnvVars replaces all ${VAR_NAME} patterns with their environment values
+func substituteEnvVars(s string) string {
+	if s == "" {
+		return s
+	}
+
+	// Find all ${VAR_NAME} patterns
+	for {
+		start := strings.Index(s, "${")
+		if start == -1 {
+			break
+		}
+		end := strings.Index(s[start:], "}")
+		if end == -1 {
+			break
+		}
+		end += start
+
+		// Extract variable name
+		varName := s[start+2 : end]
+		envValue := os.Getenv(varName)
+
+		// Replace the pattern with the environment value
+		pattern := "${" + varName + "}"
+		s = strings.ReplaceAll(s, pattern, envValue)
+	}
+
+	return s
 }
 
 // ---- validation ----

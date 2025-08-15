@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"idx/internal/common/ratelimiter"
 	"idx/internal/common/retry"
+	"idx/internal/core"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync"
@@ -510,12 +512,22 @@ func (fm *FailoverManager) AddProvider(name, url, network, clientType string, au
 		fm.currentIndex = 0
 	}
 
-	slog.Info("Added provider",
-		"name", name,
-		"url", url,
-		"network", network,
-		"client_type", clientType,
-		"total_providers", len(fm.providers))
+	if auth != nil {
+		slog.Info("Added provider",
+			"name", name,
+			"url", url,
+			"network", network,
+			"client_type", clientType,
+			"auth", auth,
+			"total_providers", len(fm.providers))
+	} else {
+		slog.Info("Added provider",
+			"name", name,
+			"url", url,
+			"network", network,
+			"client_type", clientType,
+			"total_providers", len(fm.providers))
+	}
 
 	return nil
 }
@@ -891,4 +903,39 @@ func (fm *FailoverManager) Cleanup() {
 			provider.Client.Close()
 		}
 	}
+}
+
+// NodeToAuthConfig converts a core.Node to rpc.AuthConfig
+// This should be called after the config has been loaded and processed by core.Load()
+func NodeToAuthConfig(node core.Node) *AuthConfig {
+	auth := &AuthConfig{}
+
+	// Priority 1: If headers are present, use custom auth
+	if len(node.Headers) > 0 {
+		auth.Type = "custom"
+		auth.Headers = make(map[string]string)
+
+		// Copy all headers (API key substitution already done by finalizeNodes)
+		maps.Copy(auth.Headers, node.Headers)
+		return auth
+	}
+
+	// Priority 2: If ApiKey is present, determine auth type from common patterns
+	if node.ApiKey != "" {
+		// Check if it looks like a bearer token or API key
+		if strings.HasPrefix(strings.ToLower(node.ApiKey), "bearer ") {
+			auth.Type = "bearer"
+			auth.Token = strings.TrimPrefix(node.ApiKey, "bearer ")
+			auth.Token = strings.TrimPrefix(auth.Token, "Bearer ")
+		} else {
+			// Default to bearer token for most blockchain APIs
+			auth.Type = "bearer"
+			auth.Token = node.ApiKey
+		}
+
+		return auth
+	}
+
+	// No authentication needed
+	return nil
 }
