@@ -105,6 +105,9 @@ Process new blocks in real-time:
 
 # Debug mode
 ./indexer index --chain=evm --debug
+
+# Processes failed blocks first, then switches to normal processing
+./indexer index --retry-failed
 ```
 
 ### **2. Failed Block Recovery**

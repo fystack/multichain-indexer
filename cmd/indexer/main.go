@@ -24,9 +24,10 @@ type CLI struct {
 }
 
 type IndexCmd struct {
-	Chain      string `help:"Chain to index." required:"" name:"chain"`
-	ConfigPath string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
-	Debug      bool   `help:"Enable debug logs." name:"debug"`
+	Chain       string `help:"Chain to index." required:"" name:"chain"`
+	ConfigPath  string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
+	Debug       bool   `help:"Enable debug logs." name:"debug"`
+	RetryFailed bool   `help:"Retry failed blocks." name:"retry-failed"`
 }
 
 type IndexFailedCmd struct {
@@ -43,7 +44,7 @@ type NATSPrinterCmd struct {
 }
 
 func (c *IndexCmd) Run() error {
-	runIndexer(c.Chain, c.ConfigPath, c.Debug)
+	runIndexer(c.Chain, c.ConfigPath, c.Debug, c.RetryFailed)
 	return nil
 }
 
@@ -68,7 +69,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func runIndexer(chain, configPath string, debug bool) {
+func runIndexer(chain, configPath string, debug, retryFailed bool) {
 	cfg, err := core.Load(configPath)
 	if err != nil {
 		slog.Error("Load config failed", "err", err)
@@ -91,7 +92,7 @@ func runIndexer(chain, configPath string, debug bool) {
 		os.Exit(1)
 	}
 
-	if err := manager.Start(chain); err != nil {
+	if err := manager.Start(retryFailed, chain); err != nil {
 		slog.Error("Start indexer failed", "err", err)
 		os.Exit(1)
 	}

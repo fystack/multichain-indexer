@@ -38,7 +38,7 @@ func NewManager(cfg *core.Config) (*Manager, error) {
 }
 
 // Start starts all networks if chainName is empty, or a specific network if chainName is provided.
-func (m *Manager) Start(chainNameOpt ...string) error {
+func (m *Manager) Start(retryFailed bool, chainNameOpt ...string) error {
 	chainsToStart, err := m.getChainsToStart(chainNameOpt...)
 	if err != nil {
 		return err
@@ -51,7 +51,7 @@ func (m *Manager) Start(chainNameOpt ...string) error {
 		}
 
 		worker := NewWorker(chainIndexer, chainConfig, m.kvstore, m.emitter)
-		worker.Start()
+		worker.Start(retryFailed)
 		m.workers = append(m.workers, worker)
 		slog.Info("Started indexer", "chain", chainName)
 	}

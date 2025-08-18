@@ -51,8 +51,12 @@ func NewFailedBlockWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVS
 	return newWorkerBase(chain, config, kv, emitter)
 }
 
-func (w *Worker) Start() {
-	go w.run(w.processBlocks)
+func (w *Worker) Start(retryFailed bool) {
+	if retryFailed {
+		go w.run(w.processFailedBlocksThenNormal)
+	} else {
+		go w.run(w.processBlocks)
+	}
 }
 
 func (w *Worker) StartFailedBlocks() {
@@ -192,6 +196,37 @@ func (w *Worker) processFailedBlocks() error {
 	}
 
 	return nil
+}
+
+// processFailedBlocksThenNormal processes failed blocks first, then switches to normal processing
+func (w *Worker) processFailedBlocksThenNormal() error {
+	// First, try to process any existing failed blocks
+	failedBlocks, err := w.failedBlockStore.GetFailedBlocks(w.chain.GetName())
+	if err != nil {
+		slog.Error("Failed to get failed blocks for initial retry", "chain", w.chain.GetName(), "error", err)
+		// Continue with normal processing even if we can't get failed blocks
+	} else if len(failedBlocks) > 0 {
+		slog.Info("Processing existing failed blocks before normal indexing", "chain", w.chain.GetName(), "count", len(failedBlocks))
+
+		results, err := w.chain.GetBlocksByNumbers(w.ctx, failedBlocks)
+		if err != nil {
+			slog.Error("Failed to retry failed blocks", "chain", w.chain.GetName(), "error", err)
+		} else {
+			successCount := 0
+			for _, result := range results {
+				if w.handleBlockResult(result, true) {
+					successCount++
+				}
+			}
+			slog.Info("Completed initial failed block retry", "chain", w.chain.GetName(),
+				"resolved", successCount, "total", len(results), "remaining", len(results)-successCount)
+		}
+	} else {
+		slog.Info("No failed blocks found, starting normal processing", "chain", w.chain.GetName())
+	}
+
+	// Now switch to normal block processing
+	return w.processBlocks()
 }
 
 // runOneShot runs a job once and then stops
