@@ -7,6 +7,16 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+type AddressType string
+
+const (
+	AddressTypeEvm    AddressType = "evm"
+	AddressTypeBtc    AddressType = "btc"
+	AddressTypeSolana AddressType = "sol"
+	AddressTypeAptos  AddressType = "aptos"
+	AddressTypeTron   AddressType = "tron"
+)
+
 type Block struct {
 	Number       uint64        `json:"number"`
 	Hash         string        `json:"hash"`

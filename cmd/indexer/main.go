@@ -1,12 +1,9 @@
 package main
 
 import (
-	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -161,21 +158,21 @@ func runNatsPrinter(natsURL, subject string) {
 		TimeFormat: time.RFC3339,
 	})
 	slog.Info("Config loaded")
-	logDir := "logs"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		slog.Error("Create log directory failed", "err", err)
-		os.Exit(1)
-	}
-	path := filepath.Join(logDir, "nats.log")
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		slog.Error("Open log file failed", "err", err)
-		os.Exit(1)
-	}
+	// logDir := "logs"
+	// if err := os.MkdirAll(logDir, 0755); err != nil {
+	// 	slog.Error("Create log directory failed", "err", err)
+	// 	os.Exit(1)
+	// }
+	// path := filepath.Join(logDir, "nats.log")
+	// f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	// if err != nil {
+	// 	slog.Error("Open log file failed", "err", err)
+	// 	os.Exit(1)
+	// }
 
-	defer f.Close()
+	// defer f.Close()
 
-	logWriter := io.MultiWriter(os.Stdout, f)
+	// logWriter := io.MultiWriter(os.Stdout, f)
 
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
@@ -193,7 +190,7 @@ func runNatsPrinter(natsURL, subject string) {
 			return
 		}
 		slog.Info("Received transaction", "txn", txn.String())
-		fmt.Fprintf(logWriter, "%s\n", txn.String())
+		// fmt.Fprintf(logWriter, "%s\n", txn.String())
 	})
 	if err != nil {
 		slog.Error("NATS subscribe failed", "err", err)
