@@ -76,7 +76,7 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 	}
 
 	// start regular worker
-	if err := manager.Start(); err != nil {
+	if err := manager.Start(chain); err != nil {
 		slog.Error("Start regular worker failed", "err", err)
 		os.Exit(1)
 	}
