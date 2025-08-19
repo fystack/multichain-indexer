@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/fystack/transaction-indexer/internal/core"
@@ -14,10 +13,11 @@ import (
 )
 
 type Manager struct {
-	cfg     *core.Config
-	store   kvstore.KVStore
-	emitter *events.Emitter
-	workers []*Worker
+	cfg        *core.Config
+	store      kvstore.KVStore
+	blockStore *BlockStore
+	emitter    *events.Emitter
+	workers    []*Worker
 }
 
 func NewManager(cfg *core.Config) (*Manager, error) {
@@ -30,9 +30,10 @@ func NewManager(cfg *core.Config) (*Manager, error) {
 		return nil, fmt.Errorf("emitter init: %w", err)
 	}
 	return &Manager{
-		cfg:     cfg,
-		store:   store,
-		emitter: emitter,
+		cfg:        cfg,
+		store:      store,
+		blockStore: NewBlockStore(store),
+		emitter:    emitter,
 	}, nil
 }
 
@@ -46,7 +47,7 @@ func (m *Manager) Start(chainName ...string) error {
 
 	for name, chainCfg := range m.cfg.Chains.Items {
 		// If specific chains requested, only start those
-		if len(targetChains) > 0 && !contains(targetChains, name) {
+		if len(targetChains) > 0 && !slices.Contains(targetChains, name) {
 			continue
 		}
 
@@ -54,7 +55,7 @@ func (m *Manager) Start(chainName ...string) error {
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", name, err)
 		}
-		w := NewWorker(idxr, chainCfg, m.store, m.emitter)
+		w := NewWorker(idxr, chainCfg, m.store, m.blockStore, m.emitter)
 		w.Start()
 		m.workers = append(m.workers, w)
 		slog.Info("Started regular worker", "chain", name)
@@ -95,10 +96,8 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 
 	// load start block from KV (default to 1 if not found)
 	var startBlockNum uint64 = 1
-	if startBlock, err := m.store.Get(fmt.Sprintf("latest_block_%s", cfg.Name)); err == nil {
-		if parsed, err := strconv.ParseUint(string(startBlock), 10, 64); err == nil {
-			startBlockNum = parsed + 1 // Start from next block after last processed
-		}
+	if startBlock, err := m.blockStore.GetLatestBlock(cfg.Name); err == nil {
+		startBlockNum = startBlock + 1 // Start from next block after last processed
 	}
 
 	// fetch end block from RPC
@@ -122,7 +121,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 	}
 
 	// start catchup worker
-	w := NewCatchupWorker(idxr, cfg, m.store, m.emitter, startBlockNum, endBlock)
+	w := NewCatchupWorker(idxr, cfg, m.store, m.blockStore, m.emitter, startBlockNum, endBlock)
 	w.Start()
 	m.workers = append(m.workers, w)
 
@@ -142,10 +141,13 @@ func (m *Manager) Stop() {
 	if m.emitter != nil {
 		m.emitter.Close()
 	}
+	if m.blockStore != nil {
+		_ = m.blockStore.Close()
+		m.blockStore = nil
+	}
 	slog.Info("Manager stopped")
 }
 
-// --- helper for chain-specific indexers
 func (m *Manager) createIndexer(name string, cfg core.ChainConfig) (Indexer, error) {
 	switch name {
 	case "evm":
@@ -157,7 +159,6 @@ func (m *Manager) createIndexer(name string, cfg core.ChainConfig) (Indexer, err
 	}
 }
 
-// parseChainNames parses comma-separated chain names and returns a slice
 func parseChainNames(chainNames string) []string {
 	if chainNames == "" {
 		return nil
@@ -172,9 +173,4 @@ func parseChainNames(chainNames string) []string {
 		}
 	}
 	return result
-}
-
-// contains checks if a string slice contains a specific string
-func contains(slice []string, item string) bool {
-	return slices.Contains(slice, item)
 }

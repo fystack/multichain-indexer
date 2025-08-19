@@ -26,6 +26,7 @@ type Worker struct {
 	config       core.ChainConfig
 	chain        Indexer
 	kvstore      kvstore.KVStore
+	blockStore   *BlockStore
 	emitter      *events.Emitter
 	currentBlock uint64
 	ctx          context.Context
@@ -39,13 +40,13 @@ type Worker struct {
 }
 
 // NewWorker creates a worker for regular indexing
-func NewWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, emitter *events.Emitter) *Worker {
-	return newWorkerWithMode(chain, config, kv, emitter, ModeRegular, 0, 0)
+func NewWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter) *Worker {
+	return newWorkerWithMode(chain, config, kv, blockStore, emitter, ModeRegular, 0, 0)
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, emitter *events.Emitter, startBlock, endBlock uint64) *Worker {
-	return newWorkerWithMode(chain, config, kv, emitter, ModeCatchup, startBlock, endBlock)
+func NewCatchupWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, startBlock, endBlock uint64) *Worker {
+	return newWorkerWithMode(chain, config, kv, blockStore, emitter, ModeCatchup, startBlock, endBlock)
 }
 
 // Start the worker
@@ -62,7 +63,7 @@ func (w *Worker) Start() {
 
 func (w *Worker) Stop() {
 	if w.currentBlock > 0 {
-		w.saveLatestBlockNumber(w.currentBlock - 1)
+		_ = w.blockStore.SaveLatestBlock(w.chain.GetName(), w.currentBlock-1)
 	}
 	w.cancel()
 	if w.logFile != nil {
@@ -76,6 +77,10 @@ func (w *Worker) Stop() {
 	if w.emitter != nil {
 		w.emitter.Close()
 		w.emitter = nil
+	}
+	if w.blockStore != nil {
+		_ = w.blockStore.Close()
+		w.blockStore = nil
 	}
 }
 
@@ -92,7 +97,7 @@ func (w *Worker) run(job func() error) {
 		select {
 		case <-w.ctx.Done():
 			if w.currentBlock > 0 {
-				w.saveLatestBlockNumber(w.currentBlock - 1)
+				_ = w.blockStore.SaveLatestBlock(w.chain.GetName(), w.currentBlock-1)
 			}
 			slog.Info("Worker stopped", "chain", w.chain.GetName())
 			return
@@ -150,7 +155,7 @@ func (w *Worker) processRegularBlocks() error {
 
 	if lastSuccess >= w.currentBlock {
 		w.currentBlock = lastSuccess + 1
-		w.saveLatestBlockNumber(lastSuccess)
+		_ = w.blockStore.SaveLatestBlock(w.chain.GetName(), lastSuccess)
 	}
 	return nil
 }
@@ -190,20 +195,6 @@ func (w *Worker) emitBlock(block *core.Block) {
 	}
 }
 
-func (w *Worker) getLatestBlockNumber() (uint64, error) {
-	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
-	latestBlock, err := w.kvstore.Get(key)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.ParseUint(string(latestBlock), 10, 64)
-}
-
-func (w *Worker) saveLatestBlockNumber(blockNumber uint64) {
-	key := fmt.Sprintf("latest_block_%s", w.chain.GetName())
-	_ = w.kvstore.Set(key, []byte(strconv.FormatUint(blockNumber, 10)))
-}
-
 func (w *Worker) saveCatchupProgress() {
 	if w.mode != ModeCatchup {
 		return
@@ -226,7 +217,7 @@ func (w *Worker) loadCatchupProgress() uint64 {
 	return w.catchupStart
 }
 
-func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, emitter *events.Emitter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
+func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 	logFile, date, _ := createLogFile()
 
@@ -234,6 +225,7 @@ func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStor
 		chain:        chain,
 		config:       config,
 		kvstore:      kv,
+		blockStore:   blockStore,
 		emitter:      emitter,
 		ctx:          ctx,
 		cancel:       cancel,
@@ -254,7 +246,7 @@ func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStor
 }
 
 func (w *Worker) determineStartingBlock() uint64 {
-	latestBlock, err := w.getLatestBlockNumber()
+	latestBlock, err := w.blockStore.GetLatestBlock(w.chain.GetName())
 	if err != nil || latestBlock == 0 {
 		latestBlock = uint64(w.config.StartBlock)
 	}

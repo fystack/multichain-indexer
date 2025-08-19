@@ -13,16 +13,24 @@ A high-performance, production-ready blockchain transaction indexer supporting m
 ### **Production-Ready Architecture**
 - 🔄 **Batch Processing** - Efficient multi-block fetching
 - 🛡️ **Failure Recovery** - Persistent failed block tracking & retry
-- ⚡ **Rate Limiting** - Intelligent RPC throttling
-- 🔄 **Failover Support** - Multiple RPC endpoints per chain
+- ⚡ **Rate Limiting** - Intelligent RPC throttling per provider
+- 🔄 **Failover Support** - Multiple RPC endpoints with automatic switching
 - 📊 **Real-time Streaming** - NATS-based event publishing
-- 💾 **Persistent Storage** - BadgerDB for state management
+- 💾 **Persistent Storage** - BadgerDB with optimized block storage
+- 🚀 **Concurrent Processing** - Multiple chains processed simultaneously
+- 🔍 **Auto-Catchup** - Intelligent gap detection and historical processing
 
 ### **Advanced Monitoring**
 - 📈 **Comprehensive Logging** - Structured logging with slog
 - 🔍 **Failed Block Management** - Dedicated recovery system
 - 📊 **Performance Metrics** - Built-in status reporting
 - 🔧 **Debug Mode** - Detailed operation tracing
+
+### **Simplified CLI**
+- 🎯 **Single Command** - Unified `index` command for all operations
+- 🔗 **Multi-Chain Support** - Comma-separated chain names (`--chain=evm,tron`)
+- 🚀 **Auto-Catchup** - Optional `--catchup` flag for gap filling
+- 🐛 **Debug Mode** - `--debug` flag for verbose logging
 
 ## 📦 Installation
 
@@ -97,39 +105,25 @@ storage:
 Process new blocks in real-time:
 
 ```bash
-# Index Ethereum mainnet
+# Index single chain
 ./indexer index --chain=evm
-
-# Index TRON mainnet  
 ./indexer index --chain=tron
 
-# Debug mode
+# Index multiple chains simultaneously
+./indexer index --chain=evm,tron
+
+# Debug mode with verbose logging
 ./indexer index --chain=evm --debug
 
-# Processes failed blocks first, then switches to normal processing
-./indexer index --retry-failed
+# Run catchup alongside regular indexing (auto-detects gaps)
+./indexer index --chain=evm --catchup
+./indexer index --chain=evm,tron --catchup
+
+# Combined: multiple chains with catchup and debug
+./indexer index --chain=evm,tron --catchup --debug
 ```
 
-### **2. Failed Block Recovery**
-
-#### One-Shot Mode (Default)
-Process failed blocks once and exit:
-```bash
-# Process failed blocks once
-./indexer index-failed --chain=tron
-
-# With debug logging
-./indexer index-failed --chain=evm --debug
-```
-
-#### Continuous Mode
-Keep monitoring for failed blocks:
-```bash
-# Continuous failed block processing
-./indexer index-failed --chain=tron --continuous
-```
-
-### **3. NATS Message Monitoring**
+### **2. NATS Message Monitoring**
 Monitor real-time transaction events:
 ```bash
 # Print all transactions to console
@@ -146,6 +140,8 @@ Monitor real-time transaction events:
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
 │   CLI Interface │───▶│     Manager      │───▶│   Worker Pool   │
+│  Multi-chain    │    │  Multi-chain     │    │ Regular+Catchup │
+│   --chain=a,b   │    │   Orchestrator   │    │   Per Chain     │
 └─────────────────┘    └──────────────────┘    └─────────────────┘
                                 │                        │
                                 ▼                        ▼
@@ -157,32 +153,131 @@ Monitor real-time transaction events:
                                 ▼                        ▼
                        ┌──────────────────┐    ┌─────────────────┐
                        │ Transaction Log  │    │  RPC Failover   │
-                       └──────────────────┘    └─────────────────┘
+                       └──────────────────┘    │   Management    │
+                                               └─────────────────┘
                                                          │
                                                          ▼
-                                                ┌─────────────────┐
-                                                │ Failed Block    │
-                                                │ Store (BadgerDB)│
-                                                └─────────────────┘
+                                               ┌─────────────────┐
+                                               │   BlockStore    │
+                                               │   (BadgerDB)    │
+                                               └─────────────────┘
 ```
 
 ### **Data Flow**
 
-1. **Block Fetching**: Workers fetch blocks in batches from RPC endpoints
-2. **Transaction Processing**: Extract and normalize transaction data
-3. **Event Publishing**: Stream transactions to NATS for real-time consumption
-4. **Failure Handling**: Store failed blocks for later retry
-5. **State Persistence**: Track progress in BadgerDB
+1. **Multi-Chain Initialization**: Parse comma-separated chain names (`--chain=evm,tron`)
+2. **Worker Creation**: Create regular + optional catchup workers per chain
+3. **Gap Detection**: Auto-detect missing blocks between KV store and RPC head
+4. **Concurrent Processing**: 
+   - Regular workers: Process latest blocks in real-time
+   - Catchup workers: Fill historical gaps in parallel
+5. **Transaction Processing**: Extract and normalize transaction data
+6. **Event Publishing**: Stream transactions to NATS for real-time consumption
+7. **Failure Handling**: Store failed blocks for later retry
+8. **State Persistence**: Track progress per chain in optimized BlockStore
+
+### **Auto-Catchup System**
+
+The indexer includes intelligent gap detection and catchup processing:
+
+- **Automatic Gap Detection**: Compares KV store state with RPC head block
+- **Smart Range Limiting**: Limits catchup to reasonable ranges (100k blocks max)
+- **Concurrent Processing**: Catchup runs alongside regular indexing
+- **Progress Persistence**: Catchup progress is saved and resumable
+- **Multi-Chain Support**: Each chain has independent catchup processing
+
+**How it works:**
+1. Check latest processed block from BlockStore
+2. Get current head block from RPC
+3. If gap > threshold, start catchup worker
+4. Catchup worker processes historical blocks in parallel
+5. Regular worker continues processing latest blocks
+6. Automatic deduplication prevents processing same blocks twice
 
 ### **Failed Block Recovery System**
 
 The indexer includes a sophisticated failed block management system:
 
 - **Automatic Retry**: Failed blocks are automatically stored with retry count
-- **One-Shot Recovery**: Process all failed blocks once and exit
-- **Continuous Recovery**: Monitor and process failed blocks in real-time  
 - **Intelligent Backoff**: Exponential backoff for consecutive failures
 - **Status Tracking**: Monitor resolved vs unresolved failed blocks
+- **Persistent Storage**: Failed blocks survive application restarts
+
+### **Flow Diagram**
+```mermaid
+graph TB
+    subgraph "Multi-Chain Indexer Architecture"
+        CMD["CLI Command<br/>🚀 ./indexer index --chain=evm,tron --catchup"]
+        
+        subgraph "Manager Processing"
+            PARSE["parseChainNames()<br/>📋 Input: 'evm,tron'<br/>📤 Output: ['evm', 'tron']"]
+            
+            START["Start() Method<br/>🔄 Loops through each chain<br/>✅ Creates regular workers"]
+            
+            CATCHUP["StartCatchupAuto() Method<br/>🔄 Loops through each chain<br/>✅ Creates catchup workers"]
+        end
+        
+        subgraph "EVM Workers"
+            EVM_REG["EVM Regular Worker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest EVM blocks<br/>📍 Current: 19,500,000+"]
+            
+            EVM_CATCH["EVM Catchup Worker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical EVM blocks<br/>📍 Range: Auto-detected gap"]
+        end
+        
+        subgraph "Tron Workers"
+            TRON_REG["Tron Regular Worker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest Tron blocks<br/>📍 Current: 58,000,000+"]
+            
+            TRON_CATCH["Tron Catchup Worker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical Tron blocks<br/>📍 Range: Auto-detected gap"]
+        end
+        
+        subgraph "Shared Resources"
+            KV["BadgerDB<br/>• latest_block_evm<br/>• latest_block_tron<br/>• Block storage<br/>• Progress tracking"]
+            
+            RPC["RPC Pools<br/>• EVM providers<br/>• Tron providers<br/>• Rate limiting<br/>• Failover"]
+            
+            NATS["NATS Events<br/>• indexer.transaction.evm<br/>• indexer.transaction.tron"]
+        end
+        
+        subgraph "Auto-Detection Logic"
+            DETECT["For each chain:<br/>1. Get latest_block from KV<br/>2. Get latest_block from RPC<br/>3. Calculate gap<br/>4. Limit range if too large<br/>5. Start catchup if needed"]
+        end
+    end
+    
+    CMD --> PARSE
+    PARSE --> START
+    PARSE --> CATCHUP
+    
+    START --> EVM_REG
+    START --> TRON_REG
+    
+    CATCHUP --> DETECT
+    DETECT --> EVM_CATCH
+    DETECT --> TRON_CATCH
+    
+    EVM_REG --> KV
+    EVM_REG --> RPC
+    EVM_REG --> NATS
+    
+    EVM_CATCH --> KV
+    EVM_CATCH --> RPC
+    EVM_CATCH --> NATS
+    
+    TRON_REG --> KV
+    TRON_REG --> RPC
+    TRON_REG --> NATS
+    
+    TRON_CATCH --> KV
+    TRON_CATCH --> RPC
+    TRON_CATCH --> NATS
+    
+    style CMD fill:#e8f5e8
+    style EVM_REG fill:#e1f5fe
+    style EVM_CATCH fill:#f3e5f5
+    style TRON_REG fill:#e1f5fe
+    style TRON_CATCH fill:#f3e5f5
+    style DETECT fill:#fff3e0
+```
+
+
 
 ## 📊 Monitoring & Logging
 
@@ -211,22 +306,29 @@ tail -f logs/failed_blocks_$(date +%Y-%m-%d).log
 
 ### **Project Structure**
 ```
-├── cmd/indexer/           # CLI application
+├── cmd/indexer/           # CLI application (simplified single command)
 ├── configs/               # Configuration files
 ├── internal/
 │   ├── core/             # Core types and config
 │   ├── indexer/          # Indexing logic
-│   │   ├── manager.go    # Orchestration
-│   │   ├── worker.go     # Block processing
+│   │   ├── manager.go    # Multi-chain orchestration + BlockStore
+│   │   ├── worker.go     # Unified worker (regular/catchup modes)
 │   │   ├── indexer_evm.go # Ethereum support
 │   │   └── indexer_tron.go # TRON support
-│   ├── rpc/              # RPC client management
+│   ├── rpc/              # RPC client management + failover
+│   │   ├── manager.go    # Failover management
+│   │   ├── client.go     # Generic RPC client
+│   │   ├── evm.go        # Ethereum-specific client
+│   │   └── tron.go       # TRON-specific client
 │   ├── events/           # NATS event streaming
 │   ├── kvstore/          # Storage abstraction
 │   │   ├── kvstore.go    # Interface
 │   │   ├── badger.go     # BadgerDB implementation
 │   │   └── failed_block_store.go # Failed block management
-│   └── common/           # Utilities (rate limiting, retry)
+│   └── common/           # Utilities
+│       ├── ratelimiter/  # Rate limiting
+│       ├── retry/        # Retry logic
+│       └── bloomfilter/  # Bloom filter
 ├── logs/                 # Log files
 └── data/                 # Persistent storage
 ```
@@ -302,6 +404,8 @@ throttle:
 ### **Throughput**
 - **Ethereum**: ~500-1000 blocks/minute (depending on RPC limits)
 - **TRON**: ~800-1200 blocks/minute (with API key)
+- **Multi-Chain**: Linear scaling per additional chain
+- **Catchup Processing**: ~200-800 blocks/minute (historical data)
 - **Failed Block Recovery**: ~100-500 blocks/minute
 
 ## 🛠️ Production Deployment
@@ -320,7 +424,7 @@ RUN apk --no-cache add ca-certificates
 WORKDIR /root/
 COPY --from=builder /app/indexer .
 COPY configs/ configs/
-CMD ["./indexer", "index", "--chain=evm"]
+CMD ["./indexer", "index", "--chain=evm,tron", "--catchup"]
 ```
 
 ### **Systemd Service**
@@ -333,7 +437,7 @@ After=network.target
 Type=simple
 User=indexer
 WorkingDirectory=/opt/indexer
-ExecStart=/opt/indexer/indexer index --chain=evm
+ExecStart=/opt/indexer/indexer index --chain=evm,tron --catchup
 Restart=always
 RestartSec=5
 
