@@ -11,13 +11,13 @@ import (
 
 // Bitcoin specific types and methods
 type BitcoinClient struct {
-	*GenericClient
+	*genericClient
 }
 
 // NewBitcoinClient creates a new Bitcoin client (JSON-RPC)
 func NewBitcoinClient(url string, auth *AuthConfig, timeout time.Duration, rateLimiter *ratelimiter.PooledRateLimiter) *BitcoinClient {
 	return &BitcoinClient{
-		GenericClient: NewGenericClient(url, NetworkBitcoin, ClientTypeRPC, auth, timeout, rateLimiter),
+		genericClient: NewGenericClient(url, NetworkBitcoin, ClientTypeRPC, auth, timeout, rateLimiter),
 	}
 }
 
@@ -122,8 +122,8 @@ func (fm *FailoverManager) GetBitcoinClient() (*BitcoinClient, error) {
 	if provider.Network != NetworkBitcoin {
 		return nil, fmt.Errorf("current provider is not a Bitcoin network")
 	}
-	genericClient := provider.Client.(*GenericClient)
-	return &BitcoinClient{GenericClient: genericClient}, nil
+	genericClient := provider.Client.(*genericClient)
+	return &BitcoinClient{genericClient: genericClient}, nil
 }
 
 // ExecuteBitcoinCall executes a function with a Bitcoin client and automatic failover
@@ -132,7 +132,7 @@ func (fm *FailoverManager) ExecuteBitcoinCall(ctx context.Context, fn func(*Bitc
 		if client.GetNetworkType() != NetworkBitcoin {
 			return fmt.Errorf("expected Bitcoin client, got %s", client.GetNetworkType())
 		}
-		btcClient := &BitcoinClient{GenericClient: client.(*GenericClient)}
+		btcClient := &BitcoinClient{genericClient: client.(*genericClient)}
 		return fn(btcClient)
 	})
 }

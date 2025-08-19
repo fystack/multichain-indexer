@@ -6,6 +6,10 @@ import (
 )
 
 func TestGetLatestBlockNumber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 	err := fm.AddEthereumProvider("test", "https://ethereum-rpc.publicnode.com", nil, nil)
 	if err != nil {
@@ -17,6 +21,9 @@ func TestGetLatestBlockNumber(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		if blockNumber == 0 {
+			t.Error("Expected non-zero block number")
+		}
 		t.Logf("Latest block number: %d", blockNumber)
 		return nil
 	})
@@ -27,6 +34,10 @@ func TestGetLatestBlockNumber(t *testing.T) {
 }
 
 func TestGetBlockByNumber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 	err := fm.AddEthereumProvider("test", "https://ethereum-rpc.publicnode.com", nil, nil)
 	if err != nil {
@@ -80,6 +91,10 @@ func TestGetBlockByNumber(t *testing.T) {
 }
 
 func TestBatchGetBlocksByNumber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 	err := fm.AddEthereumProvider("test", "https://ethereum-rpc.publicnode.com", nil, nil)
 	if err != nil {
@@ -120,6 +135,10 @@ func TestBatchGetBlocksByNumber(t *testing.T) {
 }
 
 func TestMultipleProviders(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 
 	// Add multiple providers for failover testing

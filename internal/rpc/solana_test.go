@@ -27,7 +27,7 @@ func newTestSolanaClient(t *testing.T, handler func(req *RPCRequest) any) *Solan
 		})
 	}))
 	t.Cleanup(server.Close)
-	return NewSolanaClient(server.URL, nil, 2*time.Second)
+	return NewSolanaClient(server.URL, nil, 2*time.Second, nil)
 }
 
 func TestSolana_GetSlot(t *testing.T) {

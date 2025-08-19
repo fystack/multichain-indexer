@@ -6,6 +6,10 @@ import (
 )
 
 func TestTronGetLatestBlockNumber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 	fm.AddTronProvider("test", "https://tron-rpc.publicnode.com", nil, nil)
 	err := fm.ExecuteTronCall(context.Background(), func(client *TronClient) error {
@@ -22,6 +26,10 @@ func TestTronGetLatestBlockNumber(t *testing.T) {
 }
 
 func TestTronGetBlockByNumber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 	fm.AddTronProvider("test", "https://tron-rpc.publicnode.com", nil, nil)
 
@@ -39,6 +47,10 @@ func TestTronGetBlockByNumber(t *testing.T) {
 }
 
 func TestTronGetTransactionInfoByBlockNum(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
 	fm := NewFailoverManager(nil)
 	fm.AddTronProvider("test", "https://api.trongrid.io", nil, nil)
 

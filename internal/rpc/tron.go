@@ -4,18 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 )
 
 type TronClient struct {
-	*GenericClient
+	*genericClient
 }
 
 func NewTronClient(url string, auth *AuthConfig, timeout time.Duration, rateLimiter *ratelimiter.PooledRateLimiter) *TronClient {
 	return &TronClient{
-		GenericClient: NewGenericClient(url, NetworkTron, ClientTypeREST, auth, timeout, rateLimiter),
+		genericClient: NewGenericClient(url, NetworkTron, ClientTypeREST, auth, timeout, rateLimiter),
 	}
 }
 
@@ -105,7 +106,7 @@ type (
 
 // GetBlockNumber returns the current block number
 func (t *TronClient) GetBlockNumber(ctx context.Context) (uint64, error) {
-	data, err := t.Post(ctx, "/walletsolidity/getnowblock", nil)
+	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/getnowblock", nil, nil)
 	if err != nil {
 		return 0, fmt.Errorf("getNowBlock failed: %w", err)
 	}
@@ -123,7 +124,7 @@ func (t *TronClient) GetBlockByNumber(ctx context.Context, blockNumber string, d
 		"id_or_num": blockNumber,
 		"detail":    detail,
 	}
-	data, err := t.Post(ctx, "/walletsolidity/getblock", body)
+	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/getblock", body, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getBlockByNumber failed: %w", err)
 	}
@@ -136,7 +137,7 @@ func (t *TronClient) GetBlockByNumber(ctx context.Context, blockNumber string, d
 
 func (t *TronClient) BatchGetTransactionReceiptsByBlockNum(ctx context.Context, blockNum int64) ([]*TronTransactionInfo, error) {
 	body := map[string]any{"num": blockNum}
-	data, err := t.Post(ctx, "/walletsolidity/gettransactioninfobyblocknum", body)
+	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/gettransactioninfobyblocknum", body, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getTransactionInfoByBlockNum failed: %w", err)
 	}
@@ -160,7 +161,7 @@ func (fm *FailoverManager) GetTronClient() (*TronClient, error) {
 	if provider.Network != NetworkTron {
 		return nil, fmt.Errorf("current provider is not a Tron network")
 	}
-	return &TronClient{GenericClient: provider.Client.(*GenericClient)}, nil
+	return &TronClient{genericClient: provider.Client.(*genericClient)}, nil
 }
 
 func (fm *FailoverManager) ExecuteTronCall(ctx context.Context, fn func(*TronClient) error) error {
@@ -168,6 +169,6 @@ func (fm *FailoverManager) ExecuteTronCall(ctx context.Context, fn func(*TronCli
 		if client.GetNetworkType() != NetworkTron {
 			return fmt.Errorf("expected Tron client, got %s", client.GetNetworkType())
 		}
-		return fn(&TronClient{GenericClient: client.(*GenericClient)})
+		return fn(&TronClient{genericClient: client.(*genericClient)})
 	})
 }

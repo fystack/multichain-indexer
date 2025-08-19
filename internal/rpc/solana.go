@@ -11,13 +11,13 @@ import (
 
 // Solana specific types and methods
 type SolanaClient struct {
-	*GenericClient
+	*genericClient
 }
 
 // NewSolanaClient creates a new Solana client (JSON-RPC)
-func NewSolanaClient(url string, auth *AuthConfig, timeout time.Duration) *SolanaClient {
+func NewSolanaClient(url string, auth *AuthConfig, timeout time.Duration, rateLimiter *ratelimiter.PooledRateLimiter) *SolanaClient {
 	return &SolanaClient{
-		GenericClient: NewGenericClient(url, NetworkSolana, ClientTypeRPC, auth, timeout, nil),
+		genericClient: NewGenericClient(url, NetworkSolana, ClientTypeRPC, auth, timeout, rateLimiter),
 	}
 }
 
@@ -123,8 +123,8 @@ func (fm *FailoverManager) GetSolanaClient() (*SolanaClient, error) {
 	if provider.Network != NetworkSolana {
 		return nil, fmt.Errorf("current provider is not a Solana network")
 	}
-	genericClient := provider.Client.(*GenericClient)
-	return &SolanaClient{GenericClient: genericClient}, nil
+	genericClient := provider.Client.(*genericClient)
+	return &SolanaClient{genericClient: genericClient}, nil
 }
 
 // ExecuteSolanaCall executes a function with a Solana client and automatic failover
@@ -133,7 +133,7 @@ func (fm *FailoverManager) ExecuteSolanaCall(ctx context.Context, fn func(*Solan
 		if client.GetNetworkType() != NetworkSolana {
 			return fmt.Errorf("expected Solana client, got %s", client.GetNetworkType())
 		}
-		solClient := &SolanaClient{GenericClient: client.(*GenericClient)}
+		solClient := &SolanaClient{genericClient: client.(*genericClient)}
 		return fn(solClient)
 	})
 }

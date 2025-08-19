@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -13,12 +14,12 @@ import (
 )
 
 type EthereumClient struct {
-	*GenericClient
+	*genericClient
 }
 
 func NewEthereumClient(url string, auth *AuthConfig, timeout time.Duration, rateLimiter *ratelimiter.PooledRateLimiter) *EthereumClient {
 	return &EthereumClient{
-		GenericClient: NewGenericClient(url, NetworkEVM, ClientTypeRPC, auth, timeout, rateLimiter),
+		genericClient: NewGenericClient(url, NetworkEVM, ClientTypeRPC, auth, timeout, rateLimiter),
 	}
 }
 
@@ -131,7 +132,7 @@ func (e *EthereumClient) BatchGetBlocksByNumber(ctx context.Context, blockNumber
 	e.rpcID += int64(len(blockNumbers))
 	e.mutex.Unlock()
 
-	resp, err := e.Post(ctx, "/", requests)
+	resp, err := e.Do(ctx, http.MethodPost, "", requests, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to post batch request: %w", err)
 	}
@@ -196,7 +197,7 @@ func (e *EthereumClient) BatchGetTransactionReceipts(ctx context.Context, txHash
 	e.rpcID += int64(len(txHashes))
 	e.mutex.Unlock()
 
-	resp, err := e.Post(ctx, "/", requests)
+	resp, err := e.Do(ctx, http.MethodPost, "", requests, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to post batch request: %w", err)
 	}
@@ -244,8 +245,8 @@ func (fm *FailoverManager) GetEthereumClient() (*EthereumClient, error) {
 		return nil, fmt.Errorf("current provider is not an Ethereum network")
 	}
 
-	genericClient := provider.Client.(*GenericClient)
-	return &EthereumClient{GenericClient: genericClient}, nil
+	genericClient := provider.Client.(*genericClient)
+	return &EthereumClient{genericClient: genericClient}, nil
 }
 
 func (fm *FailoverManager) ExecuteEthereumCall(ctx context.Context, fn func(*EthereumClient) error) error {
@@ -254,7 +255,7 @@ func (fm *FailoverManager) ExecuteEthereumCall(ctx context.Context, fn func(*Eth
 			return fmt.Errorf("expected Ethereum client, got %s", client.GetNetworkType())
 		}
 
-		ethClient := &EthereumClient{GenericClient: client.(*GenericClient)}
+		ethClient := &EthereumClient{genericClient: client.(*genericClient)}
 		return fn(ethClient)
 	})
 }
