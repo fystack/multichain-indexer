@@ -161,7 +161,7 @@ func (e *EVMIndexer) getBlocks(ctx context.Context, blockNums []uint64) ([]Block
 	if len(allTxHashes) > 0 {
 		const chunkSize = 50
 		for i := 0; i < len(allTxHashes); i += chunkSize {
-			end := min(i+chunkSize, len(allTxHashes))
+			end := min(uint64(i+chunkSize), uint64(len(allTxHashes)))
 			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
 				if receipts, err := c.BatchGetTransactionReceipts(ctx, allTxHashes[i:end]); err == nil {
 					maps.Copy(allReceipts, receipts)

@@ -7,46 +7,32 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/core"
-	"github.com/fystack/transaction-indexer/internal/indexer"
-
 	"github.com/alecthomas/kong"
 	"github.com/nats-io/nats.go"
+
+	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/internal/indexer"
 )
 
 type CLI struct {
-	Index       IndexCmd       `cmd:"" help:"Run the indexer."`
-	IndexFailed IndexFailedCmd `cmd:"" name:"index-failed" help:"Process failed blocks."`
+	Index       IndexCmd       `cmd:"" help:"Run the indexer (regular + optional catchup)."`
 	NATSPrinter NATSPrinterCmd `cmd:"" name:"nats-printer" help:"Print NATS messages."`
 }
 
 type IndexCmd struct {
-	Chain       string `help:"Chain to index." required:"" name:"chain"`
-	ConfigPath  string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
-	Debug       bool   `help:"Enable debug logs." name:"debug"`
-	RetryFailed bool   `help:"Retry failed blocks." name:"retry-failed"`
-}
-
-type IndexFailedCmd struct {
 	Chain      string `help:"Chain to index." required:"" name:"chain"`
 	ConfigPath string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
 	Debug      bool   `help:"Enable debug logs." name:"debug"`
-	Continuous bool   `help:"Run continuously instead of one-shot." name:"continuous"`
+	Catchup    bool   `help:"Run catchup alongside regular indexer." name:"catchup"`
 }
 
 type NATSPrinterCmd struct {
 	NATSURL string `help:"NATS server URL." default:"nats://127.0.0.1:4222" name:"nats-url"`
 	Subject string `help:"NATS subject to subscribe to." default:"indexer.transaction" name:"subject"`
-	LogFile string `help:"Append logs to this file." default:"nats.log" name:"log"`
 }
 
 func (c *IndexCmd) Run() error {
-	runIndexer(c.Chain, c.ConfigPath, c.Debug, c.RetryFailed)
-	return nil
-}
-
-func (c *IndexFailedCmd) Run() error {
-	runIndexFailedBlocks(c.Chain, c.ConfigPath, c.Debug, c.Continuous)
+	runIndexer(c.Chain, c.ConfigPath, c.Debug, c.Catchup)
 	return nil
 }
 
@@ -66,7 +52,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func runIndexer(chain, configPath string, debug, retryFailed bool) {
+func runIndexer(chain, configPath string, debug, catchup bool) {
 	cfg, err := core.Load(configPath)
 	if err != nil {
 		slog.Error("Load config failed", "err", err)
@@ -89,9 +75,18 @@ func runIndexer(chain, configPath string, debug, retryFailed bool) {
 		os.Exit(1)
 	}
 
-	if err := manager.Start(retryFailed, chain); err != nil {
-		slog.Error("Start indexer failed", "err", err)
+	// start regular worker
+	if err := manager.Start(); err != nil {
+		slog.Error("Start regular worker failed", "err", err)
 		os.Exit(1)
+	}
+
+	// optionally run catchup
+	if catchup {
+		if err := manager.StartCatchupAuto(chain); err != nil {
+			slog.Error("Start catchup failed", "err", err)
+			os.Exit(1)
+		}
 	}
 
 	slog.Info("Indexer is running... Press Ctrl+C to stop")
@@ -100,79 +95,12 @@ func runIndexer(chain, configPath string, debug, retryFailed bool) {
 	slog.Info("Indexer stopped")
 }
 
-func runIndexFailedBlocks(chain, configPath string, debug, continuous bool) {
-	cfg, err := core.Load(configPath)
-	if err != nil {
-		slog.Error("Load config failed", "err", err)
-		os.Exit(1)
-	}
-
-	level := slog.LevelInfo
-	if debug {
-		level = slog.LevelDebug
-	}
-	core.Init(&core.Options{
-		Level:      level,
-		TimeFormat: time.RFC3339,
-	})
-	slog.Info("Config loaded")
-
-	manager, err := indexer.NewManager(&cfg)
-	if err != nil {
-		slog.Error("Create failed blocks indexer manager failed", "err", err)
-		os.Exit(1)
-	}
-
-	// Show current failed blocks status before starting
-	status, err := manager.GetFailedBlocksStatus()
-	if err != nil {
-		slog.Error("Failed to get failed blocks status", "err", err)
-	} else {
-		for chainName, count := range status {
-			slog.Info("Failed blocks status", "chain", chainName, "count", count)
-		}
-	}
-
-	if continuous {
-		if err := manager.StartFailedBlocksContinuous(chain); err != nil {
-			slog.Error("Start failed blocks (continuous) failed", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("Failed blocks indexer is running continuously... Press Ctrl+C to stop")
-		waitForShutdown()
-		manager.StopFailedBlocks()
-		slog.Info("Failed blocks indexer stopped")
-	} else {
-		if err := manager.StartFailedBlocks(chain); err != nil {
-			slog.Error("Start failed blocks (one-shot) failed", "err", err)
-			os.Exit(1)
-		}
-		slog.Info("Failed blocks processing completed (one-shot mode)")
-	}
-}
-
 func runNatsPrinter(natsURL, subject string) {
 	level := slog.LevelInfo
 	core.Init(&core.Options{
 		Level:      level,
 		TimeFormat: time.RFC3339,
 	})
-	slog.Info("Config loaded")
-	// logDir := "logs"
-	// if err := os.MkdirAll(logDir, 0755); err != nil {
-	// 	slog.Error("Create log directory failed", "err", err)
-	// 	os.Exit(1)
-	// }
-	// path := filepath.Join(logDir, "nats.log")
-	// f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	// if err != nil {
-	// 	slog.Error("Open log file failed", "err", err)
-	// 	os.Exit(1)
-	// }
-
-	// defer f.Close()
-
-	// logWriter := io.MultiWriter(os.Stdout, f)
 
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
@@ -190,7 +118,6 @@ func runNatsPrinter(natsURL, subject string) {
 			return
 		}
 		slog.Info("Received transaction", "txn", txn.String())
-		// fmt.Fprintf(logWriter, "%s\n", txn.String())
 	})
 	if err != nil {
 		slog.Error("NATS subscribe failed", "err", err)
