@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
 // Bitcoin specific types and methods

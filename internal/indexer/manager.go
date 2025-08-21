@@ -51,7 +51,7 @@ func (m *Manager) Start(chainName ...string) error {
 			continue
 		}
 
-		idxr, err := m.createIndexer(name, chainCfg)
+		idxr, err := m.createIndexer(core.ChainType(name), chainCfg)
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", name, err)
 		}
@@ -89,14 +89,14 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 		return fmt.Errorf("chain not in config: %s", chainName)
 	}
 
-	idxr, err := m.createIndexer(chainName, cfg)
+	idxr, err := m.createIndexer(core.ChainType(chainName), cfg)
 	if err != nil {
 		return err
 	}
 
 	// load start block from KV (default to 1 if not found)
 	var startBlockNum uint64 = 1
-	if startBlock, err := m.blockStore.GetLatestBlock(cfg.Name); err == nil {
+	if startBlock, err := m.blockStore.GetLatestBlock(cfg.Name.String()); err == nil {
 		startBlockNum = startBlock + 1 // Start from next block after last processed
 	}
 
@@ -148,11 +148,11 @@ func (m *Manager) Stop() {
 	slog.Info("Manager stopped")
 }
 
-func (m *Manager) createIndexer(name string, cfg core.ChainConfig) (Indexer, error) {
+func (m *Manager) createIndexer(name core.ChainType, cfg core.ChainConfig) (Indexer, error) {
 	switch name {
-	case "evm":
+	case core.ChainTypeEVM:
 		return NewEVMIndexer(cfg)
-	case "tron":
+	case core.ChainTypeTron:
 		return NewTronIndexer(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported chain: %s", name)

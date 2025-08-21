@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
 type EthereumClient struct {

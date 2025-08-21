@@ -17,6 +17,17 @@ const (
 	AddressTypeTron   AddressType = "tron"
 )
 
+type ChainType string
+
+const (
+	ChainTypeEVM  ChainType = "evm"
+	ChainTypeTron ChainType = "tron"
+)
+
+func (c ChainType) String() string {
+	return string(c)
+}
+
 type Block struct {
 	Number       uint64        `json:"number"`
 	Hash         string        `json:"hash"`

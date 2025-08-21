@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
 // AuthConfig holds authentication configuration

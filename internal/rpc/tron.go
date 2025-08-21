@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
 type TronClient struct {

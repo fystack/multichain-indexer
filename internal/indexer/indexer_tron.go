@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 
 	"github.com/shopspring/decimal"
 )
@@ -20,7 +20,6 @@ import (
 const ERC_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 type TronIndexer struct {
-	chainName   string
 	config      core.ChainConfig
 	failover    *rpc.FailoverManager
 	rateLimiter *ratelimiter.PooledRateLimiter
@@ -50,14 +49,13 @@ func NewTronIndexer(config core.ChainConfig) (*TronIndexer, error) {
 	}
 
 	return &TronIndexer{
-		chainName:   config.Name,
 		config:      config,
 		failover:    fm,
 		rateLimiter: rl,
 	}, nil
 }
 
-func (t *TronIndexer) GetName() string { return t.chainName }
+func (t *TronIndexer) GetName() string { return t.config.Name.String() }
 
 func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
@@ -207,7 +205,7 @@ func (t *TronIndexer) processTransferContract(param *rpc.TronContractParameter, 
 
 	return &core.Transaction{
 		TxHash:       txID,
-		NetworkId:    t.chainName,
+		NetworkId:    t.GetName(),
 		BlockNumber:  blockNum,
 		FromAddress:  t.tronToHexAddressCached(transfer.OwnerAddress),
 		ToAddress:    t.tronToHexAddressCached(transfer.ToAddress),
@@ -226,7 +224,7 @@ func (t *TronIndexer) processTransferAssetContract(param *rpc.TronContractParame
 
 	return &core.Transaction{
 		TxHash:       txID,
-		NetworkId:    t.chainName,
+		NetworkId:    t.GetName(),
 		BlockNumber:  blockNum,
 		FromAddress:  t.tronToHexAddressCached(asset.OwnerAddress),
 		ToAddress:    t.tronToHexAddressCached(asset.ToAddress),
@@ -277,7 +275,7 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transac
 
 		transfers = append(transfers, core.Transaction{
 			TxHash:       tx.ID,
-			NetworkId:    t.chainName,
+			NetworkId:    t.GetName(),
 			BlockNumber:  uint64(tx.BlockNumber),
 			FromAddress:  from,
 			ToAddress:    to,

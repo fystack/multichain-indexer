@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
 	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 
 	"github.com/shopspring/decimal"
 )
@@ -54,7 +54,7 @@ func NewEVMIndexer(config core.ChainConfig) (*EVMIndexer, error) {
 	}, nil
 }
 
-func (e *EVMIndexer) GetName() string { return e.config.Name }
+func (e *EVMIndexer) GetName() string { return e.config.Name.String() }
 
 func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64

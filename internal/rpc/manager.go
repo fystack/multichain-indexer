@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/common/ratelimiter"
-	"github.com/fystack/transaction-indexer/internal/common/retry"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
+	"github.com/fystack/transaction-indexer/pkg/retry"
 )
 
 // Provider represents a blockchain network provider
