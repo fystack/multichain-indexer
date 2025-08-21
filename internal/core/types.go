@@ -7,16 +7,6 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-type AddressType string
-
-const (
-	AddressTypeEvm    AddressType = "evm"
-	AddressTypeBtc    AddressType = "btc"
-	AddressTypeSolana AddressType = "sol"
-	AddressTypeAptos  AddressType = "aptos"
-	AddressTypeTron   AddressType = "tron"
-)
-
 type ChainType string
 
 const (

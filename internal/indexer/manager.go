@@ -10,6 +10,7 @@ import (
 	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/internal/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 )
 
 type Manager struct {
@@ -18,6 +19,7 @@ type Manager struct {
 	blockStore *BlockStore
 	emitter    *events.Emitter
 	workers    []*Worker
+	addressBF  addressbloomfilter.WalletAddressBloomFilter
 }
 
 func NewManager(cfg *core.Config) (*Manager, error) {
@@ -34,6 +36,12 @@ func NewManager(cfg *core.Config) (*Manager, error) {
 		store:      store,
 		blockStore: NewBlockStore(store),
 		emitter:    emitter,
+		addressBF: addressbloomfilter.NewAddressBloomFilter(addressbloomfilter.Config{
+			// Safe defaults; you can adjust and call Initialize later to load from DB
+			ExpectedItems:     100_000,
+			FalsePositiveRate: 0.01,
+			BatchSize:         1_000,
+		}),
 	}, nil
 }
 
@@ -55,7 +63,7 @@ func (m *Manager) Start(chainName ...string) error {
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", name, err)
 		}
-		w := NewWorker(idxr, chainCfg, m.store, m.blockStore, m.emitter)
+		w := NewWorker(idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF)
 		w.Start()
 		m.workers = append(m.workers, w)
 		slog.Info("Started regular worker", "chain", name)
@@ -121,7 +129,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 	}
 
 	// start catchup worker
-	w := NewCatchupWorker(idxr, cfg, m.store, m.blockStore, m.emitter, startBlockNum, endBlock)
+	w := NewCatchupWorker(idxr, cfg, m.store, m.blockStore, m.emitter, m.addressBF, startBlockNum, endBlock)
 	w.Start()
 	m.workers = append(m.workers, w)
 

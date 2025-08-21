@@ -12,6 +12,8 @@ import (
 	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/internal/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 )
 
 // WorkerMode defines the mode of operation for a worker
@@ -23,30 +25,30 @@ const (
 )
 
 type Worker struct {
-	config       core.ChainConfig
-	chain        Indexer
-	kvstore      kvstore.KVStore
-	blockStore   *BlockStore
-	emitter      *events.Emitter
-	currentBlock uint64
-	ctx          context.Context
-	cancel       context.CancelFunc
-	logFile      *os.File
-	logFileDate  string
-
-	mode         WorkerMode
-	catchupStart uint64
-	catchupEnd   uint64
+	config             core.ChainConfig
+	chain              Indexer
+	kvstore            kvstore.KVStore
+	blockStore         *BlockStore
+	emitter            *events.Emitter
+	currentBlock       uint64
+	ctx                context.Context
+	cancel             context.CancelFunc
+	logFile            *os.File
+	logFileDate        string
+	addressBloomFilter addressbloomfilter.WalletAddressBloomFilter
+	mode               WorkerMode
+	catchupStart       uint64
+	catchupEnd         uint64
 }
 
 // NewWorker creates a worker for regular indexing
-func NewWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter) *Worker {
-	return newWorkerWithMode(chain, config, kv, blockStore, emitter, ModeRegular, 0, 0)
+func NewWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *Worker {
+	return newWorkerWithMode(chain, config, kv, blockStore, emitter, addressBF, ModeRegular, 0, 0)
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, startBlock, endBlock uint64) *Worker {
-	return newWorkerWithMode(chain, config, kv, blockStore, emitter, ModeCatchup, startBlock, endBlock)
+func NewCatchupWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, startBlock, endBlock uint64) *Worker {
+	return newWorkerWithMode(chain, config, kv, blockStore, emitter, addressBF, ModeCatchup, startBlock, endBlock)
 }
 
 // Start the worker
@@ -190,8 +192,13 @@ func (w *Worker) processCatchupBlocks() error {
 }
 
 func (w *Worker) emitBlock(block *core.Block) {
+	if w.addressBloomFilter == nil {
+		return
+	}
 	for _, tx := range block.Transactions {
-		_ = w.emitter.EmitTransaction(w.chain.GetName(), &tx)
+		if yes := w.addressBloomFilter.Contains(tx.ToAddress, enum.AddressTypeEvm); yes {
+			_ = w.emitter.EmitTransaction(w.chain.GetName(), &tx)
+		}
 	}
 }
 
@@ -217,23 +224,24 @@ func (w *Worker) loadCatchupProgress() uint64 {
 	return w.catchupStart
 }
 
-func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
+func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
 	ctx, cancel := context.WithCancel(context.Background())
 	logFile, date, _ := createLogFile()
 
 	w := &Worker{
-		chain:        chain,
-		config:       config,
-		kvstore:      kv,
-		blockStore:   blockStore,
-		emitter:      emitter,
-		ctx:          ctx,
-		cancel:       cancel,
-		logFile:      logFile,
-		logFileDate:  date,
-		mode:         mode,
-		catchupStart: startBlock,
-		catchupEnd:   endBlock,
+		chain:              chain,
+		config:             config,
+		kvstore:            kv,
+		blockStore:         blockStore,
+		emitter:            emitter,
+		addressBloomFilter: addressBF,
+		ctx:                ctx,
+		cancel:             cancel,
+		logFile:            logFile,
+		logFileDate:        date,
+		mode:               mode,
+		catchupStart:       startBlock,
+		catchupEnd:         endBlock,
 	}
 
 	switch mode {
