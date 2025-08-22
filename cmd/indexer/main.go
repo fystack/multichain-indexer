@@ -12,6 +12,7 @@ import (
 
 	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
 type CLI struct {
@@ -68,6 +69,18 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 		TimeFormat: time.RFC3339,
 	})
 	slog.Info("Config loaded")
+
+	// start redis
+	redisClient := infra.NewRedisClient(cfg.Redis.URL, cfg.Redis.Password, cfg.Redis.Environment)
+	infra.SetGlobalRedisClient(redisClient)
+
+	// start db
+	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.DB.Environment)
+	if err != nil {
+		slog.Error("Create db connection failed", "err", err)
+		os.Exit(1)
+	}
+	infra.SetGlobalDB(db)
 
 	manager, err := indexer.NewManager(&cfg)
 	if err != nil {

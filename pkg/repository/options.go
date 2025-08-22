@@ -7,10 +7,8 @@ const (
 	OrderTypeDesc OrderType = "DESC"
 )
 
-type WhereType map[string]interface{}
+type WhereType map[string]any
 type SelectType []string
-type Relations map[string]SelectType
-type RelationFilters map[string]WhereType // (New) Optional filters to apply on the preloaded relations.
 type Order map[string]OrderType
 
 type FindOptions struct {

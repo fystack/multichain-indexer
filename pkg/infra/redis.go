@@ -8,6 +8,7 @@ import (
 	logger "log/slog"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
@@ -18,38 +19,43 @@ import (
 // RedisClient is a custom interface that abstracts the Redis client methods.
 type RedisClient interface {
 	GetClient() *redis.Client
-	Set(key string, value interface{}, expiration time.Duration) error
+	Set(key string, value any, expiration time.Duration) error
 	Get(key string) (string, error)
-	Incr(key string) error
 	Del(keys ...string) error
-	HSet(key string, values ...interface{}) error
-	HGetAll(key string, dest interface{}) error
-
-	ZAdd(key string, members ...redis.Z) error
-	ZRem(key string, members ...interface{}) error
-	ZRange(key string, start, stop int64) ([]string, error)
-	ZRangeWithScores(key string, start, stop int64) ([]redis.Z, error)
-	ZRevRangeWithScores(key string, start, stop int64) ([]redis.Z, error)
-
-	SAdd(key string, members ...interface{}) error
-	SRem(key string, members ...interface{}) error
-	SMembers(key string) ([]string, error)
-
-	AcquireLock(ctx context.Context, key string, expiration time.Duration) (bool, error)
-	ReleaseLock(ctx context.Context, key string) error
-	Expire(key string, expiration time.Duration) error
-	TTL(key string) (time.Duration, error)
-	Exists(key string) (bool, error)
 	Close() error
-
-	// Transaction handling
-	TxPipeline() redis.Pipeliner
-	TxPipelineExec(pipe redis.Pipeliner) error
 }
 
 // RedisWrapper is a struct that implements the RedisClient interface using a Redis client pointer.
 type RedisWrapper struct {
 	client *redis.Client
+}
+
+var (
+	globalRedisClient RedisClient
+	globalRedisMu     sync.RWMutex
+)
+
+// SetGlobalRedisClient sets the process-wide Redis client.
+func SetGlobalRedisClient(c RedisClient) {
+	globalRedisMu.Lock()
+	defer globalRedisMu.Unlock()
+	globalRedisClient = c
+}
+
+// GetGlobalRedisClient returns the process-wide Redis client (may be nil).
+func GetGlobalRedisClient() RedisClient {
+	globalRedisMu.RLock()
+	defer globalRedisMu.RUnlock()
+	return globalRedisClient
+}
+
+// MustGlobalRedisClient returns the global client or panics if not initialized.
+func MustGlobalRedisClient() RedisClient {
+	c := GetGlobalRedisClient()
+	if c == nil {
+		panic("global Redis client not initialized")
+	}
+	return c
 }
 
 func getTlsConfig(caCertPath string, clientCertPath string, clientKeyPath string) (*tls.Config, error) {
@@ -137,7 +143,7 @@ func (rw *RedisWrapper) GetClient() *redis.Client {
 	return rw.client
 }
 
-func (rw *RedisWrapper) Set(key string, value interface{}, expiration time.Duration) error {
+func (rw *RedisWrapper) Set(key string, value any, expiration time.Duration) error {
 	return rw.client.Set(context.Background(), key, value, expiration).Err()
 }
 
@@ -151,89 +157,6 @@ func (rw *RedisWrapper) Del(keys ...string) error {
 	return rw.client.Del(context.Background(), keys...).Err()
 }
 
-// Get implements the RedisClient interface for getting the value by key.
-func (rw *RedisWrapper) HSet(key string, values ...interface{}) error {
-	return rw.client.HSet(context.Background(), key, values...).Err()
-}
-
-func (rw *RedisWrapper) Incr(key string) error {
-	return rw.client.Incr(context.Background(), key).Err()
-}
-
-func (rw *RedisWrapper) HGetAll(key string, dest interface{}) error {
-	return rw.client.HGetAll(context.Background(), key).Scan(dest)
-}
-
-func (rw *RedisWrapper) ZAdd(key string, members ...redis.Z) error {
-	return rw.client.ZAdd(context.Background(), key, members...).Err()
-}
-
-func (rw *RedisWrapper) ZRem(key string, members ...interface{}) error {
-	return rw.client.ZRem(context.Background(), key, members...).Err()
-}
-
-// ZRange implements the RedisClient interface for getting members in a sorted set.
-func (rw *RedisWrapper) ZRange(key string, start, stop int64) ([]string, error) {
-	return rw.client.ZRange(context.Background(), key, start, stop).Result()
-}
-
-// ZRangeWithScores implements the RedisClient interface for getting members with their scores.
-func (rw *RedisWrapper) ZRangeWithScores(key string, start, stop int64) ([]redis.Z, error) {
-	return rw.client.ZRangeWithScores(context.Background(), key, start, stop).Result()
-}
-
-func (rw *RedisWrapper) ZRevRangeWithScores(key string, start, stop int64) ([]redis.Z, error) {
-	return rw.client.ZRevRangeWithScores(context.Background(), key, start, stop).Result()
-}
-
 func (rw *RedisWrapper) Close() error {
 	return rw.client.Close()
-}
-
-func (rw *RedisWrapper) AcquireLock(ctx context.Context, key string, expiration time.Duration) (bool, error) {
-	return rw.client.SetNX(ctx, key, true, expiration).Result()
-}
-
-func (rw *RedisWrapper) ReleaseLock(ctx context.Context, key string) error {
-	return rw.client.Del(ctx, key).Err()
-}
-
-func (rw *RedisWrapper) Expire(key string, expiration time.Duration) error {
-	return rw.client.Expire(context.Background(), key, expiration).Err()
-}
-
-func (rw *RedisWrapper) SAdd(key string, members ...interface{}) error {
-	return rw.client.SAdd(context.Background(), key, members...).Err()
-}
-
-func (rw *RedisWrapper) SRem(key string, members ...interface{}) error {
-	return rw.client.SRem(context.Background(), key, members...).Err()
-}
-
-func (rw *RedisWrapper) SMembers(key string) ([]string, error) {
-	return rw.client.SMembers(context.Background(), key).Result()
-}
-
-// Implement transaction methods in RedisWrapper
-func (rw *RedisWrapper) TxPipeline() redis.Pipeliner {
-	return rw.client.TxPipeline()
-}
-
-func (rw *RedisWrapper) TxPipelineExec(pipe redis.Pipeliner) error {
-	_, err := pipe.Exec(context.Background())
-	return err
-}
-
-// Add the implementation for TTL
-func (rw *RedisWrapper) TTL(key string) (time.Duration, error) {
-	return rw.client.TTL(context.Background(), key).Result()
-}
-
-// Add the implementation for Exists
-func (rw *RedisWrapper) Exists(key string) (bool, error) {
-	result, err := rw.client.Exists(context.Background(), key).Result()
-	if err != nil {
-		return false, err
-	}
-	return result > 0, nil
 }

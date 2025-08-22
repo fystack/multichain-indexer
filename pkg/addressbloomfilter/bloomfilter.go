@@ -3,7 +3,11 @@ package addressbloomfilter
 import (
 	"context"
 
+	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/transaction-indexer/pkg/model"
+	"github.com/fystack/transaction-indexer/pkg/repository"
 )
 
 // WalletAddressBloomFilter defines the interface for working with wallet address filters.
@@ -25,4 +29,26 @@ type WalletAddressBloomFilter interface {
 
 	// Stats returns metadata and filter info for the given address type.
 	Stats(addressType enum.AddressType) map[string]any
+}
+
+func NewBloomFilter(cfg core.BloomFilterCfg) WalletAddressBloomFilter {
+	walletAddressRepo := repository.NewRepository[model.WalletAddress](infra.GetGlobalDB())
+	switch cfg.Backend {
+	case core.BFBackendRedis:
+		return NewRedisBloomFilter(RedisBloomConfig{
+			RedisClient:       infra.GetGlobalRedisClient(),
+			WalletAddressRepo: walletAddressRepo,
+			BatchSize:         cfg.Redis.BatchSize,
+			KeyPrefix:         cfg.Redis.KeyPrefix,
+			ErrorRate:         cfg.Redis.ErrorRate,
+			Capacity:          cfg.Redis.Capacity,
+		})
+	default:
+		return NewAddressBloomFilter(Config{
+			WalletAddressRepo: walletAddressRepo,
+			ExpectedItems:     cfg.InMemory.ExpectedItems,
+			FalsePositiveRate: cfg.InMemory.FalsePositiveRate,
+			BatchSize:         cfg.InMemory.BatchSize,
+		})
+	}
 }

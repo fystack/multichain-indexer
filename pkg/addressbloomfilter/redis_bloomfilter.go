@@ -125,7 +125,7 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 
 func (rbf *redisBloomFilter) addBatchToBloom(ctx context.Context, key string, addresses []string) error {
 	client := rbf.redisClient.GetClient()
-	args := make([]interface{}, 0, len(addresses)+2)
+	args := make([]any, 0, len(addresses)+2)
 	args = append(args, "BF.MADD", key)
 	for _, addr := range addresses {
 		args = append(args, addr)
@@ -171,7 +171,7 @@ func (rbf *redisBloomFilter) Clear(addressType enum.AddressType) {
 	_ = rbf.redisClient.Del(key)
 }
 
-func (rbf *redisBloomFilter) Stats(addressType enum.AddressType) map[string]interface{} {
+func (rbf *redisBloomFilter) Stats(addressType enum.AddressType) map[string]any {
 	logger.Info("Redis Bloom filter not supported yet")
 	return nil
 }

@@ -31,17 +31,15 @@ func NewManager(cfg *core.Config) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("emitter init: %w", err)
 	}
+
+	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter)
+
 	return &Manager{
 		cfg:        cfg,
 		store:      store,
 		blockStore: NewBlockStore(store),
 		emitter:    emitter,
-		addressBF: addressbloomfilter.NewAddressBloomFilter(addressbloomfilter.Config{
-			// Safe defaults; you can adjust and call Initialize later to load from DB
-			ExpectedItems:     100_000,
-			FalsePositiveRate: 0.01,
-			BatchSize:         1_000,
-		}),
+		addressBF:  addressBF,
 	}, nil
 }
 

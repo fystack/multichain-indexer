@@ -56,3 +56,27 @@ nats:
 storage:
   type: "memory"           # memory | badger | postgres
   directory: "data/badger" # only used for badger
+
+db:
+  type: "postgres"
+  url: "postgres://postgres:postgres@localhost:5432/postgres"
+
+bloomfilter:
+  enabled: true
+  backend: "redis"
+  redis:
+    wallet_address_repo: "wallet_address"
+    batch_size: 1000
+    key_prefix: "bloomfilter"
+    error_rate: 0.01
+    capacity: 1000000
+  in_memory:
+    wallet_address_repo: "wallet_address"
+    expected_items: 1000000
+    false_positive_rate: 0.01
+    batch_size: 1000
+
+redis:
+  url: "localhost:6379"
+  password: ""
+  environment: "development"

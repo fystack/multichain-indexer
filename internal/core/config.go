@@ -12,9 +12,12 @@ import (
 )
 
 type Config struct {
-	Chains  ChainsConfig `yaml:"chains"`
-	NATS    NATSConfig   `yaml:"nats"`
-	Storage StorageCfg   `yaml:"storage"`
+	Chains      ChainsConfig   `yaml:"chains"`
+	NATS        NATSConfig     `yaml:"nats"`
+	Storage     StorageCfg     `yaml:"storage"`
+	DB          DBCfg          `yaml:"db"`
+	Redis       RedisCfg       `yaml:"redis"`
+	BloomFilter BloomFilterCfg `yaml:"bloomfilter"`
 }
 
 // ChainsConfig supports:
@@ -94,6 +97,38 @@ type NATSConfig struct {
 type StorageCfg struct {
 	Type      string `yaml:"type"`      // memory | badger | postgres
 	Directory string `yaml:"directory"` // for badger
+}
+
+type BloomFilterCfg struct {
+	Backend  BFBackend              `yaml:"backend"`
+	Redis    RedisBloomFilterCfg    `yaml:"redis"`
+	InMemory InMemoryBloomFilterCfg `yaml:"in_memory"`
+}
+
+type DBCfg struct {
+	URL         string `yaml:"url"`
+	Environment string `yaml:"environment"`
+}
+
+type RedisCfg struct {
+	URL         string `yaml:"url"`
+	Password    string `yaml:"password"`
+	Environment string `yaml:"environment"`
+}
+
+type RedisBloomFilterCfg struct {
+	WalletAddressRepo string  `yaml:"wallet_address_repo"`
+	BatchSize         int     `yaml:"batch_size"`
+	KeyPrefix         string  `yaml:"key_prefix"`
+	ErrorRate         float64 `yaml:"error_rate"`
+	Capacity          int     `yaml:"capacity"`
+}
+
+type InMemoryBloomFilterCfg struct {
+	WalletAddressRepo string  `yaml:"wallet_address_repo"`
+	ExpectedItems     uint    `yaml:"expected_items"`
+	FalsePositiveRate float64 `yaml:"false_positive_rate"`
+	BatchSize         int     `yaml:"batch_size"`
 }
 
 // Load reads YAML, applies defaults & per-chain merges, resolves node auth, and validates.

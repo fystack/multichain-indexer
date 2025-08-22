@@ -18,6 +18,13 @@ func (c ChainType) String() string {
 	return string(c)
 }
 
+type BFBackend string
+
+const (
+	BFBackendRedis    BFBackend = "redis"
+	BFBackendInMemory BFBackend = "in_memory"
+)
+
 type Block struct {
 	Number       uint64        `json:"number"`
 	Hash         string        `json:"hash"`

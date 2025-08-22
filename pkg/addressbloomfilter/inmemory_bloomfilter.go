@@ -129,13 +129,13 @@ func (abf *addressBloomFilter) Clear(addressType enum.AddressType) {
 	bf.addressCount = 0
 }
 
-func (abf *addressBloomFilter) Stats(addressType enum.AddressType) map[string]interface{} {
+func (abf *addressBloomFilter) Stats(addressType enum.AddressType) map[string]any {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.RLock()
 	defer bf.mu.RUnlock()
 
 	fillRatio := bf.approximatedFillRatio()
-	return map[string]interface{}{
+	return map[string]any{
 		"addressType":                addressType,
 		"addressCount":               bf.addressCount,
 		"bitsCount":                  bf.filter.Cap(),
