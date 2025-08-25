@@ -180,30 +180,61 @@ Monitor real-time transaction events:
 
 ### **Core Components**
 
-```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   CLI Interface │───▶│     Manager      │───▶│   Worker Pool   │
-│  Multi-chain    │    │  Multi-chain     │    │ Regular+Catchup │
-│   --chain=a,b   │    │   Orchestrator   │    │   Per Chain     │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │                        │
-                                ▼                        ▼
-                       ┌──────────────────┐    ┌─────────────────┐
-                       │   Event Emitter  │    │   Chain Indexer │
-                       │     (NATS)       │    │   (EVM/TRON)    │
-                       └──────────────────┘    └─────────────────┘
-                                │                        │
-                                ▼                        ▼
-                       ┌──────────────────┐    ┌─────────────────┐
-                       │ Transaction Log  │    │  RPC Failover   │
-                       └──────────────────┘    │   Management    │
-                                               └─────────────────┘
-                                                         │
-                                                         ▼
-                                               ┌─────────────────┐
-                                               │   BlockStore    │
-                                               │   (BadgerDB)    │
-                                               └─────────────────┘
+```mermaid
+flowchart TB
+    subgraph "CLI Layer"
+        CLI[CLI Interface<br/>Multi-chain<br/>--chain=evm,tron]
+    end
+    
+    subgraph "Orchestration Layer"
+        Manager[Manager<br/>Multi-chain Orchestrator<br/>Worker Management]
+    end
+    
+    subgraph "Processing Layer"
+        Worker[Worker<br/>Regular/Catchup Mode<br/>Per Chain]
+        Indexer[Chain Indexer<br/>EVM/TRON<br/>Block Processing]
+    end
+    
+    subgraph "Infrastructure Layer"
+        RPC[RPC Failover Manager<br/>Provider Management<br/>EVM/TRON APIs]
+        Emitter[Event Emitter<br/>NATS Streaming]
+        BloomFilter[Bloom Filter<br/>Address Filtering<br/>Redis/In-Memory]
+    end
+    
+    subgraph "Storage Layer"
+        BlockStore[BlockStore<br/>Progress Tracking<br/>Latest Block Numbers]
+        KVStore[KV Store<br/>BadgerDB<br/>Persistent Data]
+        NATS[NATS Server<br/>Transaction Events<br/>Real-time Streaming]
+    end
+    
+    %% Data Flow
+    CLI --> Manager
+    Manager --> Worker
+    Manager --> Indexer
+    Manager --> Emitter
+    Manager --> BloomFilter
+    
+    Worker --> Indexer
+    Worker --> Emitter
+    Worker --> BloomFilter
+    Worker --> BlockStore
+    
+    Indexer --> RPC
+    
+    BlockStore --> KVStore
+    Emitter --> NATS
+    
+    %% Styling
+    style CLI fill:#e3f2fd
+    style Manager fill:#f3e5f5
+    style Worker fill:#e8f5e8
+    style Indexer fill:#e8f5e8
+    style RPC fill:#fce4ec
+    style Emitter fill:#fff3e0
+    style BloomFilter fill:#fff3e0
+    style BlockStore fill:#ffebee
+    style KVStore fill:#ffebee
+    style NATS fill:#e0f2f1
 ```
 
 ### **Data Flow**
