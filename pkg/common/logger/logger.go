@@ -1,4 +1,4 @@
-package core
+package logger
 
 import (
 	"log/slog"

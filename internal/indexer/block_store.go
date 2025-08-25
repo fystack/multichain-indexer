@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"strconv"
 
-	"github.com/fystack/transaction-indexer/internal/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
 
 type BlockStore struct {

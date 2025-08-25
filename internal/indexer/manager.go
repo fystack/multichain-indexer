@@ -7,15 +7,16 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/events"
-	"github.com/fystack/transaction-indexer/internal/kvstore"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
 
 type Manager struct {
 	ctx        context.Context
-	cfg        *core.Config
+	cfg        *config.Config
 	store      kvstore.KVStore
 	blockStore *BlockStore
 	emitter    *events.Emitter
@@ -23,7 +24,7 @@ type Manager struct {
 	addressBF  addressbloomfilter.WalletAddressBloomFilter
 }
 
-func NewManager(ctx context.Context, cfg *core.Config) (*Manager, error) {
+func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
 	store, err := kvstore.NewBadgerStore(cfg.Storage.Directory)
 	if err != nil {
 		return nil, fmt.Errorf("badger init: %w", err)
@@ -60,7 +61,7 @@ func (m *Manager) Start(chainName ...string) error {
 			continue
 		}
 
-		idxr, err := m.createIndexer(core.ChainType(name), chainCfg)
+		idxr, err := m.createIndexer(enum.ChainType(name), chainCfg)
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", name, err)
 		}
@@ -98,7 +99,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 		return fmt.Errorf("chain not in config: %s", chainName)
 	}
 
-	idxr, err := m.createIndexer(core.ChainType(chainName), cfg)
+	idxr, err := m.createIndexer(enum.ChainType(chainName), cfg)
 	if err != nil {
 		return err
 	}
@@ -156,11 +157,11 @@ func (m *Manager) Stop() {
 	slog.Info("Manager stopped")
 }
 
-func (m *Manager) createIndexer(name core.ChainType, cfg core.ChainConfig) (Indexer, error) {
+func (m *Manager) createIndexer(name enum.ChainType, cfg config.ChainConfig) (Indexer, error) {
 	switch name {
-	case core.ChainTypeEVM:
+	case enum.ChainTypeEVM:
 		return NewEVMIndexer(cfg)
-	case core.ChainTypeTron:
+	case enum.ChainTypeTron:
 		return NewTronIndexer(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported chain: %s", name)

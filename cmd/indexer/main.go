@@ -11,8 +11,10 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/nats-io/nats.go"
 
-	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
@@ -56,7 +58,7 @@ func main() {
 
 func runIndexer(chain, configPath string, debug, catchup bool) {
 	ctx := context.Background()
-	cfg, err := core.Load(configPath)
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		slog.Error("Load config failed", "err", err)
 		os.Exit(1)
@@ -66,7 +68,7 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 	if debug {
 		level = slog.LevelDebug
 	}
-	core.Init(&core.Options{
+	logger.Init(&logger.Options{
 		Level:      level,
 		TimeFormat: time.RFC3339,
 	})
@@ -112,7 +114,7 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 
 func runNatsPrinter(natsURL, subject string) {
 	level := slog.LevelInfo
-	core.Init(&core.Options{
+	logger.Init(&logger.Options{
 		Level:      level,
 		TimeFormat: time.RFC3339,
 	})
@@ -127,7 +129,7 @@ func runNatsPrinter(natsURL, subject string) {
 	slog.Info("Subscribed to", "subject", subject)
 
 	_, err = nc.Subscribe(subject, func(msg *nats.Msg) {
-		var txn core.Transaction
+		var txn types.Transaction
 		if err := txn.UnmarshalBinary(msg.Data); err != nil {
 			slog.Error("Unmarshal error", "err", err)
 			return

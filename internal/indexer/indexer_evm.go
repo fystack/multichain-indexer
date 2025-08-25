@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 
 	"github.com/shopspring/decimal"
@@ -23,12 +24,12 @@ const (
 )
 
 type EVMIndexer struct {
-	config      core.ChainConfig
+	config      config.ChainConfig
 	failover    *rpc.FailoverManager
 	rateLimiter *ratelimiter.PooledRateLimiter
 }
 
-func NewEVMIndexer(config core.ChainConfig) (*EVMIndexer, error) {
+func NewEVMIndexer(config config.ChainConfig) (*EVMIndexer, error) {
 	var rl *ratelimiter.PooledRateLimiter
 	if config.Client.Throttle.RPS > 0 {
 		interval := time.Second / time.Duration(config.Client.Throttle.RPS)
@@ -66,7 +67,7 @@ func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	return latest, err
 }
 
-func (e *EVMIndexer) GetBlock(ctx context.Context, number uint64) (*core.Block, error) {
+func (e *EVMIndexer) GetBlock(ctx context.Context, number uint64) (*types.Block, error) {
 	// Fetch block
 	var eb *rpc.EthBlock
 	hexNum := fmt.Sprintf("0x%x", number)
@@ -191,14 +192,14 @@ func (e *EVMIndexer) getBlocks(ctx context.Context, blockNums []uint64) ([]Block
 			}
 		}
 
-		coreBlock, err := e.convertBlock(block, blockReceipts)
+		typesBlock, err := e.convertBlock(block, blockReceipts)
 		if err != nil {
 			results = append(results, BlockResult{
 				Number: n, Block: nil,
 				Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
 			})
 		} else {
-			results = append(results, BlockResult{Number: n, Block: coreBlock})
+			results = append(results, BlockResult{Number: n, Block: typesBlock})
 		}
 	}
 
@@ -259,18 +260,18 @@ func (e *EVMIndexer) IsHealthy() bool {
 	return err == nil
 }
 
-func (e *EVMIndexer) convertBlock(eb *rpc.EthBlock, receipts map[string]*rpc.EthTransactionReceipt) (*core.Block, error) {
+func (e *EVMIndexer) convertBlock(eb *rpc.EthBlock, receipts map[string]*rpc.EthTransactionReceipt) (*types.Block, error) {
 	num, _ := parseHexUint64(eb.Number)
 	ts, _ := parseHexUint64(eb.Timestamp)
 
-	var allTransfers []core.Transaction
+	var allTransfers []types.Transaction
 	for _, tx := range eb.Transactions {
 		receipt := receipts[tx.Hash]
 		transfers := e.extractTransfers(tx, receipt, num, ts)
 		allTransfers = append(allTransfers, transfers...)
 	}
 
-	return &core.Block{
+	return &types.Block{
 		Number:       num,
 		Hash:         eb.Hash,
 		ParentHash:   eb.ParentHash,
@@ -279,13 +280,13 @@ func (e *EVMIndexer) convertBlock(eb *rpc.EthBlock, receipts map[string]*rpc.Eth
 	}, nil
 }
 
-func (e *EVMIndexer) extractTransfers(tx rpc.EthTransaction, receipt *rpc.EthTransactionReceipt, blockNumber, ts uint64) []core.Transaction {
-	var out []core.Transaction
+func (e *EVMIndexer) extractTransfers(tx rpc.EthTransaction, receipt *rpc.EthTransactionReceipt, blockNumber, ts uint64) []types.Transaction {
+	var out []types.Transaction
 	fee := e.calcFee(tx, receipt)
 
 	// Native transfer
 	if valueWei, err := parseHexBigInt(tx.Value); err == nil && valueWei.Cmp(big.NewInt(0)) > 0 && tx.To != "" {
-		out = append(out, core.Transaction{
+		out = append(out, types.Transaction{
 			TxHash:       tx.Hash,
 			NetworkId:    e.GetName(),
 			BlockNumber:  blockNumber,
@@ -311,7 +312,7 @@ func (e *EVMIndexer) extractTransfers(tx rpc.EthTransaction, receipt *rpc.EthTra
 		return out
 	}
 	seen := make(map[string]struct{}, len(out))
-	unique := make([]core.Transaction, 0, len(out))
+	unique := make([]types.Transaction, 0, len(out))
 	for _, t := range out {
 		key := t.TxHash + "|" + t.Type + "|" + t.AssetAddress + "|" + t.FromAddress + "|" + t.ToAddress + "|" + t.Amount + "|" + strconv.FormatUint(t.BlockNumber, 10)
 		if _, ok := seen[key]; ok {
@@ -323,8 +324,8 @@ func (e *EVMIndexer) extractTransfers(tx rpc.EthTransaction, receipt *rpc.EthTra
 	return unique
 }
 
-func (e *EVMIndexer) parseERC20Logs(txHash string, logs []rpc.EthLog, blockNumber, ts uint64) []core.Transaction {
-	var transfers []core.Transaction
+func (e *EVMIndexer) parseERC20Logs(txHash string, logs []rpc.EthLog, blockNumber, ts uint64) []types.Transaction {
+	var transfers []types.Transaction
 	for _, log := range logs {
 		if len(log.Topics) < 3 || log.Topics[0] != ERC20_TRANSFER_TOPIC {
 			continue
@@ -337,7 +338,7 @@ func (e *EVMIndexer) parseERC20Logs(txHash string, logs []rpc.EthLog, blockNumbe
 			continue
 		}
 
-		transfers = append(transfers, core.Transaction{
+		transfers = append(transfers, types.Transaction{
 			TxHash:       txHash,
 			NetworkId:    e.GetName(),
 			BlockNumber:  blockNumber,
@@ -353,7 +354,7 @@ func (e *EVMIndexer) parseERC20Logs(txHash string, logs []rpc.EthLog, blockNumbe
 	return transfers
 }
 
-func (e *EVMIndexer) parseERC20Input(tx rpc.EthTransaction, fee decimal.Decimal, blockNumber, ts uint64) *core.Transaction {
+func (e *EVMIndexer) parseERC20Input(tx rpc.EthTransaction, fee decimal.Decimal, blockNumber, ts uint64) *types.Transaction {
 	if len(tx.Input) < 10 {
 		return nil
 	}
@@ -372,7 +373,7 @@ func (e *EVMIndexer) parseERC20Input(tx rpc.EthTransaction, fee decimal.Decimal,
 		if err != nil {
 			return nil
 		}
-		return &core.Transaction{
+		return &types.Transaction{
 			TxHash:       tx.Hash,
 			NetworkId:    e.GetName(),
 			BlockNumber:  blockNumber,
@@ -398,7 +399,7 @@ func (e *EVMIndexer) parseERC20Input(tx rpc.EthTransaction, fee decimal.Decimal,
 		if err != nil {
 			return nil
 		}
-		return &core.Transaction{
+		return &types.Transaction{
 			TxHash:       tx.Hash,
 			NetworkId:    e.GetName(),
 			BlockNumber:  blockNumber,

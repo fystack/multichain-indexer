@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
@@ -26,9 +26,9 @@ type AuthConfig struct {
 	Headers  map[string]string `json:"headers"`  // Custom headers
 }
 
-// NodeToAuthConfig converts a core.Node to rpc.AuthConfig
-// This should be called after the config has been loaded and processed by core.Load()
-func NodeToAuthConfig(node core.Node) *AuthConfig {
+// NodeToAuthConfig converts a config.Node to rpc.AuthConfig
+// This should be called after the config has been loaded and processed by config.Load()
+func NodeToAuthConfig(node config.Node) *AuthConfig {
 	auth := &AuthConfig{}
 
 	// Priority 1: If headers are present, use custom auth

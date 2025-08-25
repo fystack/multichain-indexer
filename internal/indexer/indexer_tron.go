@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"github.com/btcsuite/btcutil/base58"
-	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 	"github.com/shopspring/decimal"
 )
@@ -22,7 +23,7 @@ import (
 const ERC_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
 type TronIndexer struct {
-	config      core.ChainConfig
+	config      config.ChainConfig
 	failover    *rpc.FailoverManager
 	rateLimiter *ratelimiter.PooledRateLimiter
 
@@ -30,7 +31,7 @@ type TronIndexer struct {
 	addrCache sync.Map // cache for address conversions
 }
 
-func NewTronIndexer(config core.ChainConfig) (*TronIndexer, error) {
+func NewTronIndexer(config config.ChainConfig) (*TronIndexer, error) {
 	var rl *ratelimiter.PooledRateLimiter
 	if config.Client.Throttle.RPS > 0 {
 		interval := time.Second / time.Duration(config.Client.Throttle.RPS)
@@ -69,7 +70,7 @@ func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) 
 	return latest, err
 }
 
-func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*core.Block, error) {
+func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*types.Block, error) {
 	var (
 		wg        sync.WaitGroup
 		tronBlock *rpc.TronBlock
@@ -113,10 +114,10 @@ func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*core.B
 	return t.processBlock(tronBlock, txns)
 }
 
-func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTransactionInfo) (*core.Block, error) {
+func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTransactionInfo) (*types.Block, error) {
 	// Pre-allocate slices with estimated capacity
 	estimatedTxCount := len(txns) * 2 // rough estimate
-	transactions := make([]core.Transaction, 0, estimatedTxCount)
+	transactions := make([]types.Transaction, 0, estimatedTxCount)
 
 	// Index tx info by txID for O(1) lookup
 	infoByID := make(map[string]*rpc.TronTransactionInfo, len(txns))
@@ -126,7 +127,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 		}
 	}
 
-	block := &core.Block{
+	block := &types.Block{
 		Number:       uint64(tronBlock.BlockHeader.RawData.Number),
 		Hash:         tronBlock.BlockID,
 		ParentHash:   tronBlock.BlockHeader.RawData.ParentHash,
@@ -170,7 +171,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 		}
 
 		for _, contract := range rawTx.RawData.Contract {
-			var tr *core.Transaction
+			var tr *types.Transaction
 			var err error
 
 			switch contract.Type {
@@ -199,13 +200,13 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 	return block, nil
 }
 
-func (t *TronIndexer) processTransferContract(param *rpc.TronContractParameter, txID string, blockNum, timestamp uint64) (*core.Transaction, error) {
+func (t *TronIndexer) processTransferContract(param *rpc.TronContractParameter, txID string, blockNum, timestamp uint64) (*types.Transaction, error) {
 	var transfer rpc.TronTransferContract
 	if err := json.Unmarshal(param.Value, &transfer); err != nil {
 		return nil, fmt.Errorf("failed to parse TransferContract: %w", err)
 	}
 
-	return &core.Transaction{
+	return &types.Transaction{
 		TxHash:       txID,
 		NetworkId:    t.GetName(),
 		BlockNumber:  blockNum,
@@ -218,13 +219,13 @@ func (t *TronIndexer) processTransferContract(param *rpc.TronContractParameter, 
 	}, nil
 }
 
-func (t *TronIndexer) processTransferAssetContract(param *rpc.TronContractParameter, txID string, blockNum, timestamp uint64) (*core.Transaction, error) {
+func (t *TronIndexer) processTransferAssetContract(param *rpc.TronContractParameter, txID string, blockNum, timestamp uint64) (*types.Transaction, error) {
 	var asset rpc.TronTransferAssetContract
 	if err := json.Unmarshal(param.Value, &asset); err != nil {
 		return nil, fmt.Errorf("failed to parse TransferAssetContract: %w", err)
 	}
 
-	return &core.Transaction{
+	return &types.Transaction{
 		TxHash:       txID,
 		NetworkId:    t.GetName(),
 		BlockNumber:  blockNum,
@@ -250,12 +251,12 @@ func (t *TronIndexer) tronToHexAddressCached(tronAddr string) string {
 }
 
 // parseTRC20Logs converts Tron logs that represent ERC-20-compatible Transfer events
-func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transaction {
+func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []types.Transaction {
 	if len(tx.Log) == 0 {
 		return nil
 	}
 
-	transfers := make([]core.Transaction, 0, len(tx.Log))
+	transfers := make([]types.Transaction, 0, len(tx.Log))
 
 	for _, log := range tx.Log {
 		if len(log.Topics) < 3 {
@@ -276,7 +277,7 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []core.Transac
 			continue
 		}
 
-		transfers = append(transfers, core.Transaction{
+		transfers = append(transfers, types.Transaction{
 			TxHash:       tx.ID,
 			NetworkId:    t.GetName(),
 			BlockNumber:  uint64(tx.BlockNumber),

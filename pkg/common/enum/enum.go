@@ -5,8 +5,8 @@ type WalletType string
 type KeyType string
 type AddressType string
 type AddressStandard string
-type WalletRole string
-type WalletPurpose string
+type ChainType string
+type BFBackend string
 
 const (
 	WalletTypeStandard WalletType = "standard"
@@ -27,22 +27,15 @@ const (
 )
 
 const (
-	AddressStandardBtcP2PKH  = "btc_p2pkh"
-	AddressStandardBtcP2SH   = "btc_p2sh"
-	AddressStandardBtcBech32 = "btc_bech32"
+	ChainTypeEVM  ChainType = "evm"
+	ChainTypeTron ChainType = "tron"
 )
 
-var (
-	WalletRoleAdmin  WalletRole = "wallet_admin"
-	WalletRoleSigner WalletRole = "wallet_signer"
-	WalletRoleViewer WalletRole = "wallet_viewer"
-)
+func (c ChainType) String() string {
+	return string(c)
+}
 
-var (
-	WalletPurposeGeneral    WalletPurpose = "general"
-	WalletPurposeGasTank    WalletPurpose = "gas_tank"
-	WalletPurposeDeployment WalletPurpose = "deployment"
-	WalletPurposeCustody    WalletPurpose = "custody"
-	WalletPurposeUser       WalletPurpose = "user"
-	WalletPurposePayment    WalletPurpose = "payment"
+const (
+	BFBackendRedis    BFBackend = "redis"
+	BFBackendInMemory BFBackend = "in_memory"
 )

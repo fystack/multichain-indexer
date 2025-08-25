@@ -1,28 +1,10 @@
-package core
+package types
 
 import (
 	"encoding/json"
 	"fmt"
 
 	"github.com/shopspring/decimal"
-)
-
-type ChainType string
-
-const (
-	ChainTypeEVM  ChainType = "evm"
-	ChainTypeTron ChainType = "tron"
-)
-
-func (c ChainType) String() string {
-	return string(c)
-}
-
-type BFBackend string
-
-const (
-	BFBackendRedis    BFBackend = "redis"
-	BFBackendInMemory BFBackend = "in_memory"
 )
 
 type Block struct {

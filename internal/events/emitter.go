@@ -4,8 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/fystack/transaction-indexer/internal/core"
-
+	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/nats-io/nats.go"
 )
 
@@ -33,12 +32,12 @@ func NewEmitter(natsURL, subjectPrefix string) (*Emitter, error) {
 	}, nil
 }
 
-func (e *Emitter) EmitBlock(chain string, block *core.Block) error {
+func (e *Emitter) EmitBlock(chain string, block *types.Block) error {
 	// TODO: implement
 	return nil
 }
 
-func (e *Emitter) EmitTransaction(chain string, tx *core.Transaction) error {
+func (e *Emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	txBytes, err := tx.MarshalBinary()
 	if err != nil {
 		return err

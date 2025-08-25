@@ -3,7 +3,7 @@ package indexer
 import (
 	"context"
 
-	"github.com/fystack/transaction-indexer/internal/core"
+	"github.com/fystack/transaction-indexer/pkg/common/types"
 )
 
 type ErrorType string
@@ -23,14 +23,14 @@ type Error struct {
 
 type BlockResult struct {
 	Number uint64 // Block number for debug
-	Block  *core.Block
+	Block  *types.Block
 	Error  *Error // Nil if OK
 }
 
 type Indexer interface {
 	GetName() string
 	GetLatestBlockNumber(ctx context.Context) (uint64, error)
-	GetBlock(ctx context.Context, number uint64) (*core.Block, error)
+	GetBlock(ctx context.Context, number uint64) (*types.Block, error)
 
 	// batch version: each block can have its own error
 	GetBlocks(ctx context.Context, from, to uint64) ([]BlockResult, error)

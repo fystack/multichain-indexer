@@ -1,4 +1,4 @@
-package core
+package config
 
 import (
 	"errors"
@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/goccy/go-yaml"
 )
 
@@ -51,13 +52,13 @@ func (c *ChainsConfig) UnmarshalYAML(b []byte) error {
 }
 
 type ChainConfig struct {
-	Name         ChainType     `yaml:"name"`
-	Nodes        []Node        `yaml:"nodes"` // supports http & ws
-	StartBlock   uint64        `yaml:"start_block"`
-	FromLatest   bool          `yaml:"from_latest" default:"true"`
-	BatchSize    int           `yaml:"batch_size"`
-	PollInterval time.Duration `yaml:"poll_interval"`
-	Client       ClientCfg     `yaml:"client"`
+	Name         enum.ChainType `yaml:"name"`
+	Nodes        []Node         `yaml:"nodes"` // supports http & ws
+	StartBlock   uint64         `yaml:"start_block"`
+	FromLatest   bool           `yaml:"from_latest" default:"true"`
+	BatchSize    int            `yaml:"batch_size"`
+	PollInterval time.Duration  `yaml:"poll_interval"`
+	Client       ClientCfg      `yaml:"client"`
 }
 
 type Node struct {
@@ -100,7 +101,7 @@ type StorageCfg struct {
 }
 
 type BloomFilterCfg struct {
-	Backend  BFBackend              `yaml:"backend"`
+	Backend  enum.BFBackend         `yaml:"backend"`
 	Redis    RedisBloomFilterCfg    `yaml:"redis"`
 	InMemory InMemoryBloomFilterCfg `yaml:"in_memory"`
 }
