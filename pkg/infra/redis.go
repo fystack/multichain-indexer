@@ -5,7 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	logger "log/slog"
+	"log/slog"
 	"os"
 	"runtime"
 	"sync"
@@ -117,7 +117,7 @@ func NewRedisClient(addr string, password string, environment string) RedisClien
 			"./certs/redis/redis-client.key",
 		)
 		if err != nil {
-			logger.Error("Failed to create TLS config for redis client: ", err)
+			slog.Error("Failed to create TLS config for redis client", "error", err)
 			return nil
 		}
 		opts.TLSConfig = tlsCfg
@@ -130,9 +130,9 @@ func NewRedisClient(addr string, password string, environment string) RedisClien
 	defer cancel()
 
 	if pong, err := client.Ping(ctx).Result(); err != nil {
-		logger.Error("Failed to connect to redis", err)
+		slog.Error("Failed to connect to redis", "error", err)
 	} else {
-		logger.Info("Connected to Redis", "pong", pong)
+		slog.Info("Connected to Redis", "pong", pong)
 	}
 
 	return &RedisWrapper{client: client}

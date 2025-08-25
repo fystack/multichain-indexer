@@ -4,7 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
-	logger "log/slog"
+	"log/slog"
 	"math/big"
 	"os"
 	"regexp"
@@ -32,7 +32,7 @@ func CreateSlug(input string) string {
 	// Remove special characters
 	reg, err := regexp.Compile("[^a-zA-Z0-9]+")
 	if err != nil {
-		logger.Error("Error creating slug", err)
+		slog.Error("Error creating slug", "error", err)
 		return ""
 	}
 	processedString := reg.ReplaceAllString(input, " ")
@@ -60,7 +60,7 @@ func GenerateRandomString(length int, charSet string) string {
 	for i := range result {
 		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(charSet))))
 		if err != nil {
-			logger.Error("Failed to generate secure random index", err)
+			slog.Error("Failed to generate secure random index", "error", err)
 			return ""
 		}
 		result[i] = charSet[idx.Int64()]
@@ -98,7 +98,7 @@ func GenerateBIP39ReadableCode(wordCount int) string {
 	for i := 0; i < wordCount; i++ {
 		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(cachedWordList))))
 		if err != nil {
-			logger.Error("Failed to generate secure index for BIP39 words", err)
+			slog.Error("Failed to generate secure index for BIP39 words", "error", err)
 			return ""
 		}
 		parts[i] = cachedWordList[idx.Int64()]
@@ -112,7 +112,7 @@ func GenerateBIP39CodeWithHashSuffix(wordCount int) string {
 	code := GenerateBIP39ReadableCode(wordCount)
 	suffix, err := rand.Int(rand.Reader, big.NewInt(10000)) // 4-digit random number
 	if err != nil {
-		logger.Error("Failed to generate secure suffix", err)
+		slog.Error("Failed to generate secure suffix", "error", err)
 		return code // Return without suffix if there's an error
 	}
 	return fmt.Sprintf("%s_%04d", code, suffix.Int64())

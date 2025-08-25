@@ -10,6 +10,7 @@ import (
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
@@ -116,10 +117,8 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 		return fmt.Errorf("rpc latest block: %w", err)
 	}
 
-	// For fresh starts with large block numbers, limit catchup range
-	const maxCatchupBlocks = 100000
-	if startBlockNum == 1 && endBlock > maxCatchupBlocks {
-		startBlockNum = endBlock - maxCatchupBlocks
+	if startBlockNum == 1 && endBlock > constant.MaxCatchupBlocks {
+		startBlockNum = endBlock - constant.MaxCatchupBlocks
 		slog.Info("Limiting catchup range for fresh start", "chain", chainName,
 			"original_start", 1, "adjusted_start", startBlockNum)
 	}

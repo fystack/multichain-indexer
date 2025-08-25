@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	logger "log/slog"
+	"sync"
 
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/infra"
@@ -14,6 +15,7 @@ import (
 )
 
 type redisBloomFilter struct {
+	mu                sync.RWMutex // Add mutex for thread safety
 	redisClient       infra.RedisClient
 	walletAddressRepo repository.Repository[model.WalletAddress]
 	batchSize         int
@@ -62,6 +64,9 @@ func (rbf *redisBloomFilter) getKey(addressType enum.AddressType) string {
 }
 
 func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
+	rbf.mu.Lock()
+	defer rbf.mu.Unlock()
+
 	types := []enum.AddressType{
 		enum.AddressTypeEvm,
 		// enum.AddressTypeBtc,
@@ -143,6 +148,9 @@ func (rbf *redisBloomFilter) addBatchToBloom(ctx context.Context, key string, ad
 }
 
 func (rbf *redisBloomFilter) Add(address string, addressType enum.AddressType) {
+	rbf.mu.Lock()
+	defer rbf.mu.Unlock()
+
 	key := rbf.getKey(addressType)
 	client := rbf.redisClient.GetClient()
 
@@ -156,6 +164,9 @@ func (rbf *redisBloomFilter) AddBatch(addresses []string, addressType enum.Addre
 	if len(addresses) == 0 {
 		return
 	}
+	rbf.mu.Lock()
+	defer rbf.mu.Unlock()
+
 	key := rbf.getKey(addressType)
 	if err := rbf.addBatchToBloom(rbf.ctx, key, addresses); err != nil {
 		logger.Error("Failed to add batch to Redis bloom filter", "error", err)
@@ -163,6 +174,9 @@ func (rbf *redisBloomFilter) AddBatch(addresses []string, addressType enum.Addre
 }
 
 func (rbf *redisBloomFilter) Contains(address string, addressType enum.AddressType) bool {
+	rbf.mu.RLock()
+	defer rbf.mu.RUnlock()
+
 	key := rbf.getKey(addressType)
 	client := rbf.redisClient.GetClient()
 
@@ -175,11 +189,17 @@ func (rbf *redisBloomFilter) Contains(address string, addressType enum.AddressTy
 }
 
 func (rbf *redisBloomFilter) Clear(addressType enum.AddressType) {
+	rbf.mu.Lock()
+	defer rbf.mu.Unlock()
+
 	key := rbf.getKey(addressType)
 	_ = rbf.redisClient.Del(key)
 }
 
 func (rbf *redisBloomFilter) Stats(addressType enum.AddressType) map[string]any {
+	rbf.mu.RLock()
+	defer rbf.mu.RUnlock()
+
 	logger.Info("Redis Bloom filter not supported yet")
 	return nil
 }

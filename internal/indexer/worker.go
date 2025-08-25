@@ -99,7 +99,10 @@ func (w *Worker) run(job func() error) {
 		select {
 		case <-w.ctx.Done():
 			if w.currentBlock > 0 {
-				_ = w.blockStore.SaveLatestBlock(w.chain.GetName(), w.currentBlock-1)
+				err := w.blockStore.SaveLatestBlock(w.chain.GetName(), w.currentBlock-1)
+				if err != nil {
+					slog.Error("Error saving latest block", "chain", w.chain.GetName(), "error", err)
+				}
 			}
 			slog.Info("Worker stopped", "chain", w.chain.GetName())
 			return
