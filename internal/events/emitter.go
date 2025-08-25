@@ -50,7 +50,7 @@ func (e *Emitter) EmitError(chain string, err error) error {
 	return nil
 }
 
-func (e *Emitter) emit(event IndexerEvent) error {
+func (e *Emitter) Emit(event IndexerEvent) error {
 	data, err := json.Marshal(event)
 	if err != nil {
 		return err

@@ -85,9 +85,7 @@ func ExpandTildePath(s string) string {
 
 func HexToBytes(hexStr string) ([]byte, error) {
 	// Remove 0x prefix if it exists
-	if strings.HasPrefix(hexStr, "0x") {
-		hexStr = hexStr[2:]
-	}
+	hexStr = strings.TrimPrefix(hexStr, "0x")
 	return hex.DecodeString(hexStr)
 }
 

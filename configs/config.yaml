@@ -15,9 +15,9 @@ chains:
     nodes:
       # Primary: TronGrid with API key (15 QPS limit)
       - url: "https://api.trongrid.io"
-        headers:
-          TRON-PRO-API-KEY: "${TRONGRID_TOKEN}"
-        api_key_env: "TRONGRID_TOKEN"
+        # headers:
+        #   TRON-PRO-API-KEY: "${TRONGRID_TOKEN}"
+        # api_key_env: "TRONGRID_TOKEN"
       # Fallback: Public nodes (lower rate limits, no key needed)
       - url: "https://tron-rpc.publicnode.com"
       - url: "https://tron.drpc.org"

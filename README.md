@@ -19,6 +19,7 @@ A high-performance, production-ready blockchain transaction indexer supporting m
 - 💾 **Persistent Storage** - BadgerDB with optimized block storage
 - 🚀 **Concurrent Processing** - Multiple chains processed simultaneously
 - 🔍 **Auto-Catchup** - Intelligent gap detection and historical processing
+- 🔍 **Bloom Filter** - Redis-based address filtering for performance
 
 ### **Advanced Monitoring**
 - 📈 **Comprehensive Logging** - Structured logging with slog
@@ -35,8 +36,10 @@ A high-performance, production-ready blockchain transaction indexer supporting m
 ## 📦 Installation
 
 ### Prerequisites
-- **Go 1.24+**
+- **Go 1.24.5+**
 - **NATS Server** (for real-time streaming)
+- **Redis** (for bloom filter and caching)
+- **PostgreSQL** (for transaction storage)
 
 ### Build from Source
 ```bash
@@ -80,23 +83,63 @@ chains:
           TRON-PRO-API-KEY: "${TRONGRID_TOKEN}"
         api_key_env: "TRONGRID_TOKEN"
       - url: "https://tron-rpc.publicnode.com"
-    start_block: 74399849
+      - url: "https://tron.drpc.org"
+    start_block: 75144237
+    from_latest: false
     poll_interval: "4s"
+    client:
+      timeout: "15s"
+      max_retries: 5
+      retry_delay: "10s"
+      throttle:
+        rps: 12
+        burst: 15
 
   evm:
     name: "ethereum-mainnet"
     nodes:
       - url: "https://ethereum-rpc.publicnode.com"
       - url: "https://1rpc.io/eth"
+      # - url: "https://eth-mainnet.g.alchemy.com/v2/${API_KEY}"
+        # api_key_env: "ALCHEMY_KEY"
     start_block: 23080871
+    from_latest: false
+    client:
+      timeout: "30s"
+      throttle:
+        rps: 5
+        burst: 10
 
 nats:
   url: "nats://localhost:4222"
   subject_prefix: "indexer.transaction"
 
 storage:
-  type: "memory"           # memory | badger
-  directory: "data/badger" # for persistent storage
+  type: "memory"           # memory | badger | postgres
+  directory: "data/badger" # only used for badger
+
+db:
+  type: "postgres"
+  url: "postgres://postgres:postgres@localhost:5432/postgres"
+
+bloomfilter:
+  backend: "redis"         # redis | in_memory
+  redis:
+    wallet_address_repo: "wallet_address"
+    batch_size: 1000
+    key_prefix: "bloomfilter"
+    error_rate: 0.01
+    capacity: 1000000
+  in_memory:
+    wallet_address_repo: "wallet_address"
+    expected_items: 1000000
+    false_positive_rate: 0.01
+    batch_size: 1000
+
+redis:
+  url: "localhost:6379"
+  password: ""
+  environment: "development"
 ```
 
 ## 🎯 Usage
@@ -203,6 +246,15 @@ The indexer includes a sophisticated failed block management system:
 - **Status Tracking**: Monitor resolved vs unresolved failed blocks
 - **Persistent Storage**: Failed blocks survive application restarts
 
+### **Bloom Filter System**
+
+The indexer uses bloom filters for efficient address filtering:
+
+- **Redis-based**: Scalable bloom filter using Redis BF commands
+- **In-memory fallback**: Local bloom filter for development/testing
+- **Thread-safe**: Proper mutex protection for concurrent access
+- **Configurable**: Adjustable error rate and capacity
+
 ### **Flow Diagram**
 ```mermaid
 graph TB
@@ -224,7 +276,7 @@ graph TB
         end
         
         subgraph "Tron Workers"
-            TRON_REG["Tron Regular Worker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest Tron blocks<br/>📍 Current: 58,000,000+"]
+            TRON_REG["Tron Regular Worker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest Tron blocks<br/>📍 Current: 75,000,000+"]
             
             TRON_CATCH["Tron Catchup Worker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical Tron blocks<br/>📍 Range: Auto-detected gap"]
         end
@@ -235,6 +287,10 @@ graph TB
             RPC["RPC Pools<br/>• EVM providers<br/>• Tron providers<br/>• Rate limiting<br/>• Failover"]
             
             NATS["NATS Events<br/>• indexer.transaction.evm<br/>• indexer.transaction.tron"]
+            
+            REDIS["Redis<br/>• Bloom filters<br/>• Address caching<br/>• Rate limiting"]
+            
+            DB["PostgreSQL<br/>• Transaction storage<br/>• Wallet addresses<br/>• Failed blocks"]
         end
         
         subgraph "Auto-Detection Logic"
@@ -256,18 +312,26 @@ graph TB
     EVM_REG --> KV
     EVM_REG --> RPC
     EVM_REG --> NATS
+    EVM_REG --> REDIS
+    EVM_REG --> DB
     
     EVM_CATCH --> KV
     EVM_CATCH --> RPC
     EVM_CATCH --> NATS
+    EVM_CATCH --> REDIS
+    EVM_CATCH --> DB
     
     TRON_REG --> KV
     TRON_REG --> RPC
     TRON_REG --> NATS
+    TRON_REG --> REDIS
+    TRON_REG --> DB
     
     TRON_CATCH --> KV
     TRON_CATCH --> RPC
     TRON_CATCH --> NATS
+    TRON_CATCH --> REDIS
+    TRON_CATCH --> DB
     
     style CMD fill:#e8f5e8
     style EVM_REG fill:#e1f5fe
@@ -275,6 +339,8 @@ graph TB
     style TRON_REG fill:#e1f5fe
     style TRON_CATCH fill:#f3e5f5
     style DETECT fill:#fff3e0
+    style REDIS fill:#ffebee
+    style DB fill:#e8f5e8
 ```
 
 
@@ -309,7 +375,6 @@ tail -f logs/failed_blocks_$(date +%Y-%m-%d).log
 ├── cmd/indexer/           # CLI application (simplified single command)
 ├── configs/               # Configuration files
 ├── internal/
-│   ├── core/             # Core types and config
 │   ├── indexer/          # Indexing logic
 │   │   ├── manager.go    # Multi-chain orchestration + BlockStore
 │   │   ├── worker.go     # Unified worker (regular/catchup modes)
@@ -320,15 +385,29 @@ tail -f logs/failed_blocks_$(date +%Y-%m-%d).log
 │   │   ├── client.go     # Generic RPC client
 │   │   ├── evm.go        # Ethereum-specific client
 │   │   └── tron.go       # TRON-specific client
-│   ├── events/           # NATS event streaming
+│   └── events/           # NATS event streaming
+├── pkg/
+│   ├── addressbloomfilter/ # Bloom filter implementations
+│   │   ├── redis_bloomfilter.go # Redis-based bloom filter
+│   │   └── inmemory_bloomfilter.go # In-memory bloom filter
+│   ├── common/           # Utilities
+│   │   ├── config/       # Configuration loading
+│   │   ├── logger/       # Structured logging
+│   │   ├── stringutils/  # String utilities
+│   │   ├── constant/     # Constants
+│   │   ├── enum/         # Enumerations
+│   │   └── types/        # Common types
+│   ├── infra/            # Infrastructure
+│   │   ├── redis.go      # Redis client
+│   │   └── db.go         # Database connections
 │   ├── kvstore/          # Storage abstraction
 │   │   ├── kvstore.go    # Interface
 │   │   ├── badger.go     # BadgerDB implementation
 │   │   └── failed_block_store.go # Failed block management
-│   └── common/           # Utilities
-│       ├── ratelimiter/  # Rate limiting
-│       ├── retry/        # Retry logic
-│       └── bloomfilter/  # Bloom filter
+│   ├── model/            # Data models
+│   ├── repository/       # Repository patterns
+│   ├── ratelimiter/      # Rate limiting
+│   └── retry/            # Retry logic
 ├── logs/                 # Log files
 └── data/                 # Persistent storage
 ```
@@ -369,7 +448,7 @@ chains:
 go test ./...
 
 # Test specific package
-go test ./internal/kvstore -v
+go test ./pkg/kvstore -v
 
 # Test with coverage
 go test -cover ./...
@@ -396,17 +475,28 @@ throttle:
   burst: 16 # Allow bursts up to 16
 ```
 
+**Bloom Filter**: Configure for address filtering performance
+```yaml
+bloomfilter:
+  backend: "redis"
+  redis:
+    error_rate: 0.01      # 1% false positive rate
+    capacity: 1000000     # 1M addresses
+    batch_size: 1000      # Batch size for operations
+```
+
 ### **Memory Usage**
-- **Minimal**: ~50MB base memory usage
-- **Scaling**: +~10MB per active chain
+- **Minimal**: ~100MB base memory usage
+- **Scaling**: +~20MB per active chain
 - **Storage**: BadgerDB uses ~1GB per million blocks indexed
+- **Redis**: ~50MB for bloom filters and caching
 
 ### **Throughput**
-- **Ethereum**: ~500-1000 blocks/minute (depending on RPC limits)
-- **TRON**: ~800-1200 blocks/minute (with API key)
+- **Ethereum**: ~300-800 blocks/minute (depending on RPC limits)
+- **TRON**: ~600-1000 blocks/minute (with API key)
 - **Multi-Chain**: Linear scaling per additional chain
-- **Catchup Processing**: ~200-800 blocks/minute (historical data)
-- **Failed Block Recovery**: ~100-500 blocks/minute
+- **Catchup Processing**: ~150-600 blocks/minute (historical data)
+- **Failed Block Recovery**: ~50-300 blocks/minute
 
 ## 🛠️ Production Deployment
 
@@ -427,16 +517,58 @@ COPY configs/ configs/
 CMD ["./indexer", "index", "--chain=evm,tron", "--catchup"]
 ```
 
+### **Docker Compose**
+```yaml
+version: '3.8'
+services:
+  indexer:
+    build: .
+    environment:
+      - TRONGRID_TOKEN=${TRONGRID_TOKEN}
+    depends_on:
+      - nats
+      - redis
+      - postgres
+    volumes:
+      - ./data:/root/data
+      - ./logs:/root/logs
+
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+```
+
 ### **Systemd Service**
 ```ini
 [Unit]
 Description=Blockchain Transaction Indexer
-After=network.target
+After=network.target postgresql.service redis.service nats.service
 
 [Service]
 Type=simple
 User=indexer
 WorkingDirectory=/opt/indexer
+Environment=TRONGRID_TOKEN=your_token_here
 ExecStart=/opt/indexer/indexer index --chain=evm,tron --catchup
 Restart=always
 RestartSec=5
@@ -450,6 +582,8 @@ WantedBy=multi-user.target
 - Check NATS connectivity
 - Verify block progression
 - Monitor failed block count
+- Check Redis bloom filter health
+- Verify PostgreSQL connection
 
 ## 📄 License
 
@@ -467,4 +601,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **NATS** - Real-time messaging system
 - **Kong** - Command-line argument parsing
 - **slog** - Structured logging
+- **Redis** - In-memory data structure store
+- **PostgreSQL** - Advanced open source database
 
