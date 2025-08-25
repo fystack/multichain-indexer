@@ -62,7 +62,13 @@ func (rbf *redisBloomFilter) getKey(addressType enum.AddressType) string {
 }
 
 func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
-	types := []enum.AddressType{enum.AddressTypeEvm, enum.AddressTypeSolana}
+	types := []enum.AddressType{
+		enum.AddressTypeEvm,
+		// enum.AddressTypeBtc,
+		// enum.AddressTypeSolana,
+		// enum.AddressTypeAptos,
+		enum.AddressTypeTron,
+	}
 
 	for _, addrType := range types {
 		key := rbf.getKey(addrType)
@@ -109,6 +115,8 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 				return w.Address
 			})
 
+			logger.Info("Processing addresses", "addressType", addrType, "count", len(addresses), "addresses", addresses)
+
 			if err := rbf.addBatchToBloom(ctx, key, addresses); err != nil {
 				return err
 			}
@@ -140,7 +148,7 @@ func (rbf *redisBloomFilter) Add(address string, addressType enum.AddressType) {
 
 	_, err := client.Do(rbf.ctx, "BF.ADD", key, address).Result()
 	if err != nil {
-		logger.Error("Failed to add address to Redis bloom filter", err)
+		logger.Error("Failed to add address to Redis bloom filter", "error", err)
 	}
 }
 
@@ -150,7 +158,7 @@ func (rbf *redisBloomFilter) AddBatch(addresses []string, addressType enum.Addre
 	}
 	key := rbf.getKey(addressType)
 	if err := rbf.addBatchToBloom(rbf.ctx, key, addresses); err != nil {
-		logger.Error("Failed to add batch to Redis bloom filter", err)
+		logger.Error("Failed to add batch to Redis bloom filter", "error", err)
 	}
 }
 
@@ -160,7 +168,7 @@ func (rbf *redisBloomFilter) Contains(address string, addressType enum.AddressTy
 
 	result, err := client.Do(rbf.ctx, "BF.EXISTS", key, address).Bool()
 	if err != nil {
-		logger.Error("Error checking Redis bloom filter", err)
+		logger.Error("Error checking Redis bloom filter", "error", err)
 		return false
 	}
 	return result

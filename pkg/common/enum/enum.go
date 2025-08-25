@@ -23,6 +23,7 @@ const (
 	AddressTypeBtc    AddressType = "btc"
 	AddressTypeSolana AddressType = "sol"
 	AddressTypeAptos  AddressType = "aptos"
+	AddressTypeTron   AddressType = "tron"
 )
 
 const (

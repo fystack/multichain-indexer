@@ -23,14 +23,14 @@ func SetGlobalDB(c *gorm.DB) {
 	globalDB = c
 }
 
-// GetGlobalRedisClient returns the process-wide Redis client (may be nil).
+// GetGlobalDB returns the process-wide DB client (may be nil).
 func GetGlobalDB() *gorm.DB {
 	globalDBMu.RLock()
-	defer globalRedisMu.RUnlock()
+	defer globalDBMu.RUnlock()
 	return globalDB
 }
 
-// MustGlobalRedisClient returns the global client or panics if not initialized.
+// MustGlobalDB returns the global DB client or panics if not initialized.
 func MustGlobalDB() *gorm.DB {
 	c := GetGlobalDB()
 	if c == nil {

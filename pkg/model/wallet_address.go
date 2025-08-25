@@ -10,3 +10,7 @@ type WalletAddress struct {
 	Type     enum.AddressType     `gorm:"type:address_type;not null" json:"type"`
 	Standard enum.AddressStandard `json:"standard"`
 }
+
+func (WalletAddress) TableName() string {
+	return "wallet_address"
+}

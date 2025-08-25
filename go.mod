@@ -5,6 +5,7 @@ go 1.24.5
 require (
 	github.com/alecthomas/kong v1.12.1
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
+	github.com/btcsuite/btcutil v1.0.2
 	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/dgraph-io/badger/v4 v4.8.0
 	github.com/goccy/go-yaml v1.18.0

@@ -42,13 +42,13 @@ type Worker struct {
 }
 
 // NewWorker creates a worker for regular indexing
-func NewWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *Worker {
-	return newWorkerWithMode(chain, config, kv, blockStore, emitter, addressBF, ModeRegular, 0, 0)
+func NewWorker(ctx context.Context, chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *Worker {
+	return newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeRegular, 0, 0)
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, startBlock, endBlock uint64) *Worker {
-	return newWorkerWithMode(chain, config, kv, blockStore, emitter, addressBF, ModeCatchup, startBlock, endBlock)
+func NewCatchupWorker(ctx context.Context, chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, startBlock, endBlock uint64) *Worker {
+	return newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeCatchup, startBlock, endBlock)
 }
 
 // Start the worker
@@ -195,10 +195,41 @@ func (w *Worker) emitBlock(block *core.Block) {
 	if w.addressBloomFilter == nil {
 		return
 	}
+	// Add this line to confirm block processing
+	// slog.Info("Processing block", "chain", w.chain.GetName(), "block", block.Number, "transactions", len(block.Transactions))
+
+	// Determine address type based on chain
+	addressType := w.getAddressTypeForChain()
+
 	for _, tx := range block.Transactions {
-		if yes := w.addressBloomFilter.Contains(tx.ToAddress, enum.AddressTypeEvm); yes {
-			_ = w.emitter.EmitTransaction(w.chain.GetName(), &tx)
+		if yes := w.addressBloomFilter.Contains(tx.ToAddress, addressType); yes {
+			slog.Info("Emitting transaction", "chain", w.chain.GetName(), "from", tx.FromAddress, "to", tx.ToAddress, "addressType", addressType)
 		}
+		if yes := w.addressBloomFilter.Contains(tx.FromAddress, addressType); yes {
+			slog.Info("Emitting transaction", "chain", w.chain.GetName(), "from", tx.FromAddress, "to", tx.ToAddress, "addressType", addressType)
+		}
+		// _ = w.emitter.EmitTransaction(w.chain.GetName(), &tx)
+	}
+}
+
+// getAddressTypeForChain determines the correct address type based on the chain
+func (w *Worker) getAddressTypeForChain() enum.AddressType {
+	chainName := w.chain.GetName()
+
+	switch chainName {
+	case "evm":
+		return enum.AddressTypeEvm
+	case "tron-mainnet":
+		return enum.AddressTypeTron
+	case "solana":
+		return enum.AddressTypeSolana
+	case "bitcoin":
+		return enum.AddressTypeBtc
+	case "aptos":
+		return enum.AddressTypeAptos
+	default:
+		// Default to EVM for unknown chains
+		return enum.AddressTypeEvm
 	}
 }
 
@@ -224,8 +255,8 @@ func (w *Worker) loadCatchupProgress() uint64 {
 	return w.catchupStart
 }
 
-func newWorkerWithMode(chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
-	ctx, cancel := context.WithCancel(context.Background())
+func newWorkerWithMode(ctx context.Context, chain Indexer, config core.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
+	ctx, cancel := context.WithCancel(ctx)
 	logFile, date, _ := createLogFile()
 
 	w := &Worker{

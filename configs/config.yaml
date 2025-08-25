@@ -21,7 +21,7 @@ chains:
       # Fallback: Public nodes (lower rate limits, no key needed)
       - url: "https://tron-rpc.publicnode.com"
       - url: "https://tron.drpc.org"
-    start_block: 74399849
+    start_block: 75144237
     from_latest: false
     poll_interval: "4s"  # Slightly slower to respect rate limits
     client:
@@ -62,7 +62,6 @@ db:
   url: "postgres://postgres:postgres@localhost:5432/postgres"
 
 bloomfilter:
-  enabled: true
   backend: "redis"
   redis:
     wallet_address_repo: "wallet_address"

@@ -1,0 +1,193 @@
+package addressbloomfilter
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/model"
+	"github.com/fystack/transaction-indexer/pkg/repository"
+	"github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+)
+
+func TestRedisBloomFilter_AddAndContains(t *testing.T) {
+	// Skip if Redis is not available
+	redisAddr := "localhost:6379"
+	if testing.Short() {
+		t.Skip("Skipping Redis integration test in short mode")
+	}
+
+	// Create a real Redis client for testing
+	client := redis.NewClient(&redis.Options{
+		Addr: redisAddr,
+		DB:   1, // Use DB 1 to avoid conflicts
+	})
+	defer client.Close()
+
+	// Test connection
+	ctx := context.Background()
+	if err := client.Ping(ctx).Err(); err != nil {
+		t.Skipf("Redis not available at %s: %v", redisAddr, err)
+	}
+
+	// Check if RedisBloom module is available
+	modules, err := client.Do(ctx, "MODULE", "LIST").Result()
+	if err != nil {
+		t.Skipf("Cannot check Redis modules: %v", err)
+	}
+
+	hasBloom := false
+	if modulesList, ok := modules.([]interface{}); ok {
+		for _, module := range modulesList {
+			if moduleMap, ok := module.(map[interface{}]interface{}); ok {
+				if name, ok := moduleMap["name"].(string); ok && name == "bf" {
+					hasBloom = true
+					break
+				}
+			}
+		}
+	}
+
+	if !hasBloom {
+		t.Skip("RedisBloom module not available")
+	}
+
+	// Create a mock repository for testing
+	mockRepo := &MockWalletAddressRepo{}
+
+	// Create the bloom filter
+	rbf := NewRedisBloomFilter(RedisBloomConfig{
+		RedisClient:       &RedisWrapper{client: client},
+		WalletAddressRepo: mockRepo,
+		KeyPrefix:         "test_bloom",
+		ErrorRate:         0.01,
+		Capacity:          1000,
+		BatchSize:         100,
+	})
+
+	// Test addresses
+	testAddresses := []string{
+		"0x742d35Cc6634C0532925a3b8D4C9db96C4b4d8b6",
+		"0x1234567890123456789012345678901234567890",
+		"TAWdqnuYCNU3dKsi7pR8d7sDkx1Evb2giV",
+		"TT1j2adMBb6bF2K8C2LX1QkkmSXHjiaAfw",
+	}
+
+	addressType := enum.AddressTypeEvm
+
+	// Clear any existing bloom filter
+	rbf.Clear(addressType)
+
+	// Test 1: Add single address and check
+	t.Run("AddSingleAddress", func(t *testing.T) {
+		address := testAddresses[0]
+
+		// Add the address
+		rbf.Add(address, addressType)
+
+		// Check if it exists
+		exists := rbf.Contains(address, addressType)
+		assert.True(t, exists, "Address should exist in bloom filter")
+
+		// Check non-existent address
+		nonExistent := "0x9999999999999999999999999999999999999999"
+		notExists := rbf.Contains(nonExistent, addressType)
+		assert.False(t, notExists, "Non-existent address should not be in bloom filter")
+	})
+
+	// Test 2: Add batch addresses and check
+	t.Run("AddBatchAddresses", func(t *testing.T) {
+		batchAddresses := testAddresses[1:3]
+
+		// Add batch
+		rbf.AddBatch(batchAddresses, addressType)
+
+		// Check each address
+		for _, addr := range batchAddresses {
+			exists := rbf.Contains(addr, addressType)
+			assert.True(t, exists, "Address %s should exist in bloom filter", addr)
+		}
+
+		// Check non-existent address
+		nonExistent := "0x8888888888888888888888888888888888888888"
+		notExists := rbf.Contains(nonExistent, addressType)
+		assert.False(t, notExists, "Non-existent address should not be in bloom filter")
+	})
+
+	// Test 3: Test different address types
+	t.Run("DifferentAddressTypes", func(t *testing.T) {
+		evmAddress := testAddresses[0]
+		tronAddress := testAddresses[2]
+
+		// Add to different types
+		rbf.Add(evmAddress, enum.AddressTypeEvm)
+		rbf.Add(tronAddress, enum.AddressTypeTron)
+
+		// Check EVM address in EVM filter
+		exists := rbf.Contains(evmAddress, enum.AddressTypeEvm)
+		assert.True(t, exists, "EVM address should exist in EVM bloom filter")
+
+		// Check Tron address in Tron filter
+		exists = rbf.Contains(tronAddress, enum.AddressTypeTron)
+		assert.True(t, exists, "Tron address should exist in Tron bloom filter")
+
+		// Check EVM address in Tron filter (should not exist)
+		notExists := rbf.Contains(evmAddress, enum.AddressTypeTron)
+		assert.False(t, notExists, "EVM address should not exist in Tron bloom filter")
+	})
+
+	// Test 4: Clear and verify
+	t.Run("ClearAndVerify", func(t *testing.T) {
+		address := testAddresses[0]
+
+		// Verify address exists
+		exists := rbf.Contains(address, addressType)
+		assert.True(t, exists, "Address should exist before clear")
+
+		// Clear the filter
+		rbf.Clear(addressType)
+
+		// Verify address no longer exists
+		notExists := rbf.Contains(address, addressType)
+		assert.False(t, notExists, "Address should not exist after clear")
+	})
+
+	// Clean up
+	rbf.Clear(addressType)
+	rbf.Clear(enum.AddressTypeTron)
+}
+
+// MockWalletAddressRepo for testing
+type MockWalletAddressRepo struct{}
+
+func (m *MockWalletAddressRepo) Find(ctx context.Context, options repository.FindOptions) ([]*model.WalletAddress, error) {
+	// Return empty result for testing
+	return []*model.WalletAddress{}, nil
+}
+
+// RedisWrapper implements the RedisClient interface
+type RedisWrapper struct {
+	client *redis.Client
+}
+
+func (r *RedisWrapper) GetClient() *redis.Client {
+	return r.client
+}
+
+func (r *RedisWrapper) Set(key string, value any, expiration time.Duration) error {
+	return r.client.Set(context.Background(), key, value, expiration).Err()
+}
+
+func (r *RedisWrapper) Get(key string) (string, error) {
+	return r.client.Get(context.Background(), key).Result()
+}
+
+func (r *RedisWrapper) Del(keys ...string) error {
+	return r.client.Del(context.Background(), keys...).Err()
+}
+
+func (r *RedisWrapper) Close() error {
+	return r.client.Close()
+}

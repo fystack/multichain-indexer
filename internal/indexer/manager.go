@@ -14,6 +14,7 @@ import (
 )
 
 type Manager struct {
+	ctx        context.Context
 	cfg        *core.Config
 	store      kvstore.KVStore
 	blockStore *BlockStore
@@ -22,7 +23,7 @@ type Manager struct {
 	addressBF  addressbloomfilter.WalletAddressBloomFilter
 }
 
-func NewManager(cfg *core.Config) (*Manager, error) {
+func NewManager(ctx context.Context, cfg *core.Config) (*Manager, error) {
 	store, err := kvstore.NewBadgerStore(cfg.Storage.Directory)
 	if err != nil {
 		return nil, fmt.Errorf("badger init: %w", err)
@@ -33,8 +34,10 @@ func NewManager(cfg *core.Config) (*Manager, error) {
 	}
 
 	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter)
+	addressBF.Initialize(ctx)
 
 	return &Manager{
+		ctx:        ctx,
 		cfg:        cfg,
 		store:      store,
 		blockStore: NewBlockStore(store),
@@ -61,7 +64,7 @@ func (m *Manager) Start(chainName ...string) error {
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", name, err)
 		}
-		w := NewWorker(idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF)
+		w := NewWorker(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF)
 		w.Start()
 		m.workers = append(m.workers, w)
 		slog.Info("Started regular worker", "chain", name)
@@ -107,8 +110,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 	}
 
 	// fetch end block from RPC
-	ctx := context.Background()
-	endBlock, err := idxr.GetLatestBlockNumber(ctx)
+	endBlock, err := idxr.GetLatestBlockNumber(m.ctx)
 	if err != nil {
 		return fmt.Errorf("rpc latest block: %w", err)
 	}
@@ -127,7 +129,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 	}
 
 	// start catchup worker
-	w := NewCatchupWorker(idxr, cfg, m.store, m.blockStore, m.emitter, m.addressBF, startBlockNum, endBlock)
+	w := NewCatchupWorker(m.ctx, idxr, cfg, m.store, m.blockStore, m.emitter, m.addressBF, startBlockNum, endBlock)
 	w.Start()
 	m.workers = append(m.workers, w)
 

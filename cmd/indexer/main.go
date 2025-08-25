@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -54,6 +55,7 @@ func main() {
 }
 
 func runIndexer(chain, configPath string, debug, catchup bool) {
+	ctx := context.Background()
 	cfg, err := core.Load(configPath)
 	if err != nil {
 		slog.Error("Load config failed", "err", err)
@@ -82,7 +84,7 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 	}
 	infra.SetGlobalDB(db)
 
-	manager, err := indexer.NewManager(&cfg)
+	manager, err := indexer.NewManager(ctx, &cfg)
 	if err != nil {
 		slog.Error("Create indexer manager failed", "err", err)
 		os.Exit(1)

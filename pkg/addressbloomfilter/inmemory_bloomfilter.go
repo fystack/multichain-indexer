@@ -42,7 +42,13 @@ func NewAddressBloomFilter(cfg Config) WalletAddressBloomFilter {
 }
 
 func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
-	types := []enum.AddressType{enum.AddressTypeEvm, enum.AddressTypeSolana, enum.AddressTypeAptos}
+	types := []enum.AddressType{
+		enum.AddressTypeEvm,
+		// enum.AddressTypeBtc,
+		// enum.AddressTypeSolana,
+		// enum.AddressTypeAptos,
+		enum.AddressTypeTron,
+	}
 
 	for _, addrType := range types {
 		offset := 0
