@@ -2,6 +2,8 @@ package indexer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -9,10 +11,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/btcsuite/btcutil/base58"
 	"github.com/fystack/transaction-indexer/internal/core"
 	"github.com/fystack/transaction-indexer/internal/rpc"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
-
 	"github.com/shopspring/decimal"
 )
 
@@ -243,6 +245,7 @@ func (t *TronIndexer) tronToHexAddressCached(tronAddr string) string {
 
 	hexAddr := t.tronToHexAddress(tronAddr)
 	t.addrCache.Store(tronAddr, hexAddr)
+
 	return hexAddr
 }
 
@@ -389,40 +392,57 @@ func (t *TronIndexer) IsHealthy() bool {
 }
 
 func (t *TronIndexer) tronNormalizeHexOrBase58(addr string) string {
-	a := strings.TrimSpace(addr)
-	// heuristic: TRON base58 addresses start with 'T' and are ~34 chars
-	if len(a) >= 34 && (a[0] == 'T' || a[0] == 't') {
-		return t.tronToHexAddressCached(a)
-	}
-	// assume hex; add 0x if missing, lowercase
-	a = strings.TrimPrefix(strings.ToLower(a), "0x")
-	if a == "" {
-		return "0x0"
-	}
-	return "0x" + a
+	return t.tronToHexAddress(addr)
 }
 
-// tronToHexAddress converts a TRON base58 address to hex
-func (t *TronIndexer) tronToHexAddress(tronAddr string) string {
-	// This is a simplified implementation
-	// In a real implementation, you would need to:
-	// 1. Base58 decode the TRON address
-	// 2. Remove the checksum (last 4 bytes)
-	// 3. Remove the network byte (first byte, usually 0x41 for mainnet)
-	// 4. Convert the remaining 20 bytes to hex with 0x prefix
+// tronToHexAddress converts addresses to Tron base58 format
+func (t *TronIndexer) tronToHexAddress(addr string) string {
+	cleaned := strings.TrimSpace(addr)
 
-	// For now, if it's already hex-like, return it
-	cleaned := strings.TrimSpace(tronAddr)
-	if strings.HasPrefix(cleaned, "0x") || (len(cleaned) == 40 && isHex(cleaned)) {
-		if !strings.HasPrefix(cleaned, "0x") {
-			cleaned = "0x" + cleaned
-		}
-		return strings.ToLower(cleaned)
+	// Keep existing Tron base58 addresses
+	if len(cleaned) >= 34 && (cleaned[0] == 'T' || cleaned[0] == 't') {
+		return cleaned
 	}
 
-	// If it's a TRON base58 address, you'd need proper base58 decoding
-	// This is a placeholder - implement proper TRON address conversion
-	return "0x" + strings.ToLower(tronAddr)
+	// Convert hex addresses to Tron format
+	if strings.HasPrefix(cleaned, "0x") {
+		return t.evmToTronAddress(cleaned)
+	}
+
+	// Handle hex without 0x prefix
+	if (len(cleaned) == 40 || len(cleaned) == 42) && isHex(cleaned) {
+		return t.evmToTronAddress("0x" + strings.ToLower(cleaned))
+	}
+
+	// Fallback: assume hex and convert
+	return t.evmToTronAddress("0x" + cleaned)
+}
+
+// evmToTronAddress converts 0x41... hex -> T... base58
+func (t *TronIndexer) evmToTronAddress(evmAddr string) string {
+	hexAddr := strings.TrimPrefix(strings.ToLower(evmAddr), "0x")
+
+	// must be 42 chars (0x + 41 prefix + 20 bytes) or 40 (just 20 bytes)
+	if len(hexAddr) != 40 && len(hexAddr) != 42 {
+		return evmAddr
+	}
+
+	// decode 20 bytes (last 40 hex chars)
+	raw, err := hex.DecodeString(hexAddr[len(hexAddr)-40:])
+	if err != nil {
+		return evmAddr
+	}
+
+	// prepend Tron network prefix 0x41
+	payload := append([]byte{0x41}, raw...)
+
+	// checksum = sha256d[:4]
+	h1 := sha256.Sum256(payload)
+	h2 := sha256.Sum256(h1[:])
+	checksum := h2[:4]
+
+	full := append(payload, checksum...)
+	return base58.Encode(full)
 }
 
 // isHex checks if a string contains only hex characters
