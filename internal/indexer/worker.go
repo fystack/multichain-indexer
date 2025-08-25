@@ -7,13 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
@@ -197,10 +195,7 @@ func (w *Worker) emitBlock(block *types.Block) {
 	if w.addressBloomFilter == nil {
 		return
 	}
-	addressType, ok := w.getAddressTypeForChain()
-	if !ok {
-		return
-	}
+	addressType := w.chain.GetAddressType()
 
 	for _, tx := range block.Transactions {
 		matched := false
@@ -219,26 +214,6 @@ func (w *Worker) emitBlock(block *types.Block) {
 			)
 			_ = w.emitter.EmitTransaction(w.chain.GetName(), &tx)
 		}
-	}
-}
-
-// getAddressTypeForChain determines address type by checking substrings
-func (w *Worker) getAddressTypeForChain() (enum.AddressType, bool) {
-	chainName := strings.ToLower(w.chain.GetName())
-
-	switch {
-	case strings.Contains(chainName, "evm"), strings.Contains(chainName, "eth"):
-		return enum.AddressTypeEvm, true
-	case strings.Contains(chainName, "tron"):
-		return enum.AddressTypeTron, true
-	case strings.Contains(chainName, "sol"):
-		return enum.AddressTypeSolana, true
-	case strings.Contains(chainName, "btc"), strings.Contains(chainName, "bitcoin"):
-		return enum.AddressTypeBtc, true
-	case strings.Contains(chainName, "aptos"):
-		return enum.AddressTypeAptos, true
-	default:
-		return enum.AddressTypeEvm, false // fallback but mark unsupported
 	}
 }
 

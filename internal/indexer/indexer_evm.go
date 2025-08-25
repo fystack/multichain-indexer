@@ -11,6 +11,7 @@ import (
 
 	"github.com/fystack/transaction-indexer/internal/rpc"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 
@@ -56,6 +57,10 @@ func NewEVMIndexer(config config.ChainConfig) (*EVMIndexer, error) {
 }
 
 func (e *EVMIndexer) GetName() string { return e.config.Name.String() }
+
+func (e *EVMIndexer) GetAddressType() enum.AddressType {
+	return enum.AddressTypeEvm
+}
 
 func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64

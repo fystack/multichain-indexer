@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 )
 
@@ -29,6 +30,7 @@ type BlockResult struct {
 
 type Indexer interface {
 	GetName() string
+	GetAddressType() enum.AddressType
 	GetLatestBlockNumber(ctx context.Context) (uint64, error)
 	GetBlock(ctx context.Context, number uint64) (*types.Block, error)
 

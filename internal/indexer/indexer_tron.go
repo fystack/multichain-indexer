@@ -14,6 +14,7 @@ import (
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/fystack/transaction-indexer/internal/rpc"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 	"github.com/shopspring/decimal"
@@ -60,6 +61,9 @@ func NewTronIndexer(config config.ChainConfig) (*TronIndexer, error) {
 
 func (t *TronIndexer) GetName() string { return t.config.Name.String() }
 
+func (t *TronIndexer) GetAddressType() enum.AddressType {
+	return enum.AddressTypeTron
+}
 func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
 	err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {
