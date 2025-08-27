@@ -3,7 +3,6 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,10 +55,10 @@ func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainCon
 func (w *Worker) Start() {
 	switch w.mode {
 	case ModeRegular:
-		slog.Info("Starting regular worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
+		logger.Info("Starting regular worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 		go w.run(w.processBlocks)
 	case ModeCatchup:
-		slog.Info("Starting catchup worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
+		logger.Info("Starting catchup worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 		go w.run(w.processBlocks)
 	default:
 		logger.Error("Unknown worker mode", "mode", w.mode, "chain", w.chain.GetName())
@@ -154,7 +153,7 @@ func (w *Worker) processRegularBlocks() error {
 		return fmt.Errorf("get batch blocks: %w", err)
 	}
 	elapsed := time.Since(start)
-	slog.Info(
+	logger.Info(
 		"Processing latest blocks",
 		"chain",
 		w.chain.GetName(),
@@ -211,7 +210,7 @@ func (w *Worker) processCatchupBlocks() error {
 	}
 
 	elapsed := time.Since(start)
-	slog.Info(
+	logger.Info(
 		"Processing catchup blocks",
 		"chain",
 		w.chain.GetName(),
@@ -242,18 +241,6 @@ func (w *Worker) emitBlock(block *types.Block) {
 
 	for _, tx := range block.Transactions {
 		matched := false
-		slog.Info(
-			"Emitting transaction",
-			"from",
-			tx.FromAddress,
-			"to",
-			tx.ToAddress,
-			"contains to address",
-			w.addressBloomFilter.Contains(tx.ToAddress, addressType),
-			"contains from address",
-			w.addressBloomFilter.Contains(tx.FromAddress, addressType),
-		)
-
 		if w.addressBloomFilter.Contains(tx.ToAddress, addressType) ||
 			w.addressBloomFilter.Contains(tx.FromAddress, addressType) {
 			matched = true
@@ -355,7 +342,7 @@ func (w *Worker) handleBlockResult(result BlockResult) bool {
 		modePrefix = "[REGULAR WORKER]"
 	}
 
-	slog.Info("Handling block", "mode", modePrefix, "chain", w.chain.GetName(), "number", result.Block.Number)
+	logger.Info("Handling block", "mode", modePrefix, "chain", w.chain.GetName(), "number", result.Block.Number)
 	return true
 }
 
