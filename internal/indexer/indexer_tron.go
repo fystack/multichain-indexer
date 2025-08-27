@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"log/slog"
+
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/fystack/transaction-indexer/internal/rpc"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
@@ -22,6 +24,9 @@ import (
 
 // keccak256("Transfer(address,address,uint256)")
 const ERC_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+// TRON denomination: 1 TRX = 1,000,000 sun
+const TRX_SUN_DECIMALS = 1000000
 
 type TronIndexer struct {
 	config      config.ChainConfig
@@ -135,7 +140,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 		Number:       uint64(tronBlock.BlockHeader.RawData.Number),
 		Hash:         tronBlock.BlockID,
 		ParentHash:   tronBlock.BlockHeader.RawData.ParentHash,
-		Timestamp:    uint64(tronBlock.BlockHeader.RawData.Timestamp),
+		Timestamp:    convertTronTimestamp(tronBlock.BlockHeader.RawData.Timestamp),
 		Transactions: transactions,
 	}
 
@@ -147,7 +152,8 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 			continue
 		}
 
-		fee := decimal.NewFromInt(tx.Fee)
+		// Calculate total fee including resource consumption
+		fee := t.calculateTotalFee(tx)
 
 		// Process TRC20/721 logs
 		if len(tx.Log) > 0 {
@@ -163,15 +169,22 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 
 	// Process top-level transactions from the block
 	for _, rawTx := range tronBlock.Transactions {
+		// Check transaction success status
+		if !t.isTransactionSuccessful(&rawTx) {
+			slog.Debug("Skipping failed transaction", "txid", rawTx.TxID)
+			continue
+		}
+
 		// Get transaction info or use defaults
-		ts := uint64(tronBlock.BlockHeader.RawData.Timestamp)
+		ts := convertTronTimestamp(tronBlock.BlockHeader.RawData.Timestamp)
 		blkNum := uint64(tronBlock.BlockHeader.RawData.Number)
 		fee := decimal.Zero
 
 		if ti := infoByID[rawTx.TxID]; ti != nil {
-			ts = uint64(ti.BlockTimestamp)
+			ts = convertTronTimestamp(ti.BlockTimestamp)
 			blkNum = uint64(ti.BlockNumber)
-			fee = decimal.NewFromInt(ti.Fee)
+			// Calculate total fee including resource consumption
+			fee = t.calculateTotalFee(ti)
 		}
 
 		for _, contract := range rawTx.RawData.Contract {
@@ -191,6 +204,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 				continue // Skip malformed contracts
 			}
 
+			slog.Info("Processed transaction", "contract", contract.Type, "transaction", tr)
 			// Assign fee only if not already assigned to this transaction
 			if !feeAssigned[rawTx.TxID] {
 				tr.TxFee = fee
@@ -285,13 +299,13 @@ func (t *TronIndexer) parseTRC20Logs(tx *rpc.TronTransactionInfo) []types.Transa
 			TxHash:       tx.ID,
 			NetworkId:    t.GetName(),
 			BlockNumber:  uint64(tx.BlockNumber),
-			FromAddress:  from,
-			ToAddress:    to,
+			FromAddress:  t.tronNormalizeHexOrBase58(from),
+			ToAddress:    t.tronNormalizeHexOrBase58(to),
 			AssetAddress: t.tronNormalizeHexOrBase58(log.Address),
 			Amount:       amount.String(),
 			Type:         "erc20_transfer",
-			TxFee:        decimal.Zero,
-			Timestamp:    uint64(tx.BlockTimestamp),
+			TxFee:        decimal.Zero, // Will be set in processBlock with total fee
+			Timestamp:    convertTronTimestamp(tx.BlockTimestamp),
 		})
 	}
 	return transfers
@@ -396,6 +410,11 @@ func (t *TronIndexer) IsHealthy() bool {
 	return err == nil
 }
 
+// ExecuteTronCall exposes the failover functionality for debugging
+func (t *TronIndexer) ExecuteTronCall(ctx context.Context, fn func(*rpc.TronClient) error) error {
+	return t.failover.ExecuteTronCall(ctx, fn)
+}
+
 func (t *TronIndexer) tronNormalizeHexOrBase58(addr string) string {
 	return t.tronToHexAddress(addr)
 }
@@ -491,4 +510,58 @@ func parseHexToBigInt(hexStr string) (*big.Int, bool) {
 	}
 
 	return amount, true
+}
+
+// calculateTotalFee calculates the total fee including energy and bandwidth costs
+func (t *TronIndexer) calculateTotalFee(txInfo *rpc.TronTransactionInfo) decimal.Decimal {
+	if txInfo == nil {
+		slog.Debug("calculateTotalFee: txInfo is nil")
+		return decimal.Zero
+	}
+
+	// Base transaction fee
+	totalFee := decimal.NewFromInt(txInfo.Fee)
+	if txInfo.EnergyFee > 0 {
+		totalFee = totalFee.Add(decimal.NewFromInt(txInfo.EnergyFee))
+	}
+
+	// Add net fee (bandwidth fee)
+	if txInfo.NetFee > 0 {
+		totalFee = totalFee.Add(decimal.NewFromInt(txInfo.NetFee))
+	}
+
+	// Check if top-level fees are all zero, then use receipt fees as fallback
+	topLevelFeesZero := (txInfo.Fee + txInfo.EnergyFee + txInfo.NetFee) == 0
+	if topLevelFeesZero && txInfo.Receipt.EnergyFee > 0 {
+		totalFee = totalFee.Add(decimal.NewFromInt(txInfo.Receipt.EnergyFee))
+	}
+	if topLevelFeesZero && txInfo.Receipt.NetFee > 0 {
+		totalFee = totalFee.Add(decimal.NewFromInt(txInfo.Receipt.NetFee))
+	}
+
+	// Add energy penalty if any
+	if txInfo.Receipt.EnergyPenaltyTotal > 0 {
+		totalFee = totalFee.Add(decimal.NewFromInt(txInfo.Receipt.EnergyPenaltyTotal))
+	}
+
+	totalFeeTRX := totalFee.Div(decimal.NewFromInt(TRX_SUN_DECIMALS))
+	return totalFeeTRX
+}
+
+// convertTronTimestamp converts TRON millisecond timestamp to Unix seconds
+func convertTronTimestamp(tronTimestamp int64) uint64 {
+	return uint64(tronTimestamp / 1000)
+}
+
+// isTransactionSuccessful checks if a transaction was successful
+// Safely handles cases where ret array might be empty
+func (t *TronIndexer) isTransactionSuccessful(tx *rpc.TronTransaction) bool {
+	if tx == nil || len(tx.Ret) == 0 {
+		// If no ret info, assume successful (this happens with simple transfers)
+		return true
+	}
+
+	// Check the first result entry
+	firstRet := tx.Ret[0]
+	return firstRet.ContractRet == "SUCCESS" || firstRet.ContractRet == ""
 }
