@@ -3,7 +3,6 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
 
@@ -69,7 +69,7 @@ func (m *Manager) Start(chainName ...string) error {
 		w := NewWorker(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF)
 		w.Start()
 		m.workers = append(m.workers, w)
-		slog.Info("Started regular worker", "chain", name)
+		logger.Info("Started regular worker", "chain", name)
 	}
 	return nil
 }
@@ -82,7 +82,7 @@ func (m *Manager) StartCatchupAuto(chainNames string) error {
 	var errors []error
 	for _, chainName := range targetChains {
 		if err := m.startCatchupForChain(chainName); err != nil {
-			slog.Error("Failed to start catchup", "chain", chainName, "error", err)
+			logger.Error("Failed to start catchup", "chain", chainName, "error", err)
 			errors = append(errors, fmt.Errorf("chain %s: %w", chainName, err))
 		}
 	}
@@ -119,12 +119,12 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 
 	if startBlockNum == 1 && endBlock > constant.MaxCatchupBlocks {
 		startBlockNum = endBlock - constant.MaxCatchupBlocks
-		slog.Info("Limiting catchup range for fresh start", "chain", chainName,
+		logger.Info("Limiting catchup range for fresh start", "chain", chainName,
 			"original_start", 1, "adjusted_start", startBlockNum)
 	}
 
 	if startBlockNum >= endBlock {
-		slog.Info("No catchup needed", "chain", chainName, "current", startBlockNum, "latest", endBlock)
+		logger.Info("No catchup needed", "chain", chainName, "current", startBlockNum, "latest", endBlock)
 		return nil
 	}
 
@@ -133,7 +133,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 	w.Start()
 	m.workers = append(m.workers, w)
 
-	slog.Info("Started catchup worker",
+	logger.Info("Started catchup worker",
 		"chain", chainName,
 		"start", startBlockNum,
 		"end", endBlock,
@@ -153,7 +153,7 @@ func (m *Manager) Stop() {
 		_ = m.blockStore.Close()
 		m.blockStore = nil
 	}
-	slog.Info("Manager stopped")
+	logger.Info("Manager stopped")
 }
 
 func (m *Manager) createIndexer(name enum.ChainType, cfg config.ChainConfig) (Indexer, error) {

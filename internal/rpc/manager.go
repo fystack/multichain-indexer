@@ -3,11 +3,11 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 	"github.com/fystack/transaction-indexer/pkg/retry"
 )
@@ -130,7 +130,7 @@ func (fm *FailoverManager) AddProvider(name, url, network, clientType string, au
 		attrs = append(attrs, "auth", auth.Type)
 	}
 
-	slog.With(attrs...).Info("Added provider")
+	logger.With(attrs...).Info("Added provider")
 
 	return nil
 }
@@ -166,7 +166,7 @@ func (fm *FailoverManager) updateExpiredBlacklists() {
 			provider.BlacklistedUntil = time.Time{}
 			provider.ConsecutiveErrors = 0
 
-			slog.Info("Provider blacklist expired",
+			logger.Info("Provider blacklist expired",
 				"name", provider.Name,
 				"url", provider.URL)
 		}
@@ -183,7 +183,7 @@ func (fm *FailoverManager) findNextAvailableProvider() (*Provider, error) {
 		if candidate.IsAvailable() {
 			fm.currentIndex = candidateIndex
 
-			slog.Info("Switched to provider",
+			logger.Info("Switched to provider",
 				"name", candidate.Name,
 				"url", candidate.URL,
 				"reason", "previous provider unavailable")
@@ -246,7 +246,7 @@ func (fm *FailoverManager) performEmergencyRecovery() (*Provider, error) {
 
 		recoveredCount++
 
-		slog.Info("Emergency recovery: unblacklisted provider",
+		logger.Info("Emergency recovery: unblacklisted provider",
 			"name", provider.Name,
 			"url", provider.URL)
 	}
@@ -356,7 +356,7 @@ func (fm *FailoverManager) logMetricsIfNeeded(provider *Provider, elapsed time.D
 
 		statusEmoji := fm.getStatusEmoji(provider.State)
 
-		slog.Info("Provider metrics",
+		logger.Info("Provider metrics",
 			"name", provider.Name,
 			"network", provider.Network,
 			"client_type", provider.ClientType,
@@ -425,7 +425,7 @@ func (fm *FailoverManager) analyzeError(err error, elapsed time.Duration) *Provi
 
 func (fm *FailoverManager) handleProviderIssue(provider *Provider, issue *ProviderIssue) {
 	if !fm.config.EnableBlacklisting {
-		slog.Warn("Provider issue detected but blacklisting disabled",
+		logger.Warn("Provider issue detected but blacklisting disabled",
 			"name", provider.Name,
 			"error_type", issue.ErrorType)
 		return
@@ -434,7 +434,7 @@ func (fm *FailoverManager) handleProviderIssue(provider *Provider, issue *Provid
 	// Check if blacklisting would drop active providers below minimum
 	activeCount := fm.countActiveProviders()
 	if activeCount <= fm.config.MinActiveProviders {
-		slog.Warn("Not blacklisting provider: would drop below minimum active count",
+		logger.Warn("Not blacklisting provider: would drop below minimum active count",
 			"name", provider.Name,
 			"active_count", activeCount,
 			"min_required", fm.config.MinActiveProviders)
@@ -447,7 +447,7 @@ func (fm *FailoverManager) handleProviderIssue(provider *Provider, issue *Provid
 	provider.State = StateBlacklisted
 	provider.BlacklistedUntil = time.Now().Add(issue.BlacklistDuration)
 
-	slog.Info("Blacklisted provider",
+	logger.Info("Blacklisted provider",
 		"name", provider.Name,
 		"error_type", issue.ErrorType,
 		"duration", issue.BlacklistDuration,

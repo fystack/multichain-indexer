@@ -20,7 +20,7 @@ chains:
         # api_key_env: "TRONGRID_TOKEN"
       # Fallback: Public nodes (lower rate limits, no key needed)
       - url: "https://tron-rpc.publicnode.com"
-      - url: "https://tron.drpc.org"
+      # - url: "https://tron.drpc.org" # not support solidity wallet
     start_block: 75144237
     from_latest: false
     poll_interval: "4s"  # Slightly slower to respect rate limits
@@ -78,4 +78,5 @@ bloomfilter:
 redis:
   url: "localhost:6379"
   password: ""
-  environment: "development"
+
+environment: "development"

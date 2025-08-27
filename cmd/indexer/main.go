@@ -58,11 +58,6 @@ func main() {
 
 func runIndexer(chain, configPath string, debug, catchup bool) {
 	ctx := context.Background()
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		slog.Error("Load config failed", "err", err)
-		os.Exit(1)
-	}
 
 	level := slog.LevelInfo
 	if debug {
@@ -72,44 +67,48 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 		Level:      level,
 		TimeFormat: time.RFC3339,
 	})
-	slog.Info("Config loaded")
+
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		logger.Fatal("Load config failed", "err", err)
+	}
+	logger.Info("Config loaded", "environment", cfg.Environment)
 
 	// start redis
-	redisClient := infra.NewRedisClient(cfg.Redis.URL, cfg.Redis.Password, cfg.Redis.Environment)
+	redisClient, err := infra.NewRedisClient(cfg.Redis.URL, cfg.Redis.Password, cfg.Environment.String())
+	if err != nil {
+		logger.Fatal("Create redis client failed", "err", err)
+	}
 	infra.SetGlobalRedisClient(redisClient)
 
 	// start db
-	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.DB.Environment)
+	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment.String())
 	if err != nil {
-		slog.Error("Create db connection failed", "err", err)
-		os.Exit(1)
+		logger.Fatal("Create db connection failed", "err", err)
 	}
 	infra.SetGlobalDB(db)
 
 	manager, err := indexer.NewManager(ctx, &cfg)
 	if err != nil {
-		slog.Error("Create indexer manager failed", "err", err)
-		os.Exit(1)
+		logger.Fatal("Create indexer manager failed", "err", err)
 	}
 
 	// start regular worker
 	if err := manager.Start(chain); err != nil {
-		slog.Error("Start regular worker failed", "err", err)
-		os.Exit(1)
+		logger.Fatal("Start regular worker failed", "err", err)
 	}
 
 	// optionally run catchup
 	if catchup {
 		if err := manager.StartCatchupAuto(chain); err != nil {
-			slog.Error("Start catchup failed", "err", err)
-			os.Exit(1)
+			logger.Fatal("Start catchup failed", "err", err)
 		}
 	}
 
-	slog.Info("Indexer is running... Press Ctrl+C to stop")
+	logger.Info("Indexer is running... Press Ctrl+C to stop")
 	waitForShutdown()
 	manager.Stop()
-	slog.Info("Indexer stopped")
+	logger.Info("Indexer stopped")
 }
 
 func runNatsPrinter(natsURL, subject string) {
@@ -121,24 +120,21 @@ func runNatsPrinter(natsURL, subject string) {
 
 	nc, err := nats.Connect(natsURL)
 	if err != nil {
-		slog.Error("NATS connect failed", "err", err)
-		os.Exit(1)
+		logger.Fatal("NATS connect failed", "err", err)
 	}
 	defer nc.Close()
 
-	slog.Info("Subscribed to", "subject", subject)
+	logger.Info("Subscribed to", "subject", subject)
 
 	_, err = nc.Subscribe(subject, func(msg *nats.Msg) {
 		var txn types.Transaction
 		if err := txn.UnmarshalBinary(msg.Data); err != nil {
-			slog.Error("Unmarshal error", "err", err)
-			return
+			logger.Fatal("Unmarshal error", "err", err)
 		}
-		slog.Info("Received transaction", "txn", txn.String())
+		logger.Info("Received transaction", "txn", txn.String())
 	})
 	if err != nil {
-		slog.Error("NATS subscribe failed", "err", err)
-		os.Exit(1)
+		logger.Fatal("NATS subscribe failed", "err", err)
 	}
 
 	select {} // Block forever

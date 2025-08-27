@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
@@ -144,7 +145,7 @@ func (e *EthereumClient) BatchGetBlocksByNumber(ctx context.Context, blockNumber
 
 	for _, r := range rpcResponses {
 		if r.Error != nil {
-			slog.Error("batch get blocks failed", "error", r.Error)
+			logger.Error("batch get blocks failed", "error", r.Error)
 			continue
 		}
 		if len(r.Result) == 0 || string(r.Result) == "null" {

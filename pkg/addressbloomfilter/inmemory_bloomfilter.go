@@ -2,7 +2,7 @@ package addressbloomfilter
 
 import (
 	"context"
-	"log/slog"
+	logger "log/slog"
 	"math"
 	"sync"
 
@@ -78,7 +78,7 @@ func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
 			total += len(addresses)
 		}
 
-		slog.Info("In-memory Bloom filter initialized", "addressType", addrType, "total", total)
+		logger.Info("In-memory Bloom filter initialized", "addressType", addrType, "total", total)
 	}
 	return nil
 }

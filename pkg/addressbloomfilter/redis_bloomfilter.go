@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	logger "log/slog"
 	"sync"
 
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/model"
 	"github.com/fystack/transaction-indexer/pkg/repository"

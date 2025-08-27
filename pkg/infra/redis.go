@@ -5,11 +5,12 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"log/slog"
 	"os"
 	"runtime"
 	"sync"
 	"time"
+
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/common/stringutils"
@@ -53,7 +54,7 @@ func GetGlobalRedisClient() RedisClient {
 func MustGlobalRedisClient() RedisClient {
 	c := GetGlobalRedisClient()
 	if c == nil {
-		panic("global Redis client not initialized")
+		logger.Fatal("global Redis client not initialized")
 	}
 	return c
 }
@@ -86,7 +87,7 @@ func getTlsConfig(caCertPath string, clientCertPath string, clientKeyPath string
 }
 
 // NewRedisWrapper creates a new instance of RedisWrapper.
-func NewRedisClient(addr string, password string, environment string) RedisClient {
+func NewRedisClient(addr string, password string, environment string) (RedisClient, error) {
 	// Compute pool size based on CPU
 	cpus := runtime.GOMAXPROCS(0)
 	poolSize := cpus * 10 // ~10 connections per CPU
@@ -117,8 +118,7 @@ func NewRedisClient(addr string, password string, environment string) RedisClien
 			"./certs/redis/redis-client.key",
 		)
 		if err != nil {
-			slog.Error("Failed to create TLS config for redis client", "error", err)
-			return nil
+			return nil, fmt.Errorf("failed to create TLS config for redis client: %w", err)
 		}
 		opts.TLSConfig = tlsCfg
 	}
@@ -130,12 +130,12 @@ func NewRedisClient(addr string, password string, environment string) RedisClien
 	defer cancel()
 
 	if pong, err := client.Ping(ctx).Result(); err != nil {
-		slog.Error("Failed to connect to redis", "error", err)
+		return nil, fmt.Errorf("failed to connect to redis: %w", err)
 	} else {
-		slog.Info("Connected to Redis", "pong", pong)
+		logger.Info("Connected to Redis", "pong", pong)
 	}
 
-	return &RedisWrapper{client: client}
+	return &RedisWrapper{client: client}, nil
 }
 
 // Set implements the RedisClient interface for setting a key-value pair.

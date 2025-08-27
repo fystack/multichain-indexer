@@ -3,7 +3,6 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
@@ -59,7 +59,7 @@ func (w *Worker) Start() {
 	case ModeCatchup:
 		go w.run(w.processBlocks)
 	default:
-		slog.Error("Unknown worker mode", "mode", w.mode, "chain", w.chain.GetName())
+		logger.Error("Unknown worker mode", "mode", w.mode, "chain", w.chain.GetName())
 	}
 }
 
@@ -90,7 +90,7 @@ func (w *Worker) run(job func() error) {
 	ticker := time.NewTicker(w.config.PollInterval)
 	defer ticker.Stop()
 
-	slog.Info("Starting worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
+	logger.Info("Starting worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 
 	errorCount := 0
 	const maxConsecutiveErrors = 5
@@ -101,18 +101,18 @@ func (w *Worker) run(job func() error) {
 			if w.currentBlock > 0 {
 				err := w.blockStore.SaveLatestBlock(w.chain.GetName(), w.currentBlock-1)
 				if err != nil {
-					slog.Error("Error saving latest block", "chain", w.chain.GetName(), "error", err)
+					logger.Error("Error saving latest block", "chain", w.chain.GetName(), "error", err)
 				}
 			}
-			slog.Info("Worker stopped", "chain", w.chain.GetName())
+			logger.Info("Worker stopped", "chain", w.chain.GetName())
 			return
 		case <-ticker.C:
 			if err := job(); err != nil {
 				errorCount++
-				slog.Error("Error processing blocks", "chain", w.chain.GetName(), "error", err, "consecutive_errors", errorCount)
+				logger.Error("Error processing blocks", "chain", w.chain.GetName(), "error", err, "consecutive_errors", errorCount)
 				_ = w.emitter.EmitError(w.chain.GetName(), err)
 				if errorCount >= maxConsecutiveErrors {
-					slog.Warn("Too many consecutive errors, slowing down", "chain", w.chain.GetName())
+					logger.Warn("Too many consecutive errors, slowing down", "chain", w.chain.GetName())
 					time.Sleep(w.config.PollInterval)
 					errorCount = 0
 				}
@@ -167,7 +167,7 @@ func (w *Worker) processRegularBlocks() error {
 
 func (w *Worker) processCatchupBlocks() error {
 	if w.currentBlock > w.catchupEnd {
-		slog.Info("Catchup completed", "chain", w.chain.GetName(),
+		logger.Info("Catchup completed", "chain", w.chain.GetName(),
 			"start", w.catchupStart, "end", w.catchupEnd)
 		w.cancel()
 		return nil
@@ -209,7 +209,7 @@ func (w *Worker) emitBlock(block *types.Block) {
 		}
 
 		if matched {
-			slog.Info("Emitting transaction",
+			logger.Info("Emitting transaction",
 				"chain", w.chain.GetName(),
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
@@ -287,11 +287,11 @@ func (w *Worker) determineStartingBlock() uint64 {
 
 func (w *Worker) handleBlockResult(result BlockResult) bool {
 	if result.Error != nil {
-		slog.Error("Failed block", "chain", w.chain.GetName(), "block", result.Number, "error", result.Error.Message)
+		logger.Error("Failed block", "chain", w.chain.GetName(), "block", result.Number, "error", result.Error.Message)
 		return false
 	}
 	if result.Block == nil {
-		slog.Error("Nil block", "chain", w.chain.GetName(), "block", result.Number)
+		logger.Error("Nil block", "chain", w.chain.GetName(), "block", result.Number)
 		return false
 	}
 	w.emitBlock(result.Block)

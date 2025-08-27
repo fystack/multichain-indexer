@@ -4,9 +4,8 @@ import (
 	"sync"
 	"time"
 
-	logger "log/slog"
-
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )

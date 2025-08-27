@@ -13,6 +13,7 @@ import (
 )
 
 type Config struct {
+	Environment Env            `yaml:"environment" default:"development"`
 	Chains      ChainsConfig   `yaml:"chains"`
 	NATS        NATSConfig     `yaml:"nats"`
 	Storage     StorageCfg     `yaml:"storage"`
@@ -107,14 +108,12 @@ type BloomFilterCfg struct {
 }
 
 type DBCfg struct {
-	URL         string `yaml:"url"`
-	Environment string `yaml:"environment"`
+	URL string `yaml:"url"`
 }
 
 type RedisCfg struct {
-	URL         string `yaml:"url"`
-	Password    string `yaml:"password"`
-	Environment string `yaml:"environment"`
+	URL      string `yaml:"url"`
+	Password string `yaml:"password"`
 }
 
 type RedisBloomFilterCfg struct {
@@ -131,6 +130,29 @@ type InMemoryBloomFilterCfg struct {
 	FalsePositiveRate float64 `yaml:"false_positive_rate"`
 	BatchSize         int     `yaml:"batch_size"`
 }
+
+type Env string
+
+const (
+	EnvProduction  Env = "production"
+	EnvDevelopment Env = "development"
+)
+
+func (e *Env) UnmarshalYAML(b []byte) error {
+	var s string
+	if err := yaml.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	switch s {
+	case EnvProduction.String(), EnvDevelopment.String():
+		*e = Env(s)
+		return nil
+	default:
+		return fmt.Errorf("invalid environment %q (must be %q or %q)", s, EnvProduction, EnvDevelopment)
+	}
+}
+
+func (e Env) String() string { return string(e) }
 
 // Load reads YAML, applies defaults & per-chain merges, resolves node auth, and validates.
 func Load(path string) (Config, error) {

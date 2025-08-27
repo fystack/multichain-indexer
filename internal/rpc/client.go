@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"net/http"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
@@ -168,7 +168,7 @@ func (c *genericClient) Do(ctx context.Context, method, endpoint string, body an
 	}
 	defer resp.Body.Close()
 
-	slog.Debug("HTTP request completed", "url", url, "elapsed", time.Since(start))
+	logger.Debug("HTTP request completed", "url", url, "elapsed", time.Since(start))
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

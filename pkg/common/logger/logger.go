@@ -39,3 +39,49 @@ func Init(opts *Options) {
 func L() *slog.Logger {
 	return logger
 }
+
+// Info logs at info level.
+func Info(msg string, args ...any) {
+	if logger != nil {
+		logger.Info(msg, args...)
+	} else {
+		slog.Info(msg, args...)
+	}
+}
+
+// Debug logs at debug level.
+func Debug(msg string, args ...any) {
+	if logger != nil {
+		logger.Debug(msg, args...)
+	} else {
+		slog.Debug(msg, args...)
+	}
+}
+
+// Warn logs at warn level.
+func Warn(msg string, args ...any) {
+	if logger != nil {
+		logger.Warn(msg, args...)
+	} else {
+		slog.Warn(msg, args...)
+	}
+}
+
+// Error logs at error level.
+func Error(msg string, args ...any) {
+	if logger != nil {
+		logger.Error(msg, args...)
+	} else {
+		slog.Error(msg, args...)
+	}
+}
+
+// Fatal logs an error then exits.
+func Fatal(msg string, args ...any) {
+	Error(msg, args...)
+	os.Exit(1)
+}
+
+func With(args ...any) *slog.Logger {
+	return logger.With(args...)
+}
