@@ -24,7 +24,7 @@ type CLI struct {
 }
 
 type IndexCmd struct {
-	Chains     []string `help:"Chains to index" sep:"," name:"chain"`
+	Chains     []string `help:"Chains to index (if empty, all configured chains will be used)" sep:"," name:"chain"`
 	ConfigPath string   `help:"Path to config file." default:"configs/config.yaml" name:"config"`
 	Debug      bool     `help:"Enable debug logs." name:"debug"`
 	Catchup    bool     `help:"Run catchup alongside regular indexer." name:"catchup"`
@@ -73,6 +73,12 @@ func runIndexer(chains []string, configPath string, debug, catchup bool) {
 		logger.Fatal("Load config failed", "err", err)
 	}
 	logger.Info("Config loaded", "environment", cfg.Environment)
+
+	// If no chains specified, use all configured chains
+	if len(chains) == 0 {
+		chains = getAllChainNames(&cfg)
+		logger.Info("No chains specified, using all configured chains", "chains", chains)
+	}
 
 	// Validate chains
 	if err := cfg.ValidateChains(chains); err != nil {
@@ -149,4 +155,13 @@ func waitForShutdown() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+}
+
+// getAllChainNames returns all configured chain names from the config
+func getAllChainNames(cfg *config.Config) []string {
+	var chainNames []string
+	for chainName := range cfg.Chains.Items {
+		chainNames = append(chainNames, chainName)
+	}
+	return chainNames
 }
