@@ -11,32 +11,30 @@ import (
 )
 
 var (
-	globalDB   *gorm.DB
-	globalDBMu sync.RWMutex
+	globalDB *gorm.DB
+	dbOnce   sync.Once
 )
 
-// SetGlobalRedisClient sets the process-wide Redis client.
-func SetGlobalDB(c *gorm.DB) {
-	globalDBMu.Lock()
-	defer globalDBMu.Unlock()
-	globalDB = c
+// InitGlobalDB sets the DB client only once.
+func InitGlobalDB(c *gorm.DB) {
+	dbOnce.Do(func() {
+		globalDB = c
+	})
 }
 
-// GetGlobalDB returns the process-wide DB client (may be nil).
-func GetGlobalDB() *gorm.DB {
-	globalDBMu.RLock()
-	defer globalDBMu.RUnlock()
+// GlobalDB returns the global DB client (may be nil).
+func GlobalDB() *gorm.DB {
 	return globalDB
 }
 
 // MustGlobalDB returns the global DB client or panics if not initialized.
 func MustGlobalDB() *gorm.DB {
-	c := GetGlobalDB()
-	if c == nil {
-		panic("global DB not initialized")
+	if globalDB == nil {
+		logger.Fatal("global DB not initialized")
 	}
-	return c
+	return globalDB
 }
+
 func NewDBConnection(dsn string, environment string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {

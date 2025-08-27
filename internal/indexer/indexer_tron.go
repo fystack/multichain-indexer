@@ -63,7 +63,7 @@ func NewTronIndexer(config config.ChainConfig) (*TronIndexer, error) {
 	}, nil
 }
 
-func (t *TronIndexer) GetName() string { return t.config.Name.String() }
+func (t *TronIndexer) GetName() string { return t.config.Name }
 
 func (t *TronIndexer) GetAddressType() enum.AddressType {
 	return enum.AddressTypeTron
@@ -203,7 +203,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 				continue // Skip malformed contracts
 			}
 
-			logger.Info("Processed transaction", "contract", contract.Type, "transaction", tr)
+			logger.Debug("Processed transaction", "contract", contract.Type, "transaction", tr)
 			// Assign fee only if not already assigned to this transaction
 			if !feeAssigned[rawTx.TxID] {
 				tr.TxFee = fee
