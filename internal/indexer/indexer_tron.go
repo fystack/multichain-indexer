@@ -11,12 +11,11 @@ import (
 	"sync"
 	"time"
 
-	"log/slog"
-
 	"github.com/btcsuite/btcutil/base58"
 	"github.com/fystack/transaction-indexer/internal/rpc"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 	"github.com/shopspring/decimal"
@@ -171,7 +170,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 	for _, rawTx := range tronBlock.Transactions {
 		// Check transaction success status
 		if !t.isTransactionSuccessful(&rawTx) {
-			slog.Debug("Skipping failed transaction", "txid", rawTx.TxID)
+			logger.Debug("Skipping failed transaction", "txid", rawTx.TxID)
 			continue
 		}
 
@@ -204,7 +203,7 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 				continue // Skip malformed contracts
 			}
 
-			slog.Info("Processed transaction", "contract", contract.Type, "transaction", tr)
+			logger.Info("Processed transaction", "contract", contract.Type, "transaction", tr)
 			// Assign fee only if not already assigned to this transaction
 			if !feeAssigned[rawTx.TxID] {
 				tr.TxFee = fee
@@ -515,7 +514,7 @@ func parseHexToBigInt(hexStr string) (*big.Int, bool) {
 // calculateTotalFee calculates the total fee including energy and bandwidth costs
 func (t *TronIndexer) calculateTotalFee(txInfo *rpc.TronTransactionInfo) decimal.Decimal {
 	if txInfo == nil {
-		slog.Debug("calculateTotalFee: txInfo is nil")
+		logger.Debug("calculateTotalFee: txInfo is nil")
 		return decimal.Zero
 	}
 
