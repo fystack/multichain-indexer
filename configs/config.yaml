@@ -51,6 +51,17 @@ chains:
         rps: 5
         burst: 10
 
+  bnb-mainnet:
+    name: "bnb-mainnet"
+    type: "evm"
+    nodes:
+      - url: "https://bsc-rpc.publicnode.com"
+      - url: "https://bsc.blockrazor.xyz"
+      - url: "https://bnb.rpc.subquery.network/public"
+    start_block: 59040717
+    from_latest: false
+
+
 nats:
   url: "nats://localhost:4222"
   subject_prefix: "indexer.transaction"
