@@ -13,7 +13,7 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
-	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
 // WorkerMode defines the mode of operation for a worker
@@ -27,7 +27,7 @@ const (
 type Worker struct {
 	config             config.ChainConfig
 	chain              Indexer
-	kvstore            kvstore.KVStore
+	kvstore            infra.KVStore
 	blockStore         *BlockStore
 	emitter            *events.Emitter
 	currentBlock       uint64
@@ -42,12 +42,12 @@ type Worker struct {
 }
 
 // NewWorker creates a worker for regular indexing
-func NewWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *Worker {
+func NewWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *Worker {
 	return newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeRegular, 0, 0)
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, startBlock, endBlock uint64) *Worker {
+func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, startBlock, endBlock uint64) *Worker {
 	return newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeCatchup, startBlock, endBlock)
 }
 
@@ -276,7 +276,7 @@ func (w *Worker) saveCatchupProgress() {
 	}
 	key := fmt.Sprintf("catchup_progress_%s_%d_%d", w.chain.GetName(), w.catchupStart, w.catchupEnd)
 	progress := fmt.Sprintf("%d", w.currentBlock)
-	_ = w.kvstore.Set(key, []byte(progress))
+	_ = w.kvstore.Set(key, progress)
 }
 
 func (w *Worker) loadCatchupProgress() uint64 {
@@ -292,7 +292,7 @@ func (w *Worker) loadCatchupProgress() uint64 {
 	return w.catchupStart
 }
 
-func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv kvstore.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
+func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, startBlock, endBlock uint64) *Worker {
 	ctx, cancel := context.WithCancel(ctx)
 	logFile, date, _ := createLogFile()
 

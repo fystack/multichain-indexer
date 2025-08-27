@@ -6,14 +6,14 @@ import (
 	"strconv"
 
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
 type BlockStore struct {
-	store kvstore.KVStore
+	store infra.KVStore
 }
 
-func NewBlockStore(store kvstore.KVStore) *BlockStore {
+func NewBlockStore(store infra.KVStore) *BlockStore {
 	return &BlockStore{store: store}
 }
 
@@ -33,7 +33,7 @@ func (bs *BlockStore) SaveLatestBlock(chainName string, blockNumber uint64) erro
 		return errors.New("block number is required")
 	}
 	logger.Info("Saving latest block", "chainName", chainName, "blockNumber", blockNumber)
-	return bs.store.Set(fmt.Sprintf("latest_block_%s", chainName), []byte(strconv.FormatUint(blockNumber, 10)))
+	return bs.store.Set(fmt.Sprintf("latest_block_%s", chainName), strconv.FormatUint(blockNumber, 10))
 }
 
 func (bs *BlockStore) Close() error {

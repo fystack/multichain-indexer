@@ -66,9 +66,19 @@ nats:
   url: "nats://localhost:4222"
   subject_prefix: "indexer.transaction"
 
-storage:
-  type: "memory"           # memory | badger | postgres
-  directory: "data/badger" # only used for badger
+kvstore:
+  type: "consul"            # badger | consul 
+  badger:
+    directory: "data/badger"
+    prefix: ""              # optional key prefix
+  consul:
+    scheme: "http"
+    address: "127.0.0.1:8500"
+    folder: "indexer"
+    token: ""
+    http_auth:
+      username: ""
+      password: ""
 
 db:
   type: "postgres"

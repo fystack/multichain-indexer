@@ -7,6 +7,7 @@ type AddressType string
 type AddressStandard string
 type ChainType string
 type BFBackend string
+type KVStoreType string
 
 const (
 	WalletTypeStandard WalletType = "standard"
@@ -41,4 +42,9 @@ func (c ChainType) String() string {
 const (
 	BFBackendRedis    BFBackend = "redis"
 	BFBackendInMemory BFBackend = "in_memory"
+)
+
+const (
+	KVStoreTypeBadger KVStoreType = "badger"
+	KVStoreTypeConsul KVStoreType = "consul"
 )
