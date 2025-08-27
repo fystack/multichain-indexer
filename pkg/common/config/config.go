@@ -16,7 +16,7 @@ type Config struct {
 	Environment Env            `yaml:"environment" default:"development"`
 	Chains      ChainsConfig   `yaml:"chains"`
 	NATS        NATSConfig     `yaml:"nats"`
-	Storage     StorageCfg     `yaml:"storage"`
+	KVStore     KVStoreCfg     `yaml:"kvstore"`
 	DB          DBCfg          `yaml:"db"`
 	Redis       RedisCfg       `yaml:"redis"`
 	BloomFilter BloomFilterCfg `yaml:"bloomfilter"`
@@ -113,9 +113,28 @@ type NATSConfig struct {
 	SubjectPrefix string `yaml:"subject_prefix"`
 }
 
-type StorageCfg struct {
-	Type      string `yaml:"type"`      // memory | badger | postgres
-	Directory string `yaml:"directory"` // for badger
+type KVStoreCfg struct {
+	Type   enum.KVStoreType `yaml:"type"` // badger | consul | postgres
+	Badger BadgerKVCfg      `yaml:"badger"`
+	Consul ConsulKVSCfg     `yaml:"consul"`
+}
+
+type BadgerKVCfg struct {
+	Directory string `yaml:"directory"`
+	Prefix    string `yaml:"prefix"`
+}
+
+type HttpAuthCfg struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
+}
+
+type ConsulKVSCfg struct {
+	Scheme   string      `yaml:"scheme"`  // http|https
+	Address  string      `yaml:"address"` // host:port
+	Folder   string      `yaml:"folder"`
+	Token    string      `yaml:"token"`
+	HttpAuth HttpAuthCfg `yaml:"http_auth"`
 }
 
 type BloomFilterCfg struct {
@@ -338,8 +357,15 @@ func validate(cfg Config) error {
 	if cfg.NATS.URL == "" {
 		return errors.New("nats.url is required")
 	}
-	if cfg.Storage.Type == "badger" && cfg.Storage.Directory == "" {
-		return errors.New("storage.directory is required for badger")
+	switch cfg.KVStore.Type {
+	case "badger":
+		if cfg.KVStore.Badger.Directory == "" {
+			return errors.New("kvstore.badger.directory is required for badger")
+		}
+	case "consul":
+		if cfg.KVStore.Consul.Address == "" {
+			return errors.New("kvstore.consul.address is required for consul")
+		}
 	}
 	if len(cfg.Chains.Items) == 0 {
 		return errors.New("no chains configured under chains")

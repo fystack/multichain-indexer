@@ -10,13 +10,14 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
 
 type Manager struct {
 	ctx        context.Context
 	cfg        *config.Config
-	store      kvstore.KVStore
+	store      infra.KVStore
 	blockStore *BlockStore
 	emitter    *events.Emitter
 	workers    []*Worker
@@ -24,10 +25,11 @@ type Manager struct {
 }
 
 func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
-	store, err := kvstore.NewBadgerStore(cfg.Storage.Directory)
+	store, err := kvstore.NewFromConfig(cfg.KVStore)
 	if err != nil {
-		return nil, fmt.Errorf("badger init: %w", err)
+		return nil, err
 	}
+	logger.Info("KVStore initialized", "store", store.GetName())
 	emitter, err := events.NewEmitter(cfg.NATS.URL, cfg.NATS.SubjectPrefix)
 	if err != nil {
 		return nil, fmt.Errorf("emitter init: %w", err)
