@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
@@ -161,14 +160,11 @@ func (c *genericClient) Do(ctx context.Context, method, endpoint string, body an
 	}
 	c.setAuthHeaders(req)
 
-	start := time.Now()
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	logger.Debug("HTTP request completed", "url", url, "elapsed", time.Since(start))
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
