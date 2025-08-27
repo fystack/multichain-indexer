@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -55,8 +56,10 @@ func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainCon
 func (w *Worker) Start() {
 	switch w.mode {
 	case ModeRegular:
+		slog.Info("Starting regular worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 		go w.run(w.processBlocks)
 	case ModeCatchup:
+		slog.Info("Starting catchup worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 		go w.run(w.processBlocks)
 	default:
 		logger.Error("Unknown worker mode", "mode", w.mode, "chain", w.chain.GetName())
@@ -89,8 +92,6 @@ func (w *Worker) Stop() {
 func (w *Worker) run(job func() error) {
 	ticker := time.NewTicker(w.config.PollInterval)
 	defer ticker.Stop()
-
-	logger.Info("Starting worker", "chain", w.chain.GetName(), "start_block", w.currentBlock)
 
 	errorCount := 0
 	const maxConsecutiveErrors = 5
@@ -147,10 +148,29 @@ func (w *Worker) processRegularBlocks() error {
 	end := min(w.currentBlock+uint64(w.config.BatchSize)-1, latest)
 	lastSuccess := w.currentBlock - 1
 
+	start := time.Now()
 	results, err := w.chain.GetBlocks(w.ctx, w.currentBlock, end)
 	if err != nil {
 		return fmt.Errorf("get batch blocks: %w", err)
 	}
+	elapsed := time.Since(start)
+	slog.Info(
+		"Processing latest blocks",
+		"chain",
+		w.chain.GetName(),
+		"start",
+		w.currentBlock,
+		"end",
+		end,
+		"elapsed",
+		elapsed,
+		"last_success",
+		lastSuccess,
+		"expected number of blocks",
+		end-w.currentBlock+1,
+		"actual blocks",
+		len(results),
+	)
 
 	for _, result := range results {
 		if w.handleBlockResult(result) {
@@ -176,6 +196,7 @@ func (w *Worker) processCatchupBlocks() error {
 	end := min(w.currentBlock+uint64(w.config.BatchSize)-1, w.catchupEnd)
 	lastSuccess := w.currentBlock - 1
 
+	start := time.Now()
 	results, err := w.chain.GetBlocks(w.ctx, w.currentBlock, end)
 	if err != nil {
 		return fmt.Errorf("get catchup blocks: %w", err)
@@ -188,6 +209,25 @@ func (w *Worker) processCatchupBlocks() error {
 			}
 		}
 	}
+
+	elapsed := time.Since(start)
+	slog.Info(
+		"Processing catchup blocks",
+		"chain",
+		w.chain.GetName(),
+		"start",
+		w.currentBlock,
+		"end",
+		end,
+		"elapsed",
+		elapsed,
+		"last_success",
+		lastSuccess,
+		"expected number of blocks",
+		end-w.currentBlock+1,
+		"actual blocks",
+		len(results),
+	)
 
 	w.currentBlock = end + 1
 	w.saveCatchupProgress()
@@ -202,6 +242,17 @@ func (w *Worker) emitBlock(block *types.Block) {
 
 	for _, tx := range block.Transactions {
 		matched := false
+		slog.Info(
+			"Emitting transaction",
+			"from",
+			tx.FromAddress,
+			"to",
+			tx.ToAddress,
+			"contains to address",
+			w.addressBloomFilter.Contains(tx.ToAddress, addressType),
+			"contains from address",
+			w.addressBloomFilter.Contains(tx.FromAddress, addressType),
+		)
 
 		if w.addressBloomFilter.Contains(tx.ToAddress, addressType) ||
 			w.addressBloomFilter.Contains(tx.FromAddress, addressType) {
@@ -295,6 +346,16 @@ func (w *Worker) handleBlockResult(result BlockResult) bool {
 		return false
 	}
 	w.emitBlock(result.Block)
+	// Log block handling with worker mode and elapsed time
+	var modePrefix string
+	switch w.mode {
+	case ModeCatchup:
+		modePrefix = "[CATCHUP WORKER]"
+	case ModeRegular:
+		modePrefix = "[REGULAR WORKER]"
+	}
+
+	slog.Info("Handling block", "mode", modePrefix, "chain", w.chain.GetName(), "number", result.Block.Number)
 	return true
 }
 
