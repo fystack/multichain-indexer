@@ -3,9 +3,9 @@ package indexer
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"strconv"
 
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
 
@@ -32,7 +32,7 @@ func (bs *BlockStore) SaveLatestBlock(chainName string, blockNumber uint64) erro
 	if blockNumber == 0 {
 		return errors.New("block number is required")
 	}
-	slog.Info("Saving latest block", "chainName", chainName, "blockNumber", blockNumber)
+	logger.Info("Saving latest block", "chainName", chainName, "blockNumber", blockNumber)
 	return bs.store.Set(fmt.Sprintf("latest_block_%s", chainName), []byte(strconv.FormatUint(blockNumber, 10)))
 }
 

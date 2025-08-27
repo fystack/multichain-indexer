@@ -120,7 +120,7 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 				return w.Address
 			})
 
-			logger.Info("Processing addresses", "addressType", addrType, "count", len(addresses), "addresses", addresses)
+			logger.Info("Processing addresses", "addressType", addrType, "count", len(addresses))
 
 			if err := rbf.addBatchToBloom(ctx, key, addresses); err != nil {
 				return err
