@@ -29,6 +29,9 @@ const (
 const (
 	ChainTypeEVM  ChainType = "evm"
 	ChainTypeTron ChainType = "tron"
+	ChainTypeBtc  ChainType = "btc"
+	ChainTypeSol  ChainType = "sol"
+	ChainTypeApt  ChainType = "apt"
 )
 
 func (c ChainType) String() string {

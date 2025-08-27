@@ -33,26 +33,24 @@ type RedisWrapper struct {
 
 var (
 	globalRedisClient RedisClient
-	globalRedisMu     sync.RWMutex
+	redisOnce         sync.Once
 )
 
-// SetGlobalRedisClient sets the process-wide Redis client.
-func SetGlobalRedisClient(c RedisClient) {
-	globalRedisMu.Lock()
-	defer globalRedisMu.Unlock()
-	globalRedisClient = c
+// InitGlobalRedisClient sets the client only once.
+func InitGlobalRedisClient(c RedisClient) {
+	redisOnce.Do(func() {
+		globalRedisClient = c
+	})
 }
 
-// GetGlobalRedisClient returns the process-wide Redis client (may be nil).
-func GetGlobalRedisClient() RedisClient {
-	globalRedisMu.RLock()
-	defer globalRedisMu.RUnlock()
+// GlobalRedisClient returns the initialized client (may be nil).
+func GlobalRedisClient() RedisClient {
 	return globalRedisClient
 }
 
 // MustGlobalRedisClient returns the global client or panics if not initialized.
 func MustGlobalRedisClient() RedisClient {
-	c := GetGlobalRedisClient()
+	c := GlobalRedisClient()
 	if c == nil {
 		logger.Fatal("global Redis client not initialized")
 	}

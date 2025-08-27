@@ -32,11 +32,11 @@ type WalletAddressBloomFilter interface {
 }
 
 func NewBloomFilter(cfg config.BloomFilterCfg) WalletAddressBloomFilter {
-	walletAddressRepo := repository.NewRepository[model.WalletAddress](infra.GetGlobalDB())
+	walletAddressRepo := repository.NewRepository[model.WalletAddress](infra.GlobalDB())
 	switch cfg.Backend {
 	case enum.BFBackendRedis:
 		return NewRedisBloomFilter(RedisBloomConfig{
-			RedisClient:       infra.GetGlobalRedisClient(),
+			RedisClient:       infra.GlobalRedisClient(),
 			WalletAddressRepo: walletAddressRepo,
 			BatchSize:         cfg.Redis.BatchSize,
 			KeyPrefix:         cfg.Redis.KeyPrefix,

@@ -56,7 +56,7 @@ func NewEVMIndexer(config config.ChainConfig) (*EVMIndexer, error) {
 	}, nil
 }
 
-func (e *EVMIndexer) GetName() string { return e.config.Name.String() }
+func (e *EVMIndexer) GetName() string { return e.config.Name }
 
 func (e *EVMIndexer) GetAddressType() enum.AddressType {
 	return enum.AddressTypeEvm

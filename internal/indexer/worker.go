@@ -228,7 +228,19 @@ func (w *Worker) processCatchupBlocks() error {
 		len(results),
 	)
 
-	w.currentBlock = end + 1
+	// Update current block to the next block to process
+	// Use the last successfully processed block + 1, but don't exceed catchupEnd + 1
+	if lastSuccess >= w.currentBlock {
+		w.currentBlock = lastSuccess + 1
+	} else {
+		w.currentBlock = end + 1
+	}
+
+	// Ensure we don't exceed the catchup end boundary
+	if w.currentBlock > w.catchupEnd+1 {
+		w.currentBlock = w.catchupEnd + 1
+	}
+
 	w.saveCatchupProgress()
 	return nil
 }

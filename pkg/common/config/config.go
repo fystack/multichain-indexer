@@ -22,12 +22,28 @@ type Config struct {
 	BloomFilter BloomFilterCfg `yaml:"bloomfilter"`
 }
 
+func (c *Config) ValidateChains(chains []string) error {
+	for _, chain := range chains {
+		if _, ok := c.Chains.Items[chain]; !ok {
+			return fmt.Errorf("chain not in config: %s", chain)
+		}
+	}
+	return nil
+}
+
+func (c *Config) GetChain(chain string) (ChainConfig, error) {
+	if _, ok := c.Chains.Items[chain]; !ok {
+		return ChainConfig{}, fmt.Errorf("chain not in config: %s", chain)
+	}
+	return c.Chains.Items[chain], nil
+}
+
 // ChainsConfig supports:
 // chains:
 //
 //	defaults: {...}
-//	tron: {...}
-//	evm: {...}
+//	tron-mainnet: {...}
+//	ethereum-testnet: {...}
 type ChainsConfig struct {
 	Defaults ChainConfig
 	Items    map[string]ChainConfig
@@ -53,7 +69,8 @@ func (c *ChainsConfig) UnmarshalYAML(b []byte) error {
 }
 
 type ChainConfig struct {
-	Name         enum.ChainType `yaml:"name"`
+	Name         string         `yaml:"name"`
+	Type         enum.ChainType `yaml:"type"`
 	Nodes        []Node         `yaml:"nodes"` // supports http & ws
 	StartBlock   uint64         `yaml:"start_block"`
 	FromLatest   bool           `yaml:"from_latest" default:"true"`

@@ -10,8 +10,9 @@ chains:
         rps: 8
         burst: 16
 
-  tron:
+  tron-mainnet:
     name: "tron-mainnet"
+    type: "tron"
     nodes:
       # Primary: TronGrid with API key (15 QPS limit)
       - url: "https://api.trongrid.io"
@@ -32,8 +33,9 @@ chains:
         rps: 12          # Conservative: below 15 QPS limit
         burst: 15        # Small burst allowance
 
-  evm:
+  ethereum-mainnet:
     name: "ethereum-mainnet"
+    type: "evm"
     nodes:
       - url: "https://ethereum-rpc.publicnode.com"
       - url: "https://1rpc.io/eth"

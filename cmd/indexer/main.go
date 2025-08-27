@@ -24,10 +24,10 @@ type CLI struct {
 }
 
 type IndexCmd struct {
-	Chain      string `help:"Chain to index." required:"" name:"chain"`
-	ConfigPath string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
-	Debug      bool   `help:"Enable debug logs." name:"debug"`
-	Catchup    bool   `help:"Run catchup alongside regular indexer." name:"catchup"`
+	Chains     []string `help:"Chains to index" sep:"," name:"chain"`
+	ConfigPath string   `help:"Path to config file." default:"configs/config.yaml" name:"config"`
+	Debug      bool     `help:"Enable debug logs." name:"debug"`
+	Catchup    bool     `help:"Run catchup alongside regular indexer." name:"catchup"`
 }
 
 type NATSPrinterCmd struct {
@@ -36,7 +36,7 @@ type NATSPrinterCmd struct {
 }
 
 func (c *IndexCmd) Run() error {
-	runIndexer(c.Chain, c.ConfigPath, c.Debug, c.Catchup)
+	runIndexer(c.Chains, c.ConfigPath, c.Debug, c.Catchup)
 	return nil
 }
 
@@ -56,7 +56,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func runIndexer(chain, configPath string, debug, catchup bool) {
+func runIndexer(chains []string, configPath string, debug, catchup bool) {
 	ctx := context.Background()
 
 	level := slog.LevelInfo
@@ -74,19 +74,24 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 	}
 	logger.Info("Config loaded", "environment", cfg.Environment)
 
+	// Validate chains
+	if err := cfg.ValidateChains(chains); err != nil {
+		logger.Fatal("Validate chains failed", "err", err)
+	}
+
 	// start redis
 	redisClient, err := infra.NewRedisClient(cfg.Redis.URL, cfg.Redis.Password, cfg.Environment.String())
 	if err != nil {
 		logger.Fatal("Create redis client failed", "err", err)
 	}
-	infra.SetGlobalRedisClient(redisClient)
+	infra.InitGlobalRedisClient(redisClient)
 
 	// start db
 	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment.String())
 	if err != nil {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
-	infra.SetGlobalDB(db)
+	infra.InitGlobalDB(db)
 
 	manager, err := indexer.NewManager(ctx, &cfg)
 	if err != nil {
@@ -94,13 +99,13 @@ func runIndexer(chain, configPath string, debug, catchup bool) {
 	}
 
 	// start regular worker
-	if err := manager.Start(chain); err != nil {
+	if err := manager.Start(chains); err != nil {
 		logger.Fatal("Start regular worker failed", "err", err)
 	}
 
 	// optionally run catchup
 	if catchup {
-		if err := manager.StartCatchupAuto(chain); err != nil {
+		if err := manager.StartCatchupAuto(chains); err != nil {
 			logger.Fatal("Start catchup failed", "err", err)
 		}
 	}

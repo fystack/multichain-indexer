@@ -3,8 +3,6 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"slices"
-	"strings"
 
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
@@ -49,41 +47,36 @@ func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
 }
 
 // Start kicks off all regular workers (one per chain)
-func (m *Manager) Start(chainName ...string) error {
-	// Parse comma-separated chain names if provided
-	var targetChains []string
-	if len(chainName) > 0 && chainName[0] != "" {
-		targetChains = parseChainNames(chainName[0])
-	}
-
-	for name, chainCfg := range m.cfg.Chains.Items {
-		// If specific chains requested, only start those
-		if len(targetChains) > 0 && !slices.Contains(targetChains, name) {
-			continue
-		}
-
-		idxr, err := m.createIndexer(enum.ChainType(name), chainCfg)
+func (m *Manager) Start(chainNames []string) error {
+	for _, chainName := range chainNames {
+		chainCfg, err := m.cfg.GetChain(chainName)
 		if err != nil {
-			return fmt.Errorf("create indexer for %s: %w", name, err)
+			return fmt.Errorf("get chain %s: %w", chainName, err)
+		}
+		idxr, err := m.createIndexer(chainCfg.Type, chainCfg)
+		if err != nil {
+			return fmt.Errorf("create indexer for %s: %w", chainCfg.Name, err)
 		}
 		w := NewWorker(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF)
 		w.Start()
 		m.workers = append(m.workers, w)
-		logger.Info("Started regular worker", "chain", name)
+		logger.Info("Started regular worker", "chain", chainCfg.Name, "type", chainCfg.Type)
 	}
 	return nil
 }
 
 // StartCatchupAuto runs catchup workers for chains (auto range from KV -> RPC head)
-func (m *Manager) StartCatchupAuto(chainNames string) error {
-	// Parse comma-separated chain names
-	targetChains := parseChainNames(chainNames)
-
+func (m *Manager) StartCatchupAuto(chains []string) error {
 	var errors []error
-	for _, chainName := range targetChains {
-		if err := m.startCatchupForChain(chainName); err != nil {
-			logger.Error("Failed to start catchup", "chain", chainName, "error", err)
-			errors = append(errors, fmt.Errorf("chain %s: %w", chainName, err))
+	for _, chainName := range chains {
+		chainCfg, err := m.cfg.GetChain(chainName)
+		if err != nil {
+			return fmt.Errorf("get chain %s: %w", chainName, err)
+		}
+
+		if err := m.startCatchupForChain(chainCfg.Name, chainCfg); err != nil {
+			logger.Error("Failed to start catchup", "chain", chainCfg.Name, "error", err)
+			errors = append(errors, fmt.Errorf("chain %s: %w", chainCfg.Name, err))
 		}
 	}
 
@@ -94,20 +87,15 @@ func (m *Manager) StartCatchupAuto(chainNames string) error {
 }
 
 // startCatchupForChain starts catchup for a single chain
-func (m *Manager) startCatchupForChain(chainName string) error {
-	cfg, ok := m.cfg.Chains.Items[chainName]
-	if !ok {
-		return fmt.Errorf("chain not in config: %s", chainName)
-	}
-
-	idxr, err := m.createIndexer(enum.ChainType(chainName), cfg)
+func (m *Manager) startCatchupForChain(chainName string, chainCfg config.ChainConfig) error {
+	idxr, err := m.createIndexer(chainCfg.Type, chainCfg)
 	if err != nil {
 		return err
 	}
 
 	// load start block from KV (default to 1 if not found)
 	var startBlockNum uint64 = 1
-	if startBlock, err := m.blockStore.GetLatestBlock(cfg.Name.String()); err == nil {
+	if startBlock, err := m.blockStore.GetLatestBlock(chainCfg.Name); err == nil {
 		startBlockNum = startBlock + 1 // Start from next block after last processed
 	}
 
@@ -129,7 +117,7 @@ func (m *Manager) startCatchupForChain(chainName string) error {
 	}
 
 	// start catchup worker
-	w := NewCatchupWorker(m.ctx, idxr, cfg, m.store, m.blockStore, m.emitter, m.addressBF, startBlockNum, endBlock)
+	w := NewCatchupWorker(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF, startBlockNum, endBlock)
 	w.Start()
 	m.workers = append(m.workers, w)
 
@@ -156,29 +144,13 @@ func (m *Manager) Stop() {
 	logger.Info("Manager stopped")
 }
 
-func (m *Manager) createIndexer(name enum.ChainType, cfg config.ChainConfig) (Indexer, error) {
-	switch name {
+func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig) (Indexer, error) {
+	switch chainType {
 	case enum.ChainTypeEVM:
 		return NewEVMIndexer(cfg)
 	case enum.ChainTypeTron:
 		return NewTronIndexer(cfg)
 	default:
-		return nil, fmt.Errorf("unsupported chain: %s", name)
+		return nil, fmt.Errorf("unsupported chain: %s", chainType)
 	}
-}
-
-func parseChainNames(chainNames string) []string {
-	if chainNames == "" {
-		return nil
-	}
-
-	chains := strings.Split(chainNames, ",")
-	var result []string
-	for _, chain := range chains {
-		chain = strings.TrimSpace(chain)
-		if chain != "" {
-			result = append(result, chain)
-		}
-	}
-	return result
 }
