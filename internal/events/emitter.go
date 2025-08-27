@@ -8,6 +8,10 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const (
+	TransferEventTopic = "transfer:event"
+)
+
 type IndexerEvent struct {
 	Type      string `json:"type"`
 	Chain     string `json:"chain"`
@@ -42,7 +46,7 @@ func (e *Emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	if err != nil {
 		return err
 	}
-	return e.conn.Publish(e.subjectPrefix, txBytes)
+	return e.conn.Publish(TransferEventTopic, txBytes)
 }
 
 func (e *Emitter) EmitError(chain string, err error) error {

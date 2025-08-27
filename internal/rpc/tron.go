@@ -84,17 +84,28 @@ type (
 
 	// Simplified transaction info for transfer analysis
 	TronTransactionInfo struct {
-		ID             string      `json:"id"`
-		Fee            int64       `json:"fee"`
-		BlockNumber    int64       `json:"blockNumber"`
-		BlockTimestamp int64       `json:"blockTimeStamp"`
-		Log            []TronLog   `json:"log"`
-		Receipt        TronReceipt `json:"receipt"`
+		ID               string      `json:"id"`
+		Fee              int64       `json:"fee"`
+		BlockNumber      int64       `json:"blockNumber"`
+		BlockTimestamp   int64       `json:"blockTimeStamp"`
+		Log              []TronLog   `json:"log"`
+		Receipt          TronReceipt `json:"receipt"`
+		Result           string      `json:"result"`
+		ResMessage       string      `json:"resMessage"`
+		EnergyFee        int64       `json:"energy_fee"`
+		EnergyUsageTotal int64       `json:"energy_usage_total"`
+		NetFee           int64       `json:"net_fee"`
+		NetUsage         int64       `json:"net_usage"`
 	}
 
 	TronReceipt struct {
-		EnergyUsage int64 `json:"energy_usage"`
-		NetUsage    int64 `json:"net_usage"`
+		EnergyUsage        int64  `json:"energy_usage"`
+		EnergyUsageTotal   int64  `json:"energy_usage_total"`
+		NetUsage           int64  `json:"net_usage"`
+		Result             string `json:"result"`
+		EnergyFee          int64  `json:"energy_fee"`
+		NetFee             int64  `json:"net_fee"`
+		EnergyPenaltyTotal int64  `json:"energy_penalty_total"`
 	}
 
 	TronLog struct {
@@ -146,6 +157,20 @@ func (t *TronClient) BatchGetTransactionReceiptsByBlockNum(ctx context.Context, 
 		return nil, fmt.Errorf("failed to unmarshal transactions: %w", err)
 	}
 	return txs, nil
+}
+
+// GetTransactionInfo gets detailed transaction info including fees
+func (t *TronClient) GetTransactionInfo(ctx context.Context, txHash string) (*TronTransactionInfo, error) {
+	body := map[string]any{"value": txHash}
+	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/gettransactioninfobyid", body, nil)
+	if err != nil {
+		return nil, fmt.Errorf("getTransactionInfoById failed: %w", err)
+	}
+	var txInfo TronTransactionInfo
+	if err := json.Unmarshal(data, &txInfo); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal transaction info: %w", err)
+	}
+	return &txInfo, nil
 }
 
 // Failover helpers
