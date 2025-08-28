@@ -2,225 +2,267 @@ package main
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/alecthomas/kong"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
-	yaml "github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml"
 	"github.com/hashicorp/consul/api"
 )
 
-type endpoint string
+// ANSI color codes
+const (
+	colorReset  = "\033[0m"
+	colorRed    = "\033[31m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorBlue   = "\033[34m"
+	colorPurple = "\033[35m"
+	colorCyan   = "\033[36m"
+	colorBold   = "\033[1m"
+)
+
+// Emojis for different states
+const (
+	emojiRocket   = "🚀"
+	emojiCheck    = "✅"
+	emojiWarning  = "⚠️"
+	emojiError    = "❌"
+	emojiDatabase = "🗄️"
+	emojiMigrate  = "🔄"
+	emojiComplete = "🎉"
+	emojiSearch   = "🔍"
+	emojiProgress = "📊"
+)
+
+type EndpointType string
 
 const (
-	epBadger endpoint = "badger"
-	epConsul endpoint = "consul"
+	EndpointTypeBadger EndpointType = "badger"
+	EndpointTypeConsul EndpointType = "consul"
 )
 
 type CLI struct {
-	From string `help:"source backend" enum:"badger,consul" default:"badger"`
-	To   string `help:"destination backend" enum:"badger,consul" default:"consul"`
+	Config string `help:"YAML config file for migration" required:"true"`
+	DryRun bool   `help:"dry run mode (print actions without writing)"`
+}
 
-	Prefixes []string `help:"key prefixes to include (repeatable)" short:"p"`
-	DryRun   bool     `help:"print actions without writing"`
-	Verify   bool     `help:"verify migrated values match" default:"true"`
+type MigrationConfig struct {
+	Source      EndpointConfig `yaml:"source"`
+	Destination EndpointConfig `yaml:"destination"`
+	Prefixes    []string       `yaml:"prefixes"`
+	Verify      bool           `yaml:"verify"`
+}
 
-	SrcConfig string `name:"src-config" help:"YAML config file containing kvstore for source"`
-	DstConfig string `name:"dst-config" help:"YAML config file containing kvstore for destination"`
-
-	BadgerSrcDir    string `name:"badger-src-dir" help:"source badger directory"`
-	BadgerSrcPrefix string `name:"badger-src-prefix" help:"source badger prefix"`
-	BadgerDstDir    string `name:"badger-dst-dir" help:"destination badger directory"`
-	BadgerDstPrefix string `name:"badger-dst-prefix" help:"destination badger prefix"`
-
-	ConsulSrcAddr   string `name:"consul-src-address" help:"source consul address host:port"`
-	ConsulSrcScheme string `name:"consul-src-scheme" help:"source consul scheme" default:"http"`
-	ConsulSrcFolder string `name:"consul-src-folder" help:"source consul folder (prefix)"`
-	ConsulSrcToken  string `name:"consul-src-token" help:"source consul token"`
-	ConsulSrcUser   string `name:"consul-src-user" help:"source consul http auth user"`
-	ConsulSrcPass   string `name:"consul-src-pass" help:"source consul http auth password"`
-
-	ConsulDstAddr   string `name:"consul-dst-address" help:"destination consul address host:port"`
-	ConsulDstScheme string `name:"consul-dst-scheme" help:"destination consul scheme" default:"http"`
-	ConsulDstFolder string `name:"consul-dst-folder" help:"destination consul folder (prefix)"`
-	ConsulDstToken  string `name:"consul-dst-token" help:"destination consul token"`
-	ConsulDstUser   string `name:"consul-dst-user" help:"destination consul http auth user"`
-	ConsulDstPass   string `name:"consul-dst-pass" help:"destination consul http auth password"`
+type EndpointConfig struct {
+	Type   enum.KVStoreType   `yaml:"type"`
+	Badger config.BadgerKVCfg `yaml:"badger,omitempty"`
+	Consul config.ConsulKVCfg `yaml:"consul,omitempty"`
 }
 
 func main() {
 	var cli CLI
-	ctx := kong.Parse(&cli, kong.Name("kv-migrate"), kong.Description("Migrate keys between Badger and Consul"))
+	ctx := kong.Parse(&cli,
+		kong.Name("kv-migrate"),
+		kong.Description("Migrate keys between Badger and Consul KV stores"))
 
-	if len(cli.Prefixes) == 0 {
-		ctx.FatalIfErrorf(fmt.Errorf("at least one --prefix is required (Badger requires non-empty prefix)"))
+	printBanner()
+
+	cfg, err := loadConfig(cli.Config)
+	ctx.FatalIfErrorf(err)
+
+	if len(cfg.Prefixes) == 0 {
+		ctx.Fatalf("at least one prefix is required in config")
 	}
 
-	// build source store (optionally from config file)
-	fromEp := endpoint(cli.From)
-	srcSide := buildSide{
-		badgerDir: cli.BadgerSrcDir, badgerPrefix: cli.BadgerSrcPrefix,
-		consulAddr: cli.ConsulSrcAddr, consulScheme: cli.ConsulSrcScheme, consulFolder: cli.ConsulSrcFolder,
-		consulToken: cli.ConsulSrcToken, consulUser: cli.ConsulSrcUser, consulPass: cli.ConsulSrcPass,
-	}
-	if cli.SrcConfig != "" {
-		kvCfg, err := loadKVStoreCfg(cli.SrcConfig)
-		ctx.FatalIfErrorf(err)
-		fromEp = endpoint(kvCfg.Type)
-		applyKVToSide(&srcSide, kvCfg)
-	}
-	src, err := buildStore(fromEp, srcSide)
+	printConfig(cfg, cli.DryRun)
+
+	src, err := buildStore(cfg.Source)
 	ctx.FatalIfErrorf(err)
 	defer src.Close()
 
-	// build destination store (optionally from config file)
-	toEp := endpoint(cli.To)
-	dstSide := buildSide{
-		badgerDir: cli.BadgerDstDir, badgerPrefix: cli.BadgerDstPrefix,
-		consulAddr: cli.ConsulDstAddr, consulScheme: cli.ConsulDstScheme, consulFolder: cli.ConsulDstFolder,
-		consulToken: cli.ConsulDstToken, consulUser: cli.ConsulDstUser, consulPass: cli.ConsulDstPass,
-	}
-	if cli.DstConfig != "" {
-		kvCfg, err := loadKVStoreCfg(cli.DstConfig)
-		ctx.FatalIfErrorf(err)
-		toEp = endpoint(kvCfg.Type)
-		applyKVToSide(&dstSide, kvCfg)
-	}
-	dst, err := buildStore(toEp, dstSide)
+	dst, err := buildStore(cfg.Destination)
 	ctx.FatalIfErrorf(err)
 	defer dst.Close()
 
-	total, copied, skipped, err := migrate(src, dst, cli.Prefixes, cli.DryRun, cli.Verify)
+	startTime := time.Now()
+	total, copied, err := migrate(src, dst, cfg.Prefixes, cfg.Verify, cli.DryRun)
 	ctx.FatalIfErrorf(err)
-	fmt.Fprintf(os.Stdout, "done: total=%d copied=%d skipped=%d\n", total, copied, skipped)
+	duration := time.Since(startTime)
+
+	printSummary(total, copied, duration, cli.DryRun)
 }
 
-type buildSide struct {
-	badgerDir    string
-	badgerPrefix string
-
-	consulScheme string
-	consulAddr   string
-	consulFolder string
-	consulToken  string
-	consulUser   string
-	consulPass   string
+func printBanner() {
+	fmt.Printf("%s%s%s %s KV Store Migration Tool %s%s%s\n",
+		colorBold, colorCyan, emojiRocket, emojiDatabase, emojiMigrate, colorReset, "\n")
 }
 
-func buildStore(ep endpoint, side buildSide) (infra.KVStore, error) {
-	switch ep {
-	case epBadger:
-		return kvstore.NewBadgerStore(side.badgerDir, side.badgerPrefix, infra.JSON)
-	case epConsul:
+func printConfig(cfg *MigrationConfig, dryRun bool) {
+	fmt.Printf("%s%s Configuration:%s\n", colorBold, colorBlue, colorReset)
+	fmt.Printf("  %s Source: %s%s%s\n", emojiSearch, colorYellow, cfg.Source.Type, colorReset)
+	fmt.Printf("  %s Destination: %s%s%s\n", emojiSearch, colorYellow, cfg.Destination.Type, colorReset)
+	fmt.Printf("  %s Prefixes: %s%s%s\n", emojiSearch, colorYellow, strings.Join(cfg.Prefixes, ", "), colorReset)
+	fmt.Printf("  %s Verify: %s%v%s\n", emojiSearch, colorYellow, cfg.Verify, colorReset)
+	if dryRun {
+		fmt.Printf("  %s Mode: %sDRY RUN%s\n", emojiWarning, colorRed, colorReset)
+	}
+	fmt.Println()
+}
+
+func printSummary(total, copied int, duration time.Duration, dryRun bool) {
+	fmt.Println()
+	fmt.Printf("%s%s Migration Summary:%s\n", colorBold, colorGreen, colorReset)
+
+	if dryRun {
+		fmt.Printf("  %s Would migrate: %s%d%s keys\n", emojiProgress, colorYellow, total, colorReset)
+	} else {
+		fmt.Printf("  %s Total keys: %s%d%s\n", emojiProgress, colorYellow, total, colorReset)
+		fmt.Printf("  %s Copied: %s%d%s\n", emojiCheck, colorGreen, copied, colorReset)
+	}
+
+	fmt.Printf("  %s Duration: %s%s%s\n", emojiProgress, colorYellow, duration.Round(time.Millisecond), colorReset)
+
+	if !dryRun && total > 0 {
+		rate := float64(copied) / duration.Seconds()
+		fmt.Printf("  %s Rate: %s%.1f keys/sec%s\n", emojiProgress, colorYellow, rate, colorReset)
+	}
+
+	if dryRun {
+		fmt.Printf("\n%s%s Dry run completed - no data was modified%s\n", colorBold, colorYellow, colorReset)
+	} else {
+		fmt.Printf("\n%s%s Migration completed successfully!%s\n", colorBold, colorGreen, emojiComplete, colorReset)
+	}
+}
+
+func loadConfig(path string) (*MigrationConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading config file %q: %w", path, err)
+	}
+
+	var cfg MigrationConfig
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing YAML config: %w", err)
+	}
+
+	return &cfg, nil
+}
+
+func buildStore(config EndpointConfig) (infra.KVStore, error) {
+	switch config.Type {
+	case enum.KVStoreTypeBadger:
+		if config.Badger.Directory == "" {
+			return nil, fmt.Errorf("badger directory is required")
+		}
+		return kvstore.NewBadgerStore(
+			config.Badger.Directory,
+			config.Badger.Prefix,
+			infra.JSON,
+		)
+	case enum.KVStoreTypeConsul:
+		if config.Consul.Address == "" {
+			return nil, fmt.Errorf("consul address is required")
+		}
 		var httpAuth *api.HttpBasicAuth
-		if side.consulUser != "" || side.consulPass != "" {
-			httpAuth = &api.HttpBasicAuth{Username: side.consulUser, Password: side.consulPass}
+		if config.Consul.HttpAuth.Username != "" || config.Consul.HttpAuth.Password != "" {
+			httpAuth = &api.HttpBasicAuth{
+				Username: config.Consul.HttpAuth.Username,
+				Password: config.Consul.HttpAuth.Password,
+			}
 		}
 		return kvstore.NewConsulClient(kvstore.Options{
-			Scheme:   side.consulScheme,
-			Address:  side.consulAddr,
-			Folder:   side.consulFolder,
+			Scheme:   config.Consul.Scheme,
+			Address:  config.Consul.Address,
+			Folder:   config.Consul.Folder,
 			Codec:    infra.JSON,
-			Token:    side.consulToken,
+			Token:    config.Consul.Token,
 			HttpAuth: httpAuth,
 		})
 	default:
-		return nil, fmt.Errorf("unsupported endpoint: %s", ep)
+		return nil, fmt.Errorf("unsupported store type: %s", config.Type)
 	}
 }
 
-func migrate(src infra.KVStore, dst infra.KVStore, prefixes []string, dryRun bool, verify bool) (int, int, int, error) {
-	var pairs []*infra.KVPair
-	for _, p := range prefixes {
-		items, err := src.List(p)
+func migrate(src, dst infra.KVStore, prefixes []string, verify, dryRun bool) (int, int, error) {
+	var allPairs []*infra.KVPair
+
+	fmt.Printf("%s%s Scanning source store...%s\n", colorBold, colorBlue, colorReset)
+
+	// Collect all key-value pairs from source
+	for _, prefix := range prefixes {
+		fmt.Printf("  %s Scanning prefix: %s%s%s\n", emojiSearch, colorCyan, prefix, colorReset)
+		pairs, err := src.List(prefix)
 		if err != nil {
-			return 0, 0, 0, err
+			return 0, 0, fmt.Errorf("listing keys with prefix %q: %w", prefix, err)
 		}
-		pairs = append(pairs, items...)
+		fmt.Printf("    %s Found %s%d%s keys\n", emojiCheck, colorGreen, len(pairs), colorReset)
+		allPairs = append(allPairs, pairs...)
 	}
 
-	total := len(pairs)
-	copied := 0
-	skipped := 0
+	total := len(allPairs)
+	fmt.Printf("\n%s%s Total keys to migrate: %s%d%s\n", emojiProgress, colorBold, colorYellow, total, colorReset)
 
-	for _, kv := range pairs {
-		key := kv.Key
-		val := string(kv.Value)
-		if dryRun {
-			fmt.Printf("copy %s\n", key)
-			continue
+	if total == 0 {
+		fmt.Printf("%s%s No keys found to migrate%s\n", emojiWarning, colorYellow, colorReset)
+		return 0, 0, nil
+	}
+
+	if dryRun {
+		fmt.Printf("\n%s%s DRY RUN - Keys that would be migrated:%s\n", emojiWarning, colorRed, colorReset)
+		for i, kv := range allPairs {
+			fmt.Printf("  %s %s\n", emojiMigrate, kv.Key)
+			if i >= 9 && len(allPairs) > 10 {
+				fmt.Printf("  %s ... and %d more keys\n", emojiProgress, len(allPairs)-10)
+				break
+			}
 		}
-		if err := dst.Set(key, val); err != nil {
-			return total, copied, skipped, fmt.Errorf("set %s: %w", key, err)
+		return total, 0, nil
+	}
+
+	fmt.Printf("\n%s%s Starting migration...%s\n", emojiRocket, colorBold, colorReset)
+
+	// Migrate each key-value pair
+	copied := 0
+	for i, kv := range allPairs {
+		if err := dst.Set(kv.Key, string(kv.Value)); err != nil {
+			return total, copied, fmt.Errorf("setting key %q: %w", kv.Key, err)
 		}
 		copied++
+
+		// Verify if requested
 		if verify {
-			got, err := dst.Get(key)
+			got, err := dst.Get(kv.Key)
 			if err != nil {
-				return total, copied, skipped, fmt.Errorf("verify get %s: %w", key, err)
+				return total, copied, fmt.Errorf("verifying key %q: %w", kv.Key, err)
 			}
-			if got != val {
-				return total, copied, skipped, fmt.Errorf("verify mismatch for %s", key)
+			if got != string(kv.Value) {
+				return total, copied, fmt.Errorf("verification failed for key %q: expected %q, got %q",
+					kv.Key, string(kv.Value), got)
 			}
 		}
-	}
 
-	return total, copied, skipped, nil
+		// Show progress with cool formatting
+		if (i+1)%100 == 0 || i == total-1 {
+			progress := float64(i+1) / float64(total) * 100
+			bar := createProgressBar(progress, 20)
+			fmt.Printf("\r%s%s Progress: %s %s%.1f%%%s (%d/%d)",
+				emojiProgress, colorBold, bar, colorGreen, progress, colorReset, i+1, total)
+		}
+	}
+	fmt.Println() // New line after progress bar
+
+	return total, copied, nil
 }
 
-func loadKVStoreCfg(path string) (config.KVStoreCfg, error) {
-	var cfgFile struct {
-		KVStore config.KVStoreCfg `yaml:"kvstore"`
-	}
-	b, err := ioutil.ReadFile(path)
-	if err != nil {
-		return config.KVStoreCfg{}, err
-	}
-	if err := yaml.Unmarshal(b, &cfgFile); err != nil {
-		return config.KVStoreCfg{}, err
-	}
-	return cfgFile.KVStore, nil
+func createProgressBar(progress float64, width int) string {
+	filled := int(progress / 100 * float64(width))
+	bar := strings.Repeat("█", filled)
+	empty := strings.Repeat("░", width-filled)
+	return fmt.Sprintf("[%s%s]", bar, empty)
 }
-
-func applyKVToSide(dst *buildSide, kv config.KVStoreCfg) {
-	switch kv.Type {
-	case "badger":
-		if dst.badgerDir == "" {
-			dst.badgerDir = kv.Badger.Directory
-		}
-		if dst.badgerPrefix == "" {
-			dst.badgerPrefix = kv.Badger.Prefix
-		}
-	case "consul":
-		if dst.consulScheme == "" {
-			dst.consulScheme = kv.Consul.Scheme
-		}
-		if dst.consulAddr == "" {
-			dst.consulAddr = kv.Consul.Address
-		}
-		if dst.consulFolder == "" {
-			dst.consulFolder = kv.Consul.Folder
-		}
-		if dst.consulToken == "" {
-			dst.consulToken = kv.Consul.Token
-		}
-	}
-}
-
-/*
-pp config to consul
-kv-migrate --src-config configs/config.yaml --to consul \
-  --consul-dst-address 127.0.0.1:8500 --consul-dst-folder indexer \
-  -p latest_block_ -p catchup_progress_
-
-
-  // badger to consul
-  kv-migrate --from badger --to consul \
-  --consul-dst-address 127.0.0.1:8500 --consul-dst-folder indexer \
-  -p latest_block_ -p catchup_progress_
-
-
-*/
