@@ -28,6 +28,20 @@ type BlockResult struct {
 	Error  *Error // Nil if OK
 }
 
+type FailedBlock struct {
+	Chain   string
+	Block   uint64
+	Attempt int
+}
+
+type FailedBlockStatus string
+
+const (
+	FailedBlockStatusPending  FailedBlockStatus = "pending"
+	FailedBlockStatusRetrying FailedBlockStatus = "retrying"
+	FailedBlockStatusSuccess  FailedBlockStatus = "success"
+)
+
 type Indexer interface {
 	GetName() string
 	GetAddressType() enum.AddressType

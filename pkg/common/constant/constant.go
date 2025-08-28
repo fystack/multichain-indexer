@@ -8,4 +8,5 @@ const (
 
 	LatestBlockKeyPrefix = "latest_block_"
 	ProgressKeyPrefix    = "catchup_progress_"
+	FailedBlockKeyPrefix = "failed_block"
 )

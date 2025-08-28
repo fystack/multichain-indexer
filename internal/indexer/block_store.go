@@ -3,6 +3,7 @@ package indexer
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
@@ -35,6 +36,70 @@ func (bs *BlockStore) SaveLatestBlock(chainName string, blockNumber uint64) erro
 	}
 	logger.Info("Saving latest block", "chainName", chainName, "blockNumber", blockNumber)
 	return bs.store.Set(fmt.Sprintf("%s%s", constant.LatestBlockKeyPrefix, chainName), strconv.FormatUint(blockNumber, 10))
+}
+
+func (bs *BlockStore) GetFailedBlocks(chainName string) ([]uint64, error) {
+	failedBlocks := []uint64{}
+	ok, err := bs.store.GetAny(fmt.Sprintf("%s/%s", constant.FailedBlockKeyPrefix, chainName), &failedBlocks)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		logger.Info("No failed blocks found", "chainName", chainName)
+		return nil, nil
+	}
+	return failedBlocks, nil
+}
+
+// SaveFailedBlock appends a failed block to the per-chain list (deduplicated and sorted)
+func (bs *BlockStore) SaveFailedBlock(chainName string, blockNumber uint64) error {
+	if chainName == "" {
+		return errors.New("chain name is required")
+	}
+	if blockNumber == 0 {
+		return errors.New("block number is required")
+	}
+
+	key := fmt.Sprintf("%s/%s", constant.FailedBlockKeyPrefix, chainName)
+	var blocks []uint64
+	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
+
+	// dedup
+	found := slices.Contains(blocks, blockNumber)
+	if !found {
+		blocks = append(blocks, blockNumber)
+		slices.Sort(blocks)
+		if err := bs.store.SetAny(key, blocks); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RemoveFailedBlocksInRange removes all failed blocks within [start, end]
+func (bs *BlockStore) RemoveFailedBlocksInRange(chainName string, start, end uint64) error {
+	if chainName == "" {
+		return errors.New("chain name is required")
+	}
+	if end < start {
+		return nil
+	}
+	key := fmt.Sprintf("%s/%s", constant.FailedBlockKeyPrefix, chainName)
+	var blocks []uint64
+	ok, err := bs.store.GetAny(key, &blocks)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return nil
+	}
+	filtered := make([]uint64, 0, len(blocks))
+	for _, b := range blocks {
+		if b < start || b > end {
+			filtered = append(filtered, b)
+		}
+	}
+	return bs.store.SetAny(key, filtered)
 }
 
 func (bs *BlockStore) Close() error {

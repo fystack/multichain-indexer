@@ -28,6 +28,7 @@ type IndexCmd struct {
 	ConfigPath string   `help:"Path to config file." default:"configs/config.yaml" name:"config"`
 	Debug      bool     `help:"Enable debug logs." name:"debug"`
 	Catchup    bool     `help:"Run catchup alongside regular indexer." name:"catchup"`
+	Latest     bool     `help:"Start from latest block (overrides config)." name:"latest"`
 }
 
 type NATSPrinterCmd struct {
@@ -36,7 +37,7 @@ type NATSPrinterCmd struct {
 }
 
 func (c *IndexCmd) Run() error {
-	runIndexer(c.Chains, c.ConfigPath, c.Debug, c.Catchup)
+	runIndexer(c.Chains, c.ConfigPath, c.Debug, c.Catchup, c.Latest)
 	return nil
 }
 
@@ -56,7 +57,7 @@ func main() {
 	ctx.FatalIfErrorf(err)
 }
 
-func runIndexer(chains []string, configPath string, debug, catchup bool) {
+func runIndexer(chains []string, configPath string, debug, catchup, latest bool) {
 	ctx := context.Background()
 
 	level := slog.LevelInfo
@@ -85,6 +86,17 @@ func runIndexer(chains []string, configPath string, debug, catchup bool) {
 		logger.Fatal("Validate chains failed", "err", err)
 	}
 
+	// Override from_latest from CLI if requested
+	if latest {
+		for _, name := range chains {
+			if cc, err := cfg.GetChain(name); err == nil {
+				cc.FromLatest = true
+				cfg.Chains.Items[name] = cc
+			}
+		}
+		logger.Info("Overriding start to latest for chains", "chains", chains)
+	}
+
 	// start redis
 	redisClient, err := infra.NewRedisClient(cfg.Redis.URL, cfg.Redis.Password, cfg.Environment.String())
 	if err != nil {
@@ -105,13 +117,13 @@ func runIndexer(chains []string, configPath string, debug, catchup bool) {
 	}
 
 	// start regular worker
-	if err := manager.Start(chains); err != nil {
+	if err := manager.Start(chains, indexer.ModeRegular); err != nil {
 		logger.Fatal("Start regular worker failed", "err", err)
 	}
 
 	// optionally run catchup
 	if catchup {
-		if err := manager.StartCatchupAuto(chains); err != nil {
+		if err := manager.Start(chains, indexer.ModeCatchup); err != nil {
 			logger.Fatal("Start catchup failed", "err", err)
 		}
 	}
