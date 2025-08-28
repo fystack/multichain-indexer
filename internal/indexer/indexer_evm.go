@@ -25,34 +25,29 @@ const (
 )
 
 type EVMIndexer struct {
-	config      config.ChainConfig
-	failover    *rpc.FailoverManager
-	rateLimiter *ratelimiter.PooledRateLimiter
+	config   config.ChainConfig
+	failover *rpc.FailoverManager
 }
 
 func NewEVMIndexer(config config.ChainConfig) (*EVMIndexer, error) {
-	var rl *ratelimiter.PooledRateLimiter
-	if config.Client.Throttle.RPS > 0 {
-		interval := time.Second / time.Duration(config.Client.Throttle.RPS)
-		burst := config.Client.Throttle.Burst
-		if burst <= 0 {
-			burst = 1
-		}
-		rl = ratelimiter.NewPooledRateLimiter(interval, burst)
-	}
-
 	fm := rpc.NewFailoverManager(rpc.DefaultFailoverConfig())
 	for i, nodeURL := range config.Nodes {
 		name := fmt.Sprintf("evm-%s-%d", config.Name, i)
+
+		// Create shared rate limiter for each node URL to prevent doubling when multiple workers are running
+		var rl *ratelimiter.PooledRateLimiter
+		if config.Client.Throttle.RPS > 0 {
+			rl = ratelimiter.GetOrCreateSharedPooledRateLimiter(nodeURL.URL, config.Client.Throttle.RPS, config.Client.Throttle.Burst)
+		}
+
 		if err := fm.AddEthereumProvider(name, nodeURL.URL, nil, rl); err != nil {
 			return nil, fmt.Errorf("add provider: %w", err)
 		}
 	}
 
 	return &EVMIndexer{
-		config:      config,
-		failover:    fm,
-		rateLimiter: rl,
+		config:   config,
+		failover: fm,
 	}, nil
 }
 
