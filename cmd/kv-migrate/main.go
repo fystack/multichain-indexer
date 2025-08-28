@@ -136,7 +136,7 @@ func printSummary(total, copied int, duration time.Duration, dryRun bool) {
 	if dryRun {
 		fmt.Printf("\n%s%s Dry run completed - no data was modified%s\n", colorBold, colorYellow, colorReset)
 	} else {
-		fmt.Printf("\n%s%s Migration completed successfully!%s\n", colorBold, colorGreen, emojiComplete, colorReset)
+		fmt.Printf("\n%s%s Migration completed successfully! %s%s\n", colorBold, colorGreen, emojiComplete, colorReset)
 	}
 }
 
