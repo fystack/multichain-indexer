@@ -28,38 +28,33 @@ const ERC_TRANSFER_TOPIC = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f5
 const TRX_SUN_DECIMALS = 1000000
 
 type TronIndexer struct {
-	config      config.ChainConfig
-	failover    *rpc.FailoverManager
-	rateLimiter *ratelimiter.PooledRateLimiter
+	config   config.ChainConfig
+	failover *rpc.FailoverManager
 
 	// Caches for frequently accessed data
 	addrCache sync.Map // cache for address conversions
 }
 
 func NewTronIndexer(config config.ChainConfig) (*TronIndexer, error) {
-	var rl *ratelimiter.PooledRateLimiter
-	if config.Client.Throttle.RPS > 0 {
-		interval := time.Second / time.Duration(config.Client.Throttle.RPS)
-		burst := config.Client.Throttle.Burst
-		if burst <= 0 {
-			burst = 1
-		}
-		rl = ratelimiter.NewPooledRateLimiter(interval, burst)
-	}
-
 	fm := rpc.NewFailoverManager(rpc.DefaultFailoverConfig())
 	for i, nodeURL := range config.Nodes {
 		name := fmt.Sprintf("%s-%d", config.Name, i)
 		auth := rpc.NodeToAuthConfig(nodeURL)
+
+		// Create shared rate limiter for each node URL to prevent doubling when multiple workers are running
+		var rl *ratelimiter.PooledRateLimiter
+		if config.Client.Throttle.RPS > 0 {
+			rl = ratelimiter.GetOrCreateSharedPooledRateLimiter(nodeURL.URL, config.Client.Throttle.RPS, config.Client.Throttle.Burst)
+		}
+
 		if err := fm.AddTronProvider(name, nodeURL.URL, auth, rl); err != nil {
 			return nil, fmt.Errorf("add provider %q: %w", name, err)
 		}
 	}
 
 	return &TronIndexer{
-		config:      config,
-		failover:    fm,
-		rateLimiter: rl,
+		config:   config,
+		failover: fm,
 	}, nil
 }
 

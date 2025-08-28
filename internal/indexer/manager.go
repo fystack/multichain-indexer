@@ -12,6 +12,7 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
 type Manager struct {
@@ -143,6 +144,8 @@ func (m *Manager) Stop() {
 		_ = m.blockStore.Close()
 		m.blockStore = nil
 	}
+	// Clean up global rate limiters
+	ratelimiter.CloseAllRateLimiters()
 	logger.Info("Manager stopped")
 }
 
