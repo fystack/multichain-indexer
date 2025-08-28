@@ -116,7 +116,7 @@ type NATSConfig struct {
 type KVStoreCfg struct {
 	Type   enum.KVStoreType `yaml:"type"` // badger | consul | postgres
 	Badger BadgerKVCfg      `yaml:"badger"`
-	Consul ConsulKVSCfg     `yaml:"consul"`
+	Consul ConsulKVCfg      `yaml:"consul"`
 }
 
 type BadgerKVCfg struct {
@@ -129,7 +129,7 @@ type HttpAuthCfg struct {
 	Password string `yaml:"password"`
 }
 
-type ConsulKVSCfg struct {
+type ConsulKVCfg struct {
 	Scheme   string      `yaml:"scheme"`  // http|https
 	Address  string      `yaml:"address"` // host:port
 	Folder   string      `yaml:"folder"`

@@ -1,0 +1,19 @@
+source:
+  type: badger
+  badger:
+    directory: ./data/badger
+    prefix:
+    
+destination:
+  type: consul
+  consul:
+    scheme: http
+    address: 127.0.0.1:8500
+    folder: indexer
+    token:
+
+prefixes:
+  - latest_block_
+  - catchup_progress_
+
+verify: true
