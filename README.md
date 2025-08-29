@@ -190,8 +190,14 @@ flowchart TB
         Manager[Manager<br/>Multi-chain Orchestrator<br/>Worker Management]
     end
     
-    subgraph "Processing Layer"
-        Worker[Worker<br/>Regular/Catchup Mode<br/>Per Chain]
+    subgraph "Worker Layer"
+        RegularWorker[RegularWorker<br/>Latest Block Processing<br/>Real-time Indexing]
+        CatchupWorker[CatchupWorker<br/>Historical Block Processing<br/>Gap Filling]
+        RescannerWorker[RescannerWorker<br/>Recent Block Re-scanning<br/>Missed Event Recovery]
+        BaseWorker[BaseWorker<br/>Common Logic<br/>Rate Limiting, Bloom Filter]
+    end
+    
+    subgraph "Chain Layer"
         Indexer[Chain Indexer<br/>EVM/TRON<br/>Block Processing]
     end
     
@@ -202,22 +208,28 @@ flowchart TB
     end
     
     subgraph "Storage Layer"
-        BlockStore[BlockStore<br/>Progress Tracking<br/>Latest Block Numbers]
+        BlockStore[BlockStore<br/>Progress Tracking<br/>Latest Block Numbers<br/>Failed Block Management]
         KVStore[KV Store<br/>BadgerDB<br/>Persistent Data]
         NATS[NATS Server<br/>Transaction Events<br/>Real-time Streaming]
     end
     
     %% Data Flow
     CLI --> Manager
-    Manager --> Worker
+    Manager --> RegularWorker
+    Manager --> CatchupWorker
+    Manager --> RescannerWorker
     Manager --> Indexer
     Manager --> Emitter
     Manager --> BloomFilter
     
-    Worker --> Indexer
-    Worker --> Emitter
-    Worker --> BloomFilter
-    Worker --> BlockStore
+    RegularWorker --> BaseWorker
+    CatchupWorker --> BaseWorker
+    RescannerWorker --> BaseWorker
+    
+    BaseWorker --> Indexer
+    BaseWorker --> Emitter
+    BaseWorker --> BloomFilter
+    BaseWorker --> BlockStore
     
     Indexer --> RPC
     
@@ -227,7 +239,10 @@ flowchart TB
     %% Styling
     style CLI fill:#e3f2fd
     style Manager fill:#f3e5f5
-    style Worker fill:#e8f5e8
+    style RegularWorker fill:#e8f5e8
+    style CatchupWorker fill:#f3e5f5
+    style RescannerWorker fill:#fff3e0
+    style BaseWorker fill:#fce4ec
     style Indexer fill:#e8f5e8
     style RPC fill:#fce4ec
     style Emitter fill:#fff3e0
@@ -237,45 +252,135 @@ flowchart TB
     style NATS fill:#e0f2f1
 ```
 
-### **Data Flow**
+### **Worker Architecture & Data Flow**
+
+#### **Worker Types**
+
+1. **RegularWorker**: 
+   - Processes latest blocks in real-time as they arrive
+   - Starts from last processed block or config start block
+   - Runs continuously, waiting for new blocks when caught up
+   - Logs per-block processing for detailed monitoring
+
+2. **CatchupWorker**:
+   - Processes historical blocks and failed blocks in ranges
+   - Loads existing progress ranges from KV store
+   - Converts failed blocks list to ranges for processing
+   - Creates fresh ranges if no work pending
+   - Deletes completed ranges and cleans up failed blocks
+   - Runs once at startup, then processes queued work
+
+3. **RescannerWorker**:
+   - Periodically re-scans recent blocks to catch missed events
+   - Scans configurable window behind latest chain head
+   - Avoids current head block to reduce reorg risk
+   - Safety net for catching transient failures
+
+4. **BaseWorker**:
+   - Common functionality shared by all worker types
+   - Rate limiting, error handling, bloom filtering
+   - Transaction emission, KV store integration
+   - Graceful shutdown and logging
+
+#### **Data Flow**
 
 1. **Multi-Chain Initialization**: Parse comma-separated chain names (`--chain=evm,tron`)
-2. **Worker Creation**: Create regular + optional catchup workers per chain
+2. **Worker Creation**: Create appropriate workers per chain based on mode
 3. **Gap Detection**: Auto-detect missing blocks between KV store and RPC head
 4. **Concurrent Processing**: 
    - Regular workers: Process latest blocks in real-time
    - Catchup workers: Fill historical gaps in parallel
+   - Rescanner workers: Re-check recent blocks periodically
 5. **Transaction Processing**: Extract and normalize transaction data
 6. **Event Publishing**: Stream transactions to NATS for real-time consumption
-7. **Failure Handling**: Store failed blocks for later retry
+7. **Failure Handling**: Store failed blocks for later retry via BlockStore
 8. **State Persistence**: Track progress per chain in optimized BlockStore
+
+### **Worker Flow & Processing Modes**
+
+#### **RegularWorker Flow**
+```mermaid
+graph TD
+    A[Start RegularWorker] --> B[Determine Starting Block]
+    B --> C[Get Latest Block from RPC]
+    C --> D{Current > Latest?}
+    D -->|Yes| E[Wait 3s, Retry]
+    D -->|No| F[Fetch Batch of Blocks]
+    F --> G[Process Each Block]
+    G --> H[Emit Matching Transactions]
+    H --> I[Save Progress]
+    I --> J[Update Current Block]
+    J --> K[Wait for Poll Interval]
+    K --> C
+    E --> C
+```
+
+#### **CatchupWorker Flow**
+```mermaid
+graph TD
+    A[Start CatchupWorker] --> B[Load Existing Progress Ranges]
+    B --> C[Load Failed Blocks List]
+    C --> D[Convert Failed Blocks to Ranges]
+    D --> E{Merge All Ranges}
+    E --> F{Any Ranges Pending?}
+    F -->|No| G[Create Fresh Range from Latest to Head]
+    F -->|Yes| H[Take First Range]
+    G --> H
+    H --> I[Read Range Progress from KV]
+    I --> J[Process Batch in Range]
+    J --> K[Save Progress After Batch]
+    K --> L{Range Complete?}
+    L -->|No| J
+    L -->|Yes| M[Delete Range Key from KV]
+    M --> N[Remove Failed Blocks in Range]
+    N --> O[Move to Next Range]
+    O --> F
+```
+
+#### **RescannerWorker Flow**
+```mermaid
+graph TD
+    A[Start RescannerWorker] --> B[Get Latest Block from RPC]
+    B --> C[Calculate Scan Window]
+    C --> D[Fetch Blocks in Window]
+    D --> E[Re-process Each Block]
+    E --> F[Emit Any Missed Transactions]
+    F --> G[Log Rescan Summary]
+    G --> H[Wait for Poll Interval]
+    H --> B
+```
 
 ### **Auto-Catchup System**
 
 The indexer includes intelligent gap detection and catchup processing:
 
 - **Automatic Gap Detection**: Compares KV store state with RPC head block
-- **Smart Range Limiting**: Limits catchup to reasonable ranges (100k blocks max)
+- **Smart Range Management**: Processes blocks in manageable ranges with progress tracking
 - **Concurrent Processing**: Catchup runs alongside regular indexing
-- **Progress Persistence**: Catchup progress is saved and resumable
+- **Progress Persistence**: Catchup progress is saved and resumable per range
 - **Multi-Chain Support**: Each chain has independent catchup processing
+- **Failed Block Integration**: Failed blocks are automatically included in catchup ranges
 
 **How it works:**
 1. Check latest processed block from BlockStore
 2. Get current head block from RPC
-3. If gap > threshold, start catchup worker
-4. Catchup worker processes historical blocks in parallel
-5. Regular worker continues processing latest blocks
-6. Automatic deduplication prevents processing same blocks twice
+3. Load existing catchup progress ranges from KV store
+4. Load failed blocks list and convert to ranges
+5. Merge all ranges and remove overlaps
+6. If no ranges pending, create fresh range from latest to head
+7. Process ranges sequentially with progress tracking
+8. Clean up completed ranges and failed blocks
+9. Regular worker continues processing latest blocks in parallel
 
 ### **Failed Block Recovery System**
 
 The indexer includes a sophisticated failed block management system:
 
-- **Automatic Retry**: Failed blocks are automatically stored with retry count
-- **Intelligent Backoff**: Exponential backoff for consecutive failures
-- **Status Tracking**: Monitor resolved vs unresolved failed blocks
-- **Persistent Storage**: Failed blocks survive application restarts
+- **Automatic Storage**: Failed blocks are automatically stored in KV store with deduplication
+- **Range Integration**: Failed blocks are converted to ranges for efficient processing
+- **Progress Tracking**: Failed blocks are tracked per chain and cleaned up when processed
+- **Persistent Storage**: Failed blocks survive application restarts via BlockStore
+- **Cleanup**: Failed blocks are removed from storage when successfully processed in ranges
 
 ### **Bloom Filter System**
 
@@ -301,15 +406,19 @@ graph TB
         end
         
         subgraph "EVM Workers"
-            EVM_REG["EVM Regular Worker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest EVM blocks<br/>📍 Current: 19,500,000+"]
+            EVM_REG["EVM RegularWorker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest EVM blocks<br/>📍 Current: 19,500,000+"]
             
-            EVM_CATCH["EVM Catchup Worker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical EVM blocks<br/>📍 Range: Auto-detected gap"]
+            EVM_CATCH["EVM CatchupWorker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical EVM blocks<br/>📍 Range: Auto-detected gap"]
+            
+            EVM_RESCAN["EVM RescannerWorker<br/>📊 Mode: ModeRescanner<br/>🔄 Re-scans recent blocks<br/>📍 Window: Configurable"]
         end
         
         subgraph "Tron Workers"
-            TRON_REG["Tron Regular Worker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest Tron blocks<br/>📍 Current: 75,000,000+"]
+            TRON_REG["Tron RegularWorker<br/>📊 Mode: ModeRegular<br/>🔄 Processes: Latest Tron blocks<br/>📍 Current: 75,000,000+"]
             
-            TRON_CATCH["Tron Catchup Worker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical Tron blocks<br/>📍 Range: Auto-detected gap"]
+            TRON_CATCH["Tron CatchupWorker<br/>📊 Mode: ModeCatchup<br/>🔄 Processes: Historical Tron blocks<br/>📍 Range: Auto-detected gap"]
+            
+            TRON_RESCAN["Tron RescannerWorker<br/>📊 Mode: ModeRescanner<br/>🔄 Re-scans recent blocks<br/>📍 Window: Configurable"]
         end
         
         subgraph "Shared Resources"
@@ -340,6 +449,9 @@ graph TB
     DETECT --> EVM_CATCH
     DETECT --> TRON_CATCH
     
+    EVM_REG --> EVM_RESCAN
+    TRON_REG --> TRON_RESCAN
+    
     EVM_REG --> KV
     EVM_REG --> RPC
     EVM_REG --> NATS
@@ -351,6 +463,12 @@ graph TB
     EVM_CATCH --> NATS
     EVM_CATCH --> REDIS
     EVM_CATCH --> DB
+    
+    EVM_RESCAN --> KV
+    EVM_RESCAN --> RPC
+    EVM_RESCAN --> NATS
+    EVM_RESCAN --> REDIS
+    EVM_RESCAN --> DB
     
     TRON_REG --> KV
     TRON_REG --> RPC
@@ -364,11 +482,19 @@ graph TB
     TRON_CATCH --> REDIS
     TRON_CATCH --> DB
     
+    TRON_RESCAN --> KV
+    TRON_RESCAN --> RPC
+    TRON_RESCAN --> NATS
+    TRON_RESCAN --> REDIS
+    TRON_RESCAN --> DB
+    
     style CMD fill:#e8f5e8
     style EVM_REG fill:#e1f5fe
     style EVM_CATCH fill:#f3e5f5
+    style EVM_RESCAN fill:#fff3e0
     style TRON_REG fill:#e1f5fe
     style TRON_CATCH fill:#f3e5f5
+    style TRON_RESCAN fill:#fff3e0
     style DETECT fill:#fff3e0
     style REDIS fill:#ffebee
     style DB fill:#e8f5e8
@@ -405,12 +531,15 @@ tail -f logs/failed_blocks_$(date +%Y-%m-%d).log
 ```
 ├── cmd/indexer/           # CLI application (simplified single command)
 ├── configs/               # Configuration files
-├── internal/
-│   ├── indexer/          # Indexing logic
-│   │   ├── manager.go    # Multi-chain orchestration + BlockStore
-│   │   ├── worker.go     # Unified worker (regular/catchup modes)
-│   │   ├── indexer_evm.go # Ethereum support
-│   │   └── indexer_tron.go # TRON support
+    ├── internal/
+    │   ├── indexer/          # Indexing logic
+    │   │   ├── manager.go    # Multi-chain orchestration + BlockStore
+    │   │   ├── worker.go     # BaseWorker interface and common logic
+    │   │   ├── worker_regular.go # RegularWorker for latest blocks
+    │   │   ├── worker_catchup.go # CatchupWorker for historical blocks
+    │   │   ├── worker_rescanner.go # RescannerWorker for missed events
+    │   │   ├── indexer_evm.go # Ethereum support
+    │   │   └── indexer_tron.go # TRON support
 │   ├── rpc/              # RPC client management + failover
 │   │   ├── manager.go    # Failover management
 │   │   ├── client.go     # Generic RPC client
