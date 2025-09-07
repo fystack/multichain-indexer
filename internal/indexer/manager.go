@@ -14,6 +14,12 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
+type FailedBlockEvent struct {
+	Chain   string
+	Block   uint64
+	Attempt int
+}
+
 type Manager struct {
 	ctx        context.Context
 	cfg        *config.Config
@@ -22,6 +28,7 @@ type Manager struct {
 	emitter    *events.Emitter
 	workers    []Worker
 	addressBF  addressbloomfilter.WalletAddressBloomFilter
+	failedChan chan FailedBlockEvent
 }
 
 func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
@@ -45,6 +52,7 @@ func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
 		blockStore: NewBlockStore(store),
 		emitter:    emitter,
 		addressBF:  addressBF,
+		failedChan: make(chan FailedBlockEvent, 1000),
 	}, nil
 }
 
@@ -59,7 +67,7 @@ func (m *Manager) Start(chainNames []string, mode WorkerMode) error {
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", chainCfg.Name, err)
 		}
-		w := createWorkerByMode(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF, mode)
+		w := m.createWorkerByMode(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF, mode)
 		if w == nil {
 			return fmt.Errorf("unsupported or uninitialized worker mode: %s", mode)
 		}
@@ -98,16 +106,14 @@ func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig
 	}
 }
 
-func createWorkerByMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode) Worker {
+func (m *Manager) createWorkerByMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode) Worker {
 	switch mode {
 	case ModeRegular:
-		return NewRegularWorker(ctx, chain, config, kv, blockStore, emitter, addressBF)
+		return NewRegularWorker(ctx, chain, config, kv, blockStore, emitter, addressBF, m.failedChan)
 	case ModeCatchup:
-		return NewCatchupWorker(ctx, chain, config, kv, blockStore, emitter, addressBF)
+		return NewCatchupWorker(ctx, chain, config, kv, blockStore, emitter, addressBF, m.failedChan)
 	case ModeRescanner:
-		// Build a base worker for rescanner and wrap with a window (e.g., 64 blocks)
-		bw := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeRescanner)
-		return NewRescannerWorker(bw, 64)
+		return NewRescannerWorker(ctx, chain, config, kv, blockStore, emitter, addressBF, m.failedChan)
 	default:
 		return nil
 	}

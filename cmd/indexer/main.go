@@ -121,6 +121,11 @@ func runIndexer(chains []string, configPath string, debug, catchup, latest bool)
 		logger.Fatal("Start regular worker failed", "err", err)
 	}
 
+	// start rescanner worker
+	if err := manager.Start(chains, indexer.ModeRescanner); err != nil {
+		logger.Fatal("Start rescanner worker failed", "err", err)
+	}
+
 	// optionally run catchup
 	if catchup {
 		if err := manager.Start(chains, indexer.ModeCatchup); err != nil {

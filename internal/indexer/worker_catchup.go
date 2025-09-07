@@ -3,7 +3,6 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,8 +34,8 @@ func progressKey(chain string, start, end uint64) string {
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *CatchupWorker {
-	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeCatchup)
+func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, failedChan chan FailedBlockEvent) *CatchupWorker {
+	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeCatchup, failedChan)
 	catchup := &CatchupWorker{BaseWorker: worker}
 	catchup.blockRanges = catchup.loadCatchupProgress()
 	return catchup
@@ -72,25 +71,7 @@ func (cw *CatchupWorker) loadCatchupProgress() []BlockRange {
 		}
 	}
 
-	// 2) Failed blocks merged to ranges
-	if blocks, err := cw.blockStore.GetFailedBlocks(cw.chain.GetName()); err == nil && len(blocks) > 0 {
-		slices.Sort(blocks)
-		start := blocks[0]
-		prev := blocks[0]
-		for i := 1; i < len(blocks); i++ {
-			b := blocks[i]
-			if b == prev || b == prev+1 {
-				prev = b
-				continue
-			}
-			ranges = append(ranges, BlockRange{Start: start, End: prev})
-			start = b
-			prev = b
-		}
-		ranges = append(ranges, BlockRange{Start: start, End: prev})
-	}
-
-	// If nothing queued yet, create a fresh catchup range from latest processed to chain head
+	// 2) If nothing queued yet, create a fresh catchup range from latest processed to chain head
 	if len(ranges) == 0 {
 		latestProcessed, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetName())
 		chainHead, err2 := cw.chain.GetLatestBlockNumber(cw.ctx)
@@ -129,7 +110,6 @@ func (cw *CatchupWorker) loadCatchupProgress() []BlockRange {
 }
 
 func (cw *CatchupWorker) processCatchupBlocks() error {
-	// Only process queued ranges; do not reload on each ticker
 	if len(cw.blockRanges) == 0 {
 		// idle; nothing to do
 		return nil
@@ -137,9 +117,9 @@ func (cw *CatchupWorker) processCatchupBlocks() error {
 
 	// Take first range
 	r := cw.blockRanges[0]
-	// read per-range progress
 	pKey := progressKey(cw.chain.GetName(), r.Start, r.End)
 	progressStr, _ := cw.kvstore.Get(pKey)
+
 	var current uint64
 	if progressStr == "" {
 		current = r.Start
@@ -147,14 +127,14 @@ func (cw *CatchupWorker) processCatchupBlocks() error {
 		p, _ := strconv.ParseUint(progressStr, 10, 64)
 		if p < r.Start {
 			current = r.Start
-		} else if p > r.End {
+		} else if p >= r.End {
+			// clamp to End if p is equal to or greater than r.End
 			current = r.End
 		} else {
 			current = p + 1
 		}
 	}
 
-	// Log pre-batch status
 	total := r.End - r.Start + 1
 	processed := uint64(0)
 	if current > r.Start {
@@ -170,7 +150,7 @@ func (cw *CatchupWorker) processCatchupBlocks() error {
 	)
 
 	if current > r.End {
-		// range done; cleanup and move to next
+		// range done; cleanup
 		_ = cw.kvstore.Delete(pKey)
 		cw.blockRanges = cw.blockRanges[1:]
 		cw.logger.Info("Catchup range completed",
@@ -209,9 +189,10 @@ func (cw *CatchupWorker) processCatchupBlocks() error {
 		"actual blocks", len(results),
 	)
 
-	// persist progress and advance
+	// persist progress (clamped)
 	if lastSuccess >= current {
-		_ = cw.kvstore.Set(pKey, strconv.FormatUint(lastSuccess, 10))
+		progress := min(lastSuccess, r.End)
+		_ = cw.kvstore.Set(pKey, strconv.FormatUint(progress, 10))
 	}
 
 	// Progress log
