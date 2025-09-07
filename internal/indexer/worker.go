@@ -3,11 +3,12 @@ package indexer
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"log/slog"
 
 	"github.com/fystack/transaction-indexer/internal/events"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
@@ -17,7 +18,6 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
-// WorkerMode defines the mode of operation for a worker
 type WorkerMode string
 
 const (
@@ -31,6 +31,7 @@ type Worker interface {
 	Stop()
 }
 
+// BaseWorker is the common structure for any worker type
 type BaseWorker struct {
 	config             config.ChainConfig
 	chain              Indexer
@@ -44,12 +45,14 @@ type BaseWorker struct {
 	logFileDate        string
 	addressBloomFilter addressbloomfilter.WalletAddressBloomFilter
 	mode               WorkerMode
+	failedChan         chan FailedBlockEvent
 	logger             *slog.Logger
 }
 
+// Stop stops the worker and cleans up resources
 func (bw *BaseWorker) Stop() {
 	if bw.currentBlock > 0 {
-		_ = bw.blockStore.SaveLatestBlock(bw.chain.GetName(), bw.currentBlock-1)
+		_ = bw.blockStore.SaveLatestBlock(bw.chain.GetName(), bw.currentBlock)
 	}
 	bw.cancel()
 	if bw.logFile != nil {
@@ -68,8 +71,10 @@ func (bw *BaseWorker) Stop() {
 		_ = bw.blockStore.Close()
 		bw.blockStore = nil
 	}
+	bw.logger.Info("Worker stopped", "chain", bw.chain.GetName())
 }
 
+// run executes the given job repeatedly based on PollInterval
 func (bw *BaseWorker) run(job func() error) {
 	ticker := time.NewTicker(bw.config.PollInterval)
 	defer ticker.Stop()
@@ -80,46 +85,49 @@ func (bw *BaseWorker) run(job func() error) {
 	for {
 		select {
 		case <-bw.ctx.Done():
-			if bw.currentBlock > 0 {
-				err := bw.blockStore.SaveLatestBlock(bw.chain.GetName(), bw.currentBlock-1)
-				if err != nil {
-					logger.Error("Error saving latest block", "chain", bw.chain.GetName(), "error", err)
-				}
-			}
-			logger.Info("Worker stopped", "chain", bw.chain.GetName())
+			bw.logger.Info("Context done, exiting run loop")
 			return
 		case <-ticker.C:
+			start := time.Now()
 			if err := job(); err != nil {
 				errorCount++
-				logger.Error("Error processing blocks", "chain", bw.chain.GetName(), "error", err, "consecutive_errors", errorCount)
+				bw.logger.Error("Error processing blocks",
+					"chain", bw.chain.GetName(),
+					"error", err,
+					"consecutive_errors", errorCount)
 				_ = bw.emitter.EmitError(bw.chain.GetName(), err)
+
 				if errorCount >= maxConsecutiveErrors {
-					logger.Warn("Too many consecutive errors, slowing down", "chain", bw.chain.GetName())
+					bw.logger.Warn("Too many consecutive errors, sleeping to prevent overload",
+						"chain", bw.chain.GetName())
 					time.Sleep(bw.config.PollInterval)
 					errorCount = 0
 				}
 			} else {
 				errorCount = 0
 			}
+			// Ensure PollInterval between job starts
+			elapsed := time.Since(start)
+			if elapsed < bw.config.PollInterval {
+				time.Sleep(bw.config.PollInterval - elapsed)
+			}
 		}
 	}
 }
 
+// emitBlock emits transactions related to addresses in the Bloom filter
 func (bw *BaseWorker) emitBlock(block *types.Block) {
-	if bw.addressBloomFilter == nil {
+	if bw.addressBloomFilter == nil || block == nil {
 		return
 	}
-	addressType := bw.chain.GetAddressType()
 
+	addressType := bw.chain.GetAddressType()
 	for _, tx := range block.Transactions {
-		matched := false
-		if bw.addressBloomFilter.Contains(tx.ToAddress, addressType) ||
-			bw.addressBloomFilter.Contains(tx.FromAddress, addressType) {
-			matched = true
-		}
+		matched := bw.addressBloomFilter.Contains(tx.ToAddress, addressType) ||
+			bw.addressBloomFilter.Contains(tx.FromAddress, addressType)
 
 		if matched {
-			logger.Info("Emitting transaction",
+			bw.logger.Info("Emitting transaction",
 				"chain", bw.chain.GetName(),
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
@@ -130,26 +138,46 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 	}
 }
 
+// handleBlockResult processes a single block, returns true if success
 func (bw *BaseWorker) handleBlockResult(result BlockResult) bool {
 	if result.Error != nil {
-		err := bw.blockStore.SaveFailedBlock(bw.chain.GetName(), result.Number)
-		if err != nil {
-			logger.Error("Error saving failed block", "chain", bw.chain.GetName(), "block", result.Number, "error", err)
+		_ = bw.blockStore.SaveFailedBlock(bw.chain.GetName(), result.Number)
+		// Non-blocking send to failedChan
+		select {
+		case bw.failedChan <- FailedBlockEvent{
+			Chain:   bw.chain.GetName(),
+			Block:   result.Number,
+			Attempt: 1,
+		}:
+		default:
+			bw.logger.Warn("failedChan full, skipping push", "block", result.Number)
 		}
-		logger.Error("Failed block", "chain", bw.chain.GetName(), "block", result.Number, "error", result.Error.Message)
+
+		bw.logger.Error("Failed block",
+			"chain", bw.chain.GetName(),
+			"block", result.Number,
+			"error", result.Error.Message,
+		)
 		return false
 	}
+
 	if result.Block == nil {
-		logger.Error("Nil block", "chain", bw.chain.GetName(), "block", result.Number)
+		bw.logger.Error("Nil block", "chain", bw.chain.GetName(), "block", result.Number)
 		return false
 	}
+
+	// Update currentBlock on success
+	bw.currentBlock = result.Block.Number
+
+	// Emit transactions if relevant
 	bw.emitBlock(result.Block)
 
-	bw.logger.Info("Handling block", "chain", bw.chain.GetName(), "number", result.Block.Number)
+	bw.logger.Info("Handled block successfully", "chain", bw.chain.GetName(), "number", result.Block.Number)
 	return true
 }
 
-func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode) *BaseWorker {
+// newWorkerWithMode initializes a BaseWorker with mode and logging
+func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, failedChan chan FailedBlockEvent) *BaseWorker {
 	ctx, cancel := context.WithCancel(ctx)
 	logFile, date, _ := createLogFile()
 	logger := logger.With(slog.String("mode", strings.ToUpper(string("["+string(mode)+"]"))))
@@ -167,16 +195,18 @@ func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainCo
 		logFileDate:        date,
 		mode:               mode,
 		logger:             logger,
+		failedChan:         failedChan,
 	}
 }
 
+// createLogFile returns a file handle for daily log
 func createLogFile() (*os.File, string, error) {
 	date := time.Now().Format(time.DateOnly)
 	logDir := "logs"
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return nil, "", err
 	}
-	path := filepath.Join(logDir, fmt.Sprintf("failed_blocks_%s.log", date))
+	path := filepath.Join(logDir, fmt.Sprintf("worker_%s.log", date))
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	return f, date, err
 }

@@ -16,8 +16,8 @@ type RegularWorker struct {
 }
 
 // NewWorker creates a worker for regular indexing
-func NewRegularWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter) *RegularWorker {
-	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeRegular)
+func NewRegularWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, failedChan chan FailedBlockEvent) *RegularWorker {
+	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeRegular, failedChan)
 	regular := &RegularWorker{
 		BaseWorker: worker,
 	}
