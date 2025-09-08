@@ -1,12 +1,14 @@
-package indexer
+package worker
 
 import (
 	"context"
 	"fmt"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
@@ -16,7 +18,7 @@ type RegularWorker struct {
 }
 
 // NewWorker creates a worker for regular indexing
-func NewRegularWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *RegularWorker {
+func NewRegularWorker(ctx context.Context, chain indexer.Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *blockstore.Store, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *RegularWorker {
 	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, pubkeyStore, ModeRegular, failedChan)
 	regular := &RegularWorker{
 		BaseWorker: worker,

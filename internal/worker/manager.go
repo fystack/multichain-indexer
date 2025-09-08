@@ -1,14 +1,16 @@
-package indexer
+package worker
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
@@ -25,7 +27,7 @@ type Manager struct {
 	ctx         context.Context
 	cfg         *config.Config
 	store       infra.KVStore
-	blockStore  *BlockStore
+	blockStore  *blockstore.Store
 	emitter     *events.Emitter
 	workers     []Worker
 	pubkeyStore pubkeystore.Store
@@ -53,7 +55,7 @@ func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
 		ctx:         ctx,
 		cfg:         cfg,
 		store:       store,
-		blockStore:  NewBlockStore(store),
+		blockStore:  blockstore.NewBlockStore(store),
 		emitter:     emitter,
 		pubkeyStore: pubkeyStore,
 		failedChan:  make(chan FailedBlockEvent, 1000),
@@ -99,18 +101,18 @@ func (m *Manager) Stop() {
 	logger.Info("Manager stopped")
 }
 
-func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig) (Indexer, error) {
+func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig) (indexer.Indexer, error) {
 	switch chainType {
 	case enum.ChainTypeEVM:
-		return NewEVMIndexer(cfg)
+		return indexer.NewEVMIndexer(cfg)
 	case enum.ChainTypeTron:
-		return NewTronIndexer(cfg)
+		return indexer.NewTronIndexer(cfg)
 	default:
 		return nil, fmt.Errorf("unsupported chain: %s", chainType)
 	}
 }
 
-func (m *Manager) createWorkerByMode(chain Indexer, config config.ChainConfig, mode WorkerMode) Worker {
+func (m *Manager) createWorkerByMode(chain indexer.Indexer, config config.ChainConfig, mode WorkerMode) Worker {
 	switch mode {
 	case ModeRegular:
 		return NewRegularWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
