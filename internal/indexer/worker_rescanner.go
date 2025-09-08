@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/events"
-	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
 
 const (
@@ -34,8 +34,8 @@ type RescannerWorker struct {
 	interval     time.Duration
 }
 
-func NewRescannerWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, failedChan chan FailedBlockEvent) *RescannerWorker {
-	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeRescanner, failedChan)
+func NewRescannerWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *RescannerWorker {
+	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, pubkeyStore, ModeRescanner, failedChan)
 	return &RescannerWorker{
 		BaseWorker:   worker,
 		failedBlocks: make(map[uint64]int),

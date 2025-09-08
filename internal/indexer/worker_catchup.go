@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/events"
-	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
 
 type BlockRange struct {
@@ -34,8 +34,8 @@ func progressKey(chain string, start, end uint64) string {
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, failedChan chan FailedBlockEvent) *CatchupWorker {
-	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, addressBF, ModeCatchup, failedChan)
+func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *CatchupWorker {
+	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, pubkeyStore, ModeCatchup, failedChan)
 	catchup := &CatchupWorker{BaseWorker: worker}
 	catchup.blockRanges = catchup.loadCatchupProgress()
 	return catchup
