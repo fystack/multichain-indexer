@@ -11,7 +11,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/nats-io/nats.go"
 
-	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/internal/worker"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
@@ -111,24 +111,24 @@ func runIndexer(chains []string, configPath string, debug, catchup, latest bool)
 	}
 	infra.InitGlobalDB(db)
 
-	manager, err := indexer.NewManager(ctx, &cfg)
+	manager, err := worker.NewManager(ctx, &cfg)
 	if err != nil {
 		logger.Fatal("Create indexer manager failed", "err", err)
 	}
 
 	// start regular worker
-	if err := manager.Start(chains, indexer.ModeRegular); err != nil {
+	if err := manager.Start(chains, worker.ModeRegular); err != nil {
 		logger.Fatal("Start regular worker failed", "err", err)
 	}
 
 	// start rescanner worker
-	if err := manager.Start(chains, indexer.ModeRescanner); err != nil {
+	if err := manager.Start(chains, worker.ModeRescanner); err != nil {
 		logger.Fatal("Start rescanner worker failed", "err", err)
 	}
 
 	// optionally run catchup
 	if catchup {
-		if err := manager.Start(chains, indexer.ModeCatchup); err != nil {
+		if err := manager.Start(chains, worker.ModeCatchup); err != nil {
 			logger.Fatal("Start catchup failed", "err", err)
 		}
 	}

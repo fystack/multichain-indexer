@@ -1,4 +1,4 @@
-package indexer
+package worker
 
 import (
 	"context"
@@ -10,10 +10,12 @@ import (
 
 	"log/slog"
 
-	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
+	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
@@ -34,9 +36,9 @@ type Worker interface {
 // BaseWorker is the common structure for any worker type
 type BaseWorker struct {
 	config       config.ChainConfig
-	chain        Indexer
+	chain        indexer.Indexer
 	kvstore      infra.KVStore
-	blockStore   *BlockStore
+	blockStore   *blockstore.Store
 	emitter      *events.Emitter
 	currentBlock uint64
 	ctx          context.Context
@@ -139,7 +141,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 }
 
 // handleBlockResult processes a single block, returns true if success
-func (bw *BaseWorker) handleBlockResult(result BlockResult) bool {
+func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 	if result.Error != nil {
 		_ = bw.blockStore.SaveFailedBlock(bw.chain.GetName(), result.Number)
 		// Non-blocking send to failedChan
@@ -177,7 +179,7 @@ func (bw *BaseWorker) handleBlockResult(result BlockResult) bool {
 }
 
 // newWorkerWithMode initializes a BaseWorker with mode and logging
-func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, mode WorkerMode, failedChan chan FailedBlockEvent) *BaseWorker {
+func newWorkerWithMode(ctx context.Context, chain indexer.Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *blockstore.Store, emitter *events.Emitter, pubkeyStore pubkeystore.Store, mode WorkerMode, failedChan chan FailedBlockEvent) *BaseWorker {
 	ctx, cancel := context.WithCancel(ctx)
 	logFile, date, _ := createLogFile()
 	logger := logger.With(slog.String("mode", strings.ToUpper(string("["+string(mode)+"]"))))

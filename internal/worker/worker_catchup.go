@@ -1,4 +1,4 @@
-package indexer
+package worker
 
 import (
 	"context"
@@ -8,8 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
@@ -34,7 +36,7 @@ func progressKey(chain string, start, end uint64) string {
 }
 
 // NewCatchupWorker creates a worker for historical range
-func NewCatchupWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *CatchupWorker {
+func NewCatchupWorker(ctx context.Context, chain indexer.Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *blockstore.Store, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *CatchupWorker {
 	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, pubkeyStore, ModeCatchup, failedChan)
 	catchup := &CatchupWorker{BaseWorker: worker}
 	catchup.blockRanges = catchup.loadCatchupProgress()

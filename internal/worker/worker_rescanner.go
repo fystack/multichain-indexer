@@ -1,4 +1,4 @@
-package indexer
+package worker
 
 import (
 	"context"
@@ -9,8 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/events"
+	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
@@ -34,7 +36,7 @@ type RescannerWorker struct {
 	interval     time.Duration
 }
 
-func NewRescannerWorker(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *RescannerWorker {
+func NewRescannerWorker(ctx context.Context, chain indexer.Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *blockstore.Store, emitter *events.Emitter, pubkeyStore pubkeystore.Store, failedChan chan FailedBlockEvent) *RescannerWorker {
 	worker := newWorkerWithMode(ctx, chain, config, kv, blockStore, emitter, pubkeyStore, ModeRescanner, failedChan)
 	return &RescannerWorker{
 		BaseWorker:   worker,
