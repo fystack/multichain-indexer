@@ -55,6 +55,7 @@ go build -o indexer cmd/indexer/main.go
 | `latest_block_<chain>`                   | RegularWorker progress           |
 | `catchup/progress/<chain>/<start>-<end>` | CatchupWorker progress per range |
 | `failed_blocks/<chain>/<block>`          | Failed blocks metadata for retry |
+| `<chain>/<address>`                      | Public key store                 |
 
 ---
 
@@ -65,6 +66,7 @@ flowchart LR
     Manager --> RegularWorker --> BaseWorker --> KV[(latest_block)]
     Manager --> CatchupWorker --> BaseWorker --> KV[(catchup/progress)]
     BaseWorker -->|on error| CH[(failedChan)] --> RescannerWorker --> KV[(failed_blocks)]
+    BaseWorker --> NATS[(NATS events)]
 ```
 
 **Logic Flow:**
