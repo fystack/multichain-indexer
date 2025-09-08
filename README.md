@@ -112,4 +112,10 @@ flowchart LR
 
 # NATS monitoring
 ./indexer nats-printer
+
+# bloom filter and kvstore need to be initialized before running the indexer
+./wallet-kv-load run --config configs/config.yaml --batch 10000 --debug
+
+# migrate from badger to consul (edit migrate.yaml)
+./kv-migrate run --config configs/config.yaml --dry-run
 ```
