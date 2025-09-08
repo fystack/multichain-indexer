@@ -11,11 +11,11 @@ import (
 	"log/slog"
 
 	"github.com/fystack/transaction-indexer/internal/events"
-	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
 
 type WorkerMode string
@@ -33,20 +33,20 @@ type Worker interface {
 
 // BaseWorker is the common structure for any worker type
 type BaseWorker struct {
-	config             config.ChainConfig
-	chain              Indexer
-	kvstore            infra.KVStore
-	blockStore         *BlockStore
-	emitter            *events.Emitter
-	currentBlock       uint64
-	ctx                context.Context
-	cancel             context.CancelFunc
-	logFile            *os.File
-	logFileDate        string
-	addressBloomFilter addressbloomfilter.WalletAddressBloomFilter
-	mode               WorkerMode
-	failedChan         chan FailedBlockEvent
-	logger             *slog.Logger
+	config       config.ChainConfig
+	chain        Indexer
+	kvstore      infra.KVStore
+	blockStore   *BlockStore
+	emitter      *events.Emitter
+	currentBlock uint64
+	ctx          context.Context
+	cancel       context.CancelFunc
+	logFile      *os.File
+	logFileDate  string
+	pubkeyStore  pubkeystore.Store
+	mode         WorkerMode
+	failedChan   chan FailedBlockEvent
+	logger       *slog.Logger
 }
 
 // Stop stops the worker and cleans up resources
@@ -117,14 +117,14 @@ func (bw *BaseWorker) run(job func() error) {
 
 // emitBlock emits transactions related to addresses in the Bloom filter
 func (bw *BaseWorker) emitBlock(block *types.Block) {
-	if bw.addressBloomFilter == nil || block == nil {
+	if bw.pubkeyStore == nil || block == nil {
 		return
 	}
 
 	addressType := bw.chain.GetAddressType()
 	for _, tx := range block.Transactions {
-		matched := bw.addressBloomFilter.Contains(tx.ToAddress, addressType) ||
-			bw.addressBloomFilter.Contains(tx.FromAddress, addressType)
+		matched := bw.pubkeyStore.Exist(addressType, tx.ToAddress) ||
+			bw.pubkeyStore.Exist(addressType, tx.FromAddress)
 
 		if matched {
 			bw.logger.Info("Emitting transaction",
@@ -177,25 +177,25 @@ func (bw *BaseWorker) handleBlockResult(result BlockResult) bool {
 }
 
 // newWorkerWithMode initializes a BaseWorker with mode and logging
-func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode, failedChan chan FailedBlockEvent) *BaseWorker {
+func newWorkerWithMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, pubkeyStore pubkeystore.Store, mode WorkerMode, failedChan chan FailedBlockEvent) *BaseWorker {
 	ctx, cancel := context.WithCancel(ctx)
 	logFile, date, _ := createLogFile()
 	logger := logger.With(slog.String("mode", strings.ToUpper(string("["+string(mode)+"]"))))
 
 	return &BaseWorker{
-		chain:              chain,
-		config:             config,
-		kvstore:            kv,
-		blockStore:         blockStore,
-		emitter:            emitter,
-		addressBloomFilter: addressBF,
-		ctx:                ctx,
-		cancel:             cancel,
-		logFile:            logFile,
-		logFileDate:        date,
-		mode:               mode,
-		logger:             logger,
-		failedChan:         failedChan,
+		chain:       chain,
+		config:      config,
+		kvstore:     kv,
+		blockStore:  blockStore,
+		emitter:     emitter,
+		pubkeyStore: pubkeyStore,
+		ctx:         ctx,
+		cancel:      cancel,
+		logFile:     logFile,
+		logFileDate: date,
+		mode:        mode,
+		logger:      logger,
+		failedChan:  failedChan,
 	}
 }
 

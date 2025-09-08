@@ -11,6 +11,7 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 )
 
@@ -21,14 +22,14 @@ type FailedBlockEvent struct {
 }
 
 type Manager struct {
-	ctx        context.Context
-	cfg        *config.Config
-	store      infra.KVStore
-	blockStore *BlockStore
-	emitter    *events.Emitter
-	workers    []Worker
-	addressBF  addressbloomfilter.WalletAddressBloomFilter
-	failedChan chan FailedBlockEvent
+	ctx         context.Context
+	cfg         *config.Config
+	store       infra.KVStore
+	blockStore  *BlockStore
+	emitter     *events.Emitter
+	workers     []Worker
+	pubkeyStore pubkeystore.Store
+	failedChan  chan FailedBlockEvent
 }
 
 func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
@@ -43,16 +44,19 @@ func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
 	}
 
 	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter)
-	addressBF.Initialize(ctx)
+	if err := addressBF.Initialize(ctx); err != nil {
+		return nil, fmt.Errorf("address bloom filter init: %w", err)
+	}
+	pubkeyStore := pubkeystore.NewPublicKeyStore(store, addressBF)
 
 	return &Manager{
-		ctx:        ctx,
-		cfg:        cfg,
-		store:      store,
-		blockStore: NewBlockStore(store),
-		emitter:    emitter,
-		addressBF:  addressBF,
-		failedChan: make(chan FailedBlockEvent, 1000),
+		ctx:         ctx,
+		cfg:         cfg,
+		store:       store,
+		blockStore:  NewBlockStore(store),
+		emitter:     emitter,
+		pubkeyStore: pubkeyStore,
+		failedChan:  make(chan FailedBlockEvent, 1000),
 	}, nil
 }
 
@@ -67,7 +71,7 @@ func (m *Manager) Start(chainNames []string, mode WorkerMode) error {
 		if err != nil {
 			return fmt.Errorf("create indexer for %s: %w", chainCfg.Name, err)
 		}
-		w := m.createWorkerByMode(m.ctx, idxr, chainCfg, m.store, m.blockStore, m.emitter, m.addressBF, mode)
+		w := m.createWorkerByMode(idxr, chainCfg, mode)
 		if w == nil {
 			return fmt.Errorf("unsupported or uninitialized worker mode: %s", mode)
 		}
@@ -106,14 +110,14 @@ func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig
 	}
 }
 
-func (m *Manager) createWorkerByMode(ctx context.Context, chain Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *BlockStore, emitter *events.Emitter, addressBF addressbloomfilter.WalletAddressBloomFilter, mode WorkerMode) Worker {
+func (m *Manager) createWorkerByMode(chain Indexer, config config.ChainConfig, mode WorkerMode) Worker {
 	switch mode {
 	case ModeRegular:
-		return NewRegularWorker(ctx, chain, config, kv, blockStore, emitter, addressBF, m.failedChan)
+		return NewRegularWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
 	case ModeCatchup:
-		return NewCatchupWorker(ctx, chain, config, kv, blockStore, emitter, addressBF, m.failedChan)
+		return NewCatchupWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
 	case ModeRescanner:
-		return NewRescannerWorker(ctx, chain, config, kv, blockStore, emitter, addressBF, m.failedChan)
+		return NewRescannerWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
 	default:
 		return nil
 	}
