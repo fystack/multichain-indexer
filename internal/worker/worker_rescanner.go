@@ -12,6 +12,7 @@ import (
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
@@ -65,12 +66,12 @@ func (rw *RescannerWorker) Start() {
 	go rw.run(rw.processRescan)
 }
 
-// key helpers for KVStore
-func failedKey(chain string, block uint64) string {
-	return fmt.Sprintf("failed_blocks/%s/%d", chain, block)
+func failedBlocksKey(chain string, block uint64) string {
+	return fmt.Sprintf("%s/%s/%d", chain, constant.KVPrefixFailedBlocks, block)
 }
-func failedPrefix(chain string) string {
-	return fmt.Sprintf("failed_blocks/%s/", chain)
+
+func failedBlocksPrefix(chain string) string {
+	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixFailedBlocks)
 }
 
 // AddFailedBlock add block to cache + KVStore
@@ -84,7 +85,7 @@ func (rw *RescannerWorker) AddFailedBlock(block uint64, errMsg string) {
 
 	info := FailedBlockInfo{Retries: rw.failedBlocks[block], LastError: errMsg}
 	data, _ := json.Marshal(info)
-	_ = rw.kvstore.Set(failedKey(rw.chain.GetName(), block), string(data))
+	_ = rw.kvstore.Set(failedBlocksKey(rw.chain.GetName(), block), string(data))
 	rw.logger.Info("Added failed block", "block", block, "error", errMsg)
 }
 
@@ -141,7 +142,7 @@ func (rw *RescannerWorker) processRescan() error {
 
 // syncFromKV sync KVStore → cache
 func (rw *RescannerWorker) syncFromKV() error {
-	pairs, err := rw.kvstore.List(failedPrefix(rw.chain.GetName()))
+	pairs, err := rw.kvstore.List(failedBlocksPrefix(rw.chain.GetName()))
 	if err != nil {
 		return err
 	}
@@ -175,7 +176,7 @@ func (rw *RescannerWorker) removeBlock(block uint64) {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
 	delete(rw.failedBlocks, block)
-	_ = rw.kvstore.Delete(failedKey(rw.chain.GetName(), block))
+	_ = rw.kvstore.Delete(failedBlocksKey(rw.chain.GetName(), block))
 }
 
 // incrementRetry increase retry count, remove block if over maxRetries
@@ -189,12 +190,12 @@ func (rw *RescannerWorker) incrementRetry(block uint64, errMsg string) {
 				"chain", rw.chain.GetName(),
 				"block", block)
 			delete(rw.failedBlocks, block)
-			_ = rw.kvstore.Delete(failedKey(rw.chain.GetName(), block))
+			_ = rw.kvstore.Delete(failedBlocksKey(rw.chain.GetName(), block))
 		} else {
 			rw.failedBlocks[block] = count + 1
 			info := FailedBlockInfo{Retries: rw.failedBlocks[block], LastError: errMsg}
 			data, _ := json.Marshal(info)
-			_ = rw.kvstore.Set(failedKey(rw.chain.GetName(), block), string(data))
+			_ = rw.kvstore.Set(failedBlocksKey(rw.chain.GetName(), block), string(data))
 		}
 	}
 }

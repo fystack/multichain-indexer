@@ -6,7 +6,7 @@ const (
 	// For fresh starts with large block numbers, limit catchup range
 	MaxCatchupBlocks = 100000
 
-	LatestBlockKeyPrefix = "latest_block_"
-	ProgressKeyPrefix    = "catchup_progress_"
-	FailedBlockKeyPrefix = "failed_block"
+	KVPrefixLatestBlock     = "latest_block"
+	KVPrefixProgressCatchup = "catchup_progress"
+	KVPrefixFailedBlocks    = "failed_blocks"
 )
