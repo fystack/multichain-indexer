@@ -2,9 +2,6 @@ package worker
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,8 +40,6 @@ type BaseWorker struct {
 	currentBlock uint64
 	ctx          context.Context
 	cancel       context.CancelFunc
-	logFile      *os.File
-	logFileDate  string
 	pubkeyStore  pubkeystore.Store
 	mode         WorkerMode
 	failedChan   chan FailedBlockEvent
@@ -57,10 +52,6 @@ func (bw *BaseWorker) Stop() {
 		_ = bw.blockStore.SaveLatestBlock(bw.chain.GetName(), bw.currentBlock)
 	}
 	bw.cancel()
-	if bw.logFile != nil {
-		_ = bw.logFile.Close()
-		bw.logFile = nil
-	}
 	if bw.kvstore != nil {
 		_ = bw.kvstore.Close()
 		bw.kvstore = nil
@@ -184,7 +175,6 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 // newWorkerWithMode initializes a BaseWorker with mode and logging
 func newWorkerWithMode(ctx context.Context, chain indexer.Indexer, config config.ChainConfig, kv infra.KVStore, blockStore *blockstore.Store, emitter *events.Emitter, pubkeyStore pubkeystore.Store, mode WorkerMode, failedChan chan FailedBlockEvent) *BaseWorker {
 	ctx, cancel := context.WithCancel(ctx)
-	logFile, date, _ := createLogFile()
 	logger := logger.With(slog.String("mode", strings.ToUpper(string("["+string(mode)+"]"))))
 
 	return &BaseWorker{
@@ -196,22 +186,8 @@ func newWorkerWithMode(ctx context.Context, chain indexer.Indexer, config config
 		pubkeyStore: pubkeyStore,
 		ctx:         ctx,
 		cancel:      cancel,
-		logFile:     logFile,
-		logFileDate: date,
 		mode:        mode,
 		logger:      logger,
 		failedChan:  failedChan,
 	}
-}
-
-// createLogFile returns a file handle for daily log
-func createLogFile() (*os.File, string, error) {
-	date := time.Now().Format(time.DateOnly)
-	logDir := "logs"
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		return nil, "", err
-	}
-	path := filepath.Join(logDir, fmt.Sprintf("worker_%s.log", date))
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	return f, date, err
 }

@@ -4,11 +4,14 @@ PKG := ./cmd/indexer
 build:
 	go build -o $(BINARY) $(PKG)
 
-run-evm: build
-	./$(BINARY) index --chain=evm --debug
+run:
+	./$(BINARY) index --catchup
 
-run-tron: build
-	./$(BINARY) index --chain=tron --debug
+run-ethereum-mainnet: build
+	./$(BINARY) index --chain=ethereum-mainnet --catchup
+
+run-tron-mainnet: build
+	./$(BINARY) index --chain=tron-mainnet --catchup
 
 stop:
 	@echo "Killing indexer..."
