@@ -79,7 +79,6 @@ func (m *Manager) Start(chainNames []string, mode WorkerMode) error {
 		}
 		w.Start()
 		m.workers = append(m.workers, w)
-		logger.Info("Started worker", "chain", chainCfg.Name, "type", chainCfg.Type, "mode", mode)
 	}
 	return nil
 }

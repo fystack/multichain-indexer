@@ -11,6 +11,7 @@ import (
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
@@ -26,13 +27,13 @@ type CatchupWorker struct {
 	blockRanges []BlockRange
 }
 
-// progress key helpers (folder-structured)
-func progressPrefix(chain string) string {
-	return fmt.Sprintf("catchup/progress/%s/", chain)
+// catchup key helpers (folder-structured)
+func composeCatchupKey(chain string) string {
+	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixProgressCatchup)
 }
 
-func progressKey(chain string, start, end uint64) string {
-	return fmt.Sprintf("catchup/progress/%s/%d-%d", chain, start, end)
+func catchupKey(chain string, start, end uint64) string {
+	return fmt.Sprintf("%s/%s/%d-%d", chain, constant.KVPrefixProgressCatchup, start, end)
 }
 
 // NewCatchupWorker creates a worker for historical range
@@ -53,22 +54,11 @@ func (cw *CatchupWorker) loadCatchupProgress() []BlockRange {
 	ranges := make([]BlockRange, 0)
 
 	// 1) Existing progress ranges (folder style)
-	if pairs, err := cw.kvstore.List(progressPrefix(cw.chain.GetName())); err == nil {
+	if pairs, err := cw.kvstore.List(composeCatchupKey(cw.chain.GetName())); err == nil {
 		for _, p := range pairs {
-			key := p.Key // catchup/progress/<chain>/<start>-<end>
-			parts := strings.Split(key, "/")
-			if len(parts) < 4 {
-				continue
-			}
-			rangePart := parts[len(parts)-1]
-			se := strings.Split(rangePart, "-")
-			if len(se) != 2 {
-				continue
-			}
-			if s, err1 := strconv.ParseUint(se[0], 10, 64); err1 == nil {
-				if e, err2 := strconv.ParseUint(se[1], 10, 64); err2 == nil && s <= e {
-					ranges = append(ranges, BlockRange{Start: s, End: e})
-				}
+			start, end := extractRangeFromKey(p.Key)
+			if start > 0 && end > 0 {
+				ranges = append(ranges, BlockRange{Start: start, End: end})
 			}
 		}
 	}
@@ -81,7 +71,7 @@ func (cw *CatchupWorker) loadCatchupProgress() []BlockRange {
 			start := latestProcessed + 1
 			end := chainHead
 			// persist progress as start-1
-			_ = cw.kvstore.Set(progressKey(cw.chain.GetName(), start, end), strconv.FormatUint(start-1, 10))
+			_ = cw.kvstore.Set(catchupKey(cw.chain.GetName(), start, end), strconv.FormatUint(start-1, 10))
 			ranges = append(ranges, BlockRange{Start: start, End: end})
 			cw.logger.Info("Queued fresh catchup range",
 				"chain", cw.chain.GetName(),
@@ -119,7 +109,7 @@ func (cw *CatchupWorker) processCatchupBlocks() error {
 
 	// Take first range
 	r := cw.blockRanges[0]
-	pKey := progressKey(cw.chain.GetName(), r.Start, r.End)
+	pKey := catchupKey(cw.chain.GetName(), r.Start, r.End)
 	progressStr, _ := cw.kvstore.Get(pKey)
 
 	var current uint64
@@ -222,4 +212,23 @@ func (cw *CatchupWorker) processCatchupBlocks() error {
 		)
 	}
 	return nil
+}
+
+func extractRangeFromKey(key string) (uint64, uint64) {
+	// <chain>/catchup/<start>-<end>
+	parts := strings.Split(key, "/")
+	if len(parts) < 4 {
+		return 0, 0
+	}
+	rangePart := parts[len(parts)-1]
+	se := strings.Split(rangePart, "-")
+	if len(se) != 2 {
+		return 0, 0
+	}
+	if s, err1 := strconv.ParseUint(se[0], 10, 64); err1 == nil {
+		if e, err2 := strconv.ParseUint(se[1], 10, 64); err2 == nil && s <= e {
+			return s, e
+		}
+	}
+	return 0, 0
 }

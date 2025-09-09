@@ -11,6 +11,14 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
+func (bs *Store) latestBlockKey(chainName string) string {
+	return fmt.Sprintf("%s/%s", chainName, constant.KVPrefixLatestBlock)
+}
+
+func (bs *Store) failedBlocksKey(chainName string) string {
+	return fmt.Sprintf("%s/%s/", chainName, constant.KVPrefixFailedBlocks)
+}
+
 type Store struct {
 	store infra.KVStore
 }
@@ -20,7 +28,7 @@ func NewBlockStore(store infra.KVStore) *Store {
 }
 
 func (bs *Store) GetLatestBlock(chainName string) (uint64, error) {
-	startBlock, err := bs.store.Get(fmt.Sprintf("%s%s", constant.LatestBlockKeyPrefix, chainName))
+	startBlock, err := bs.store.Get(bs.latestBlockKey(chainName))
 	if err != nil {
 		return 0, err
 	}
@@ -35,12 +43,12 @@ func (bs *Store) SaveLatestBlock(chainName string, blockNumber uint64) error {
 		return errors.New("block number is required")
 	}
 	logger.Info("Saving latest block", "chainName", chainName, "blockNumber", blockNumber)
-	return bs.store.Set(fmt.Sprintf("%s%s", constant.LatestBlockKeyPrefix, chainName), strconv.FormatUint(blockNumber, 10))
+	return bs.store.Set(bs.latestBlockKey(chainName), strconv.FormatUint(blockNumber, 10))
 }
 
 func (bs *Store) GetFailedBlocks(chainName string) ([]uint64, error) {
 	failedBlocks := []uint64{}
-	ok, err := bs.store.GetAny(fmt.Sprintf("%s/%s", constant.FailedBlockKeyPrefix, chainName), &failedBlocks)
+	ok, err := bs.store.GetAny(bs.failedBlocksKey(chainName), &failedBlocks)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +68,7 @@ func (bs *Store) SaveFailedBlock(chainName string, blockNumber uint64) error {
 		return errors.New("block number is required")
 	}
 
-	key := fmt.Sprintf("%s/%s", constant.FailedBlockKeyPrefix, chainName)
+	key := bs.failedBlocksKey(chainName)
 	var blocks []uint64
 	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
 
@@ -84,7 +92,7 @@ func (bs *Store) RemoveFailedBlocksInRange(chainName string, start, end uint64) 
 	if end < start {
 		return nil
 	}
-	key := fmt.Sprintf("%s/%s", constant.FailedBlockKeyPrefix, chainName)
+	key := bs.failedBlocksKey(chainName)
 	var blocks []uint64
 	ok, err := bs.store.GetAny(key, &blocks)
 	if err != nil {
