@@ -20,7 +20,7 @@ func (bs *Store) failedBlocksKey(chainName string) string {
 }
 
 func (bs *Store) blockHashKey(chainName string, blockNumber uint64) string {
-	return fmt.Sprintf("%s/block_hash/%d", chainName, blockNumber)
+	return fmt.Sprintf("%s/%s/%d", chainName, constant.KVPrefixBlockHash, blockNumber)
 }
 
 type Store struct {

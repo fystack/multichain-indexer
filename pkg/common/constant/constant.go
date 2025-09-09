@@ -10,4 +10,5 @@ const (
 	KVPrefixLatestBlock     = "latest_block"
 	KVPrefixProgressCatchup = "catchup_progress"
 	KVPrefixFailedBlocks    = "failed_blocks"
+	KVPrefixBlockHash       = "block_hash"
 )
