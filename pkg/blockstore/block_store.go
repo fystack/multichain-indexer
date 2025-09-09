@@ -19,6 +19,10 @@ func (bs *Store) failedBlocksKey(chainName string) string {
 	return fmt.Sprintf("%s/%s/", chainName, constant.KVPrefixFailedBlocks)
 }
 
+func (bs *Store) blockHashKey(chainName string, blockNumber uint64) string {
+	return fmt.Sprintf("%s/block_hash/%d", chainName, blockNumber)
+}
+
 type Store struct {
 	store infra.KVStore
 }
@@ -108,6 +112,46 @@ func (bs *Store) RemoveFailedBlocksInRange(chainName string, start, end uint64) 
 		}
 	}
 	return bs.store.SetAny(key, filtered)
+}
+
+// SaveBlockHash stores the hash of a processed block for reorg detection.
+func (bs *Store) SaveBlockHash(chainName string, blockNumber uint64, hash string) error {
+	if chainName == "" {
+		return errors.New("chain name is required")
+	}
+	if blockNumber == 0 {
+		return errors.New("block number is required")
+	}
+	if hash == "" {
+		return errors.New("block hash is required")
+	}
+	return bs.store.Set(bs.blockHashKey(chainName, blockNumber), hash)
+}
+
+// GetBlockHash retrieves the stored hash for a block number; returns empty string if not found.
+func (bs *Store) GetBlockHash(chainName string, blockNumber uint64) (string, error) {
+	if chainName == "" {
+		return "", errors.New("chain name is required")
+	}
+	if blockNumber == 0 {
+		return "", errors.New("block number is required")
+	}
+	v, err := bs.store.Get(bs.blockHashKey(chainName, blockNumber))
+	if err != nil {
+		return "", err
+	}
+	return v, nil
+}
+
+// DeleteBlockHashesInRange deletes stored block hashes in [start, end].
+func (bs *Store) DeleteBlockHashesInRange(chainName string, start, end uint64) error {
+	if chainName == "" || end < start || start == 0 {
+		return nil
+	}
+	for b := start; b <= end; b++ {
+		_ = bs.store.Delete(bs.blockHashKey(chainName, b))
+	}
+	return nil
 }
 
 func (bs *Store) Close() error {

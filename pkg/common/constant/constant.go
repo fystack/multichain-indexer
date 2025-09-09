@@ -4,7 +4,8 @@ const (
 	EnvProduction  = "production"
 	EnvDevelopment = "development"
 	// For fresh starts with large block numbers, limit catchup range
-	MaxCatchupBlocks = 100000
+	MaxCatchupBlocks           = 100000
+	DefaultReorgRollbackWindow = 50
 
 	KVPrefixLatestBlock     = "latest_block"
 	KVPrefixProgressCatchup = "catchup_progress"
