@@ -45,6 +45,7 @@ const (
 type Indexer interface {
 	GetName() string
 	GetAddressType() enum.AddressType
+	GetChainType() enum.ChainType
 	GetLatestBlockNumber(ctx context.Context) (uint64, error)
 	GetBlock(ctx context.Context, number uint64) (*types.Block, error)
 

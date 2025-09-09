@@ -63,6 +63,11 @@ func (t *TronIndexer) GetName() string { return t.config.Name }
 func (t *TronIndexer) GetAddressType() enum.AddressType {
 	return enum.AddressTypeTron
 }
+
+func (t *TronIndexer) GetChainType() enum.ChainType {
+	return enum.ChainTypeTron
+}
+
 func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
 	err := t.failover.ExecuteTronCall(ctx, func(c *rpc.TronClient) error {

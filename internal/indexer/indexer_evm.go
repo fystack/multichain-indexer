@@ -57,6 +57,10 @@ func (e *EVMIndexer) GetAddressType() enum.AddressType {
 	return enum.AddressTypeEvm
 }
 
+func (e *EVMIndexer) GetChainType() enum.ChainType {
+	return enum.ChainTypeEVM
+}
+
 func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
 	err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {

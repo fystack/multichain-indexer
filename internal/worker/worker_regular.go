@@ -8,10 +8,19 @@ import (
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/constant"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 )
+
+func minUint64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 type RegularWorker struct {
 	*BaseWorker
@@ -43,7 +52,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		return nil
 	}
 
-	end := min(rw.currentBlock+uint64(rw.config.BatchSize)-1, latest)
+	end := minUint64(rw.currentBlock+uint64(rw.config.BatchSize)-1, latest)
 	lastSuccess := rw.currentBlock - 1
 
 	start := time.Now()
@@ -70,9 +79,35 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		len(results),
 	)
 
-	for _, result := range results {
+	// Reorg detection: ensure parent hash continuity
+	for i, result := range results {
+		if result.Block == nil || result.Error != nil {
+			continue
+		}
+
+		if rw.isReorgCheckRequired() {
+			if reorg, err := rw.detectAndHandleReorg(&result); err != nil {
+				return err
+			} else if reorg {
+				return nil
+			}
+		}
+
 		if rw.handleBlockResult(result) {
 			lastSuccess = result.Number
+		}
+
+		// intra-batch continuity check
+		if rw.isReorgCheckRequired() && i > 0 && results[i-1].Block != nil && result.Block != nil {
+			if results[i-1].Block.Hash != result.Block.ParentHash {
+				rw.logger.Warn("Batch continuity broken, will retry next tick",
+					"prev", results[i-1].Block.Number,
+					"prev_hash", results[i-1].Block.Hash,
+					"curr", result.Block.Number,
+					"curr_parent", result.Block.ParentHash,
+				)
+				break
+			}
 		}
 	}
 
@@ -98,4 +133,61 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 		}
 	}
 	return latestBlock
+}
+
+func (rw *RegularWorker) detectAndHandleReorg(result *indexer.BlockResult) (bool, error) {
+	if result.Block == nil || result.Error != nil {
+		return false, nil
+	}
+
+	if result.Block.Number > rw.currentBlock {
+		prevNum := result.Block.Number - 1
+		storedHash, _ := rw.blockStore.GetBlockHash(rw.chain.GetName(), prevNum)
+
+		if storedHash != "" && storedHash != result.Block.ParentHash {
+			// Reorg detected
+			rollbackWindow := uint64(rw.config.ReorgRollbackWindow)
+			if rollbackWindow == 0 {
+				rollbackWindow = constant.DefaultReorgRollbackWindow
+			}
+			var reorgStart uint64
+			if prevNum > rollbackWindow {
+				reorgStart = prevNum - rollbackWindow
+			} else {
+				reorgStart = 1
+			}
+
+			rw.logger.Warn("Reorg detected; rolling back",
+				"chain", rw.chain.GetName(),
+				"at_block", prevNum,
+				"expected_parent", storedHash,
+				"actual_parent", result.Block.ParentHash,
+				"rollback_start", reorgStart,
+				"rollback_end", prevNum,
+			)
+
+			// Delete hashes and adjust latest
+			if err := rw.blockStore.DeleteBlockHashesInRange(rw.chain.GetName(), reorgStart, prevNum); err != nil {
+				return true, fmt.Errorf("delete block hashes: %w", err)
+			}
+			if err := rw.blockStore.SaveLatestBlock(rw.chain.GetName(), reorgStart-1); err != nil {
+				return true, fmt.Errorf("save latest block: %w", err)
+			}
+
+			rw.currentBlock = reorgStart
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (rw *RegularWorker) isReorgCheckRequired() bool {
+	name := rw.chain.GetChainType()
+	switch name {
+	case enum.ChainTypeEVM:
+		return true
+	default:
+		return false
+	}
 }

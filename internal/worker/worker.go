@@ -171,6 +171,9 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 	// Update currentBlock on success
 	bw.currentBlock = result.Block.Number
 
+	// Persist block hash for reorg detection
+	_ = bw.blockStore.SaveBlockHash(bw.chain.GetName(), result.Block.Number, result.Block.Hash)
+
 	// Emit transactions if relevant
 	bw.emitBlock(result.Block)
 

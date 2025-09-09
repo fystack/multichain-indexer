@@ -45,6 +45,7 @@ chains:
         # api_key_env: "INFURA_KEY"
     start_block: 23080871
     from_latest: true
+    reorg_rollback_window: 20
     client:
       timeout: "30s"
       throttle:
@@ -60,6 +61,7 @@ chains:
       - url: "https://bnb.rpc.subquery.network/public"
     start_block: 59040717
     from_latest: true
+    reorg_rollback_window: 30
 
 
 nats:

@@ -69,14 +69,15 @@ func (c *ChainsConfig) UnmarshalYAML(b []byte) error {
 }
 
 type ChainConfig struct {
-	Name         string         `yaml:"name"`
-	Type         enum.ChainType `yaml:"type"`
-	Nodes        []Node         `yaml:"nodes"` // supports http & ws
-	StartBlock   uint64         `yaml:"start_block"`
-	FromLatest   bool           `yaml:"from_latest" default:"true"`
-	BatchSize    int            `yaml:"batch_size"`
-	PollInterval time.Duration  `yaml:"poll_interval"`
-	Client       ClientCfg      `yaml:"client"`
+	Name                string         `yaml:"name"`
+	Type                enum.ChainType `yaml:"type"`
+	Nodes               []Node         `yaml:"nodes"` // supports http & ws
+	StartBlock          uint64         `yaml:"start_block"`
+	FromLatest          bool           `yaml:"from_latest" default:"true"`
+	ReorgRollbackWindow int            `yaml:"reorg_rollback_window"`
+	BatchSize           int            `yaml:"batch_size"`
+	PollInterval        time.Duration  `yaml:"poll_interval"`
+	Client              ClientCfg      `yaml:"client"`
 }
 
 type Node struct {
