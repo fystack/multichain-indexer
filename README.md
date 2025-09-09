@@ -8,6 +8,7 @@ Production-ready indexer for multiple blockchains with three cooperating workers
 git clone https://github.com/fystack/transaction-indexer.git
 cd transaction-indexer
 go mod download
+cp configs/config.example.yaml configs/config.yaml
 go build -o indexer cmd/indexer/main.go
 
 # Index EVM & TRON in real-time
@@ -25,24 +26,24 @@ go build -o indexer cmd/indexer/main.go
 
 * Shared logic for all worker types
 * Rate limiting, logging, bloom filter, KV store integration
-* Sends error blocks to `failedChan` and stores in `failed_blocks/<chain>/<block>`
+* Sends error blocks to `failedChan` and stores in `<chain>/failed_blocks/<block>`
 
 ### **RegularWorker**
 
 * Continuously processes latest blocks from RPC
-* Saves progress to `latest_block_<chain>`
+* Saves progress to `<chain>/latest_block`
 * On block failure → BaseWorker stores it for retry
 
 ### **CatchupWorker**
 
 * Processes historical blocks in ranges `[start,end]`
-* Uses KV `catchup/progress/<chain>/<start>-<end>` to track progress
+* Uses KV `<chain>/catchup_progress/<start>-<end>` to track progress
 * Deletes the key when a range is completed
 * Integrates failed blocks from Rescanner
 
 ### **RescannerWorker**
 
-* Re-processes failed blocks from KV `failed_blocks/<chain>/<block>` or `failedChan`
+* Re-processes failed blocks from KV `<chain>/failed_blocks/<block>` or `failedChan`
 * Updates KV when retry succeeds
 * Avoids current head block to reduce reorg risk
 
@@ -52,11 +53,11 @@ go build -o indexer cmd/indexer/main.go
 
 | Key                                      | Purpose                          |
 | ---------------------------------------- | -------------------------------- |
-| `latest_block_<chain>`                   | RegularWorker progress           |
-| `catchup/progress/<chain>/<start>-<end>` | CatchupWorker progress per range |
-| `failed_blocks/<chain>/<block>`          | Failed blocks metadata for retry |
-| `<chain>/<address>`                      | Public key store                 |
-
+| `<chain>/latest_block`                   | RegularWorker progress           |
+| `<chain>/catchup_progress/<start>-<end>` | CatchupWorker progress per range |
+| `<chain>/failed_blocks/<block>`          | Failed blocks metadata for retry |
+| `<chain_type>/<address>`                 | Public key store                 |
+| `<chain>/block_hash/<block>`             | Block hash for reorg detection   |
 ---
 
 ## 📊 Workflow Overview
@@ -71,10 +72,26 @@ flowchart LR
 
 **Logic Flow:**
 
-1. RegularWorker: processes latest blocks, emits transactions, saves progress, reports errors.
+1. RegularWorker: processes latest blocks, detects reorgs, emits transactions, saves progress, reports errors.
 2. CatchupWorker: fills historical gaps, tracks range progress, deletes range when done.
 3. RescannerWorker: retries failed blocks, updates KV when successful.
 4. BaseWorker: wraps all workers for unified error handling & KV interaction.
+
+---
+
+## ✅ Prerequisites
+
+- Start required services before running the indexer (docker-compose provided):
+  - NATS server (events)
+  - Consul (KV) or Badger (embedded) per your config
+  - PostgreSQL (wallet address repo)
+  - Redis (only if using Redis Bloom filter backend)
+
+```bash
+docker-compose up -d
+```
+
+For configuration and usage details, see `configs/config.example.yaml` and adapt `configs/config.yaml`.
 
 ---
 
@@ -85,6 +102,8 @@ flowchart LR
 * **Bloom Filter**: Redis or in-memory for wallet addresses
 * **Event Emitter**: NATS streaming
 * **RPC Providers**: failover + rate-limiting per chain
+
+See `configs/config.example.yaml` for a full reference of fields and example values.
 
 ---
 
@@ -119,3 +138,4 @@ flowchart LR
 # migrate from badger to consul (edit migrate.yaml)
 ./kv-migrate run --config configs/config.yaml --dry-run
 ```
+
