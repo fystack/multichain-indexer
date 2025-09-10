@@ -102,16 +102,14 @@ func runIndexer(chains []string, configPath string, debug, catchup, latest bool)
 	if err != nil {
 		logger.Fatal("Create redis client failed", "err", err)
 	}
-	infra.InitGlobalRedisClient(redisClient)
 
 	// start db
 	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment.String())
 	if err != nil {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
-	infra.InitGlobalDB(db)
 
-	manager, err := worker.NewManager(ctx, &cfg)
+	manager, err := worker.NewManager(ctx, &cfg, db, redisClient)
 	if err != nil {
 		logger.Fatal("Create indexer manager failed", "err", err)
 	}

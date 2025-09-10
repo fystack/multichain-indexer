@@ -8,6 +8,7 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/model"
 	"github.com/fystack/transaction-indexer/pkg/repository"
+	"gorm.io/gorm"
 )
 
 // WalletAddressBloomFilter defines the interface for working with wallet address filters.
@@ -31,12 +32,12 @@ type WalletAddressBloomFilter interface {
 	Stats(addressType enum.AddressType) map[string]any
 }
 
-func NewBloomFilter(cfg config.BloomFilterCfg) WalletAddressBloomFilter {
-	walletAddressRepo := repository.NewRepository[model.WalletAddress](infra.GlobalDB())
+func NewBloomFilter(cfg config.BloomFilterCfg, db *gorm.DB, redisClient infra.RedisClient) WalletAddressBloomFilter {
+	walletAddressRepo := repository.NewRepository[model.WalletAddress](db)
 	switch cfg.Backend {
 	case enum.BFBackendRedis:
 		return NewRedisBloomFilter(RedisBloomConfig{
-			RedisClient:       infra.GlobalRedisClient(),
+			RedisClient:       redisClient,
 			WalletAddressRepo: walletAddressRepo,
 			BatchSize:         cfg.Redis.BatchSize,
 			KeyPrefix:         cfg.Redis.KeyPrefix,

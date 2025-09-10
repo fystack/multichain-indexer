@@ -47,7 +47,6 @@ func (c *RunCmd) Run() error {
 	if err != nil {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
-	infra.InitGlobalDB(db)
 
 	// Build KV store from config; must be consul
 	if cfg.KVStore.Type != enum.KVStoreTypeConsul {
@@ -65,7 +64,7 @@ func (c *RunCmd) Run() error {
 		logger.Fatal("Fetch supported address types failed", "err", err)
 	}
 
-	repo := repository.NewRepository[model.WalletAddress](infra.GlobalDB())
+	repo := repository.NewRepository[model.WalletAddress](db)
 	batch := c.BatchSize
 	if batch <= 0 {
 		batch = 1000
