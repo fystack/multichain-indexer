@@ -1,121 +1,34 @@
 package config
 
 import (
-	"errors"
-	"fmt"
-	"net/url"
 	"os"
-	"strings"
-	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/go-playground/validator/v10"
 	"github.com/goccy/go-yaml"
+	"github.com/imdario/mergo"
 )
 
+var validate = validator.New()
+
 type Config struct {
-	Environment Env            `yaml:"environment" default:"development"`
-	Chains      ChainsConfig   `yaml:"chains"`
-	NATS        NATSConfig     `yaml:"nats"`
-	KVStore     KVStoreCfg     `yaml:"kvstore"`
-	DB          DBCfg          `yaml:"db"`
-	Redis       RedisCfg       `yaml:"redis"`
-	BloomFilter BloomFilterCfg `yaml:"bloomfilter"`
-}
-
-func (c *Config) ValidateChains(chains []string) error {
-	for _, chain := range chains {
-		if _, ok := c.Chains.Items[chain]; !ok {
-			return fmt.Errorf("chain not in config: %s", chain)
-		}
-	}
-	return nil
-}
-
-func (c *Config) GetChain(chain string) (ChainConfig, error) {
-	if _, ok := c.Chains.Items[chain]; !ok {
-		return ChainConfig{}, fmt.Errorf("chain not in config: %s", chain)
-	}
-	return c.Chains.Items[chain], nil
-}
-
-// ChainsConfig supports:
-// chains:
-//
-//	defaults: {...}
-//	tron-mainnet: {...}
-//	ethereum-testnet: {...}
-type ChainsConfig struct {
-	Defaults ChainConfig
-	Items    map[string]ChainConfig
-}
-
-// Custom unmarshal to split defaults vs chain entries.
-func (c *ChainsConfig) UnmarshalYAML(b []byte) error {
-	// decode into a generic map, then pull out "defaults"
-	var raw map[string]ChainConfig
-	if err := yaml.Unmarshal(b, &raw); err != nil {
-		return err
-	}
-	if raw == nil {
-		raw = map[string]ChainConfig{}
-	}
-	def, ok := raw["defaults"]
-	if ok {
-		delete(raw, "defaults")
-	}
-	c.Defaults = def
-	c.Items = raw
-	return nil
-}
-
-type ChainConfig struct {
-	Name                string         `yaml:"name"`
-	Type                enum.ChainType `yaml:"type"`
-	Nodes               []Node         `yaml:"nodes"` // supports http & ws
-	StartBlock          uint64         `yaml:"start_block"`
-	FromLatest          bool           `yaml:"from_latest" default:"true"`
-	ReorgRollbackWindow int            `yaml:"reorg_rollback_window"`
-	BatchSize           int            `yaml:"batch_size"`
-	PollInterval        time.Duration  `yaml:"poll_interval"`
-	Client              ClientCfg      `yaml:"client"`
-}
-
-type Node struct {
-	// URL can include ${API_KEY} which will be replaced from ApiKey/ApiKeyEnv.
-	// Example: "https://eth-mainnet.g.alchemy.com/v2/${API_KEY}"
-	URL string `yaml:"url"`
-
-	// Optional; inferred from URL if empty: "http" for http/https, "ws" for ws/wss.
-	Type string `yaml:"type"` // "http" | "ws" (optional)
-
-	// API key handling (either supply directly or via env).
-	ApiKey    string `yaml:"api_key"`     // optional
-	ApiKeyEnv string `yaml:"api_key_env"` // optional, e.g. "ALCHEMY_KEY"
-
-	// If you don't embed the key in URL, you can attach it via headers or query.
-	Headers map[string]string `yaml:"headers,omitempty"` // e.g. {"Authorization": "Bearer ${API_KEY}"}
-	Query   map[string]string `yaml:"query,omitempty"`   // e.g. {"apikey": "${API_KEY}"}
-}
-
-type ClientCfg struct {
-	Timeout    time.Duration `yaml:"timeout"`
-	MaxRetries int           `yaml:"max_retries"`
-	RetryDelay time.Duration `yaml:"retry_delay"`
-	Throttle   ThrottleCfg   `yaml:"throttle"`
-}
-
-type ThrottleCfg struct {
-	RPS   int `yaml:"rps"`
-	Burst int `yaml:"burst"`
+	Environment string         `yaml:"environment" validate:"required,oneof=production development"`
+	Chains      ChainsConfig   `yaml:"chains" validate:"required"`
+	NATS        NATSConfig     `yaml:"nats" validate:"required"`
+	KVStore     KVStoreCfg     `yaml:"kvstore" validate:"required"`
+	DB          DBCfg          `yaml:"db" validate:"required"`
+	Redis       RedisCfg       `yaml:"redis" validate:"required"`
+	BloomFilter BloomFilterCfg `yaml:"bloomfilter" validate:"required"`
+	Worker      WorkerCfg      `yaml:"worker"`
 }
 
 type NATSConfig struct {
-	URL           string `yaml:"url"`
-	SubjectPrefix string `yaml:"subject_prefix"`
+	URL           string `yaml:"url" validate:"required,url"`
+	SubjectPrefix string `yaml:"subject_prefix" validate:"required"`
 }
 
 type KVStoreCfg struct {
-	Type   enum.KVStoreType `yaml:"type"` // badger | consul | postgres
+	Type   enum.KVStoreType `yaml:"type" validate:"required,oneof=badger consul postgres"`
 	Badger BadgerKVCfg      `yaml:"badger"`
 	Consul ConsulKVCfg      `yaml:"consul"`
 }
@@ -125,32 +38,33 @@ type BadgerKVCfg struct {
 	Prefix    string `yaml:"prefix"`
 }
 
-type HttpAuthCfg struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
-}
-
 type ConsulKVCfg struct {
-	Scheme   string      `yaml:"scheme"`  // http|https
-	Address  string      `yaml:"address"` // host:port
+	Scheme   string      `yaml:"scheme"`
+	Address  string      `yaml:"address"`
 	Folder   string      `yaml:"folder"`
 	Token    string      `yaml:"token"`
 	HttpAuth HttpAuthCfg `yaml:"http_auth"`
 }
 
-type BloomFilterCfg struct {
-	Backend  enum.BFBackend         `yaml:"backend"`
-	Redis    RedisBloomFilterCfg    `yaml:"redis"`
-	InMemory InMemoryBloomFilterCfg `yaml:"in_memory"`
+type HttpAuthCfg struct {
+	Username string `yaml:"username"`
+	Password string `yaml:"password"`
 }
 
 type DBCfg struct {
-	URL string `yaml:"url"`
+	Type string `yaml:"type" validate:"required,oneof=postgres mysql sqlite"`
+	URL  string `yaml:"url" validate:"required"`
 }
 
 type RedisCfg struct {
-	URL      string `yaml:"url"`
+	URL      string `yaml:"url" validate:"required"`
 	Password string `yaml:"password"`
+}
+
+type BloomFilterCfg struct {
+	Backend  enum.BFBackend         `yaml:"backend" validate:"required,oneof=redis in_memory"`
+	Redis    RedisBloomFilterCfg    `yaml:"redis"`
+	InMemory InMemoryBloomFilterCfg `yaml:"in_memory"`
 }
 
 type RedisBloomFilterCfg struct {
@@ -168,33 +82,18 @@ type InMemoryBloomFilterCfg struct {
 	BatchSize         int     `yaml:"batch_size"`
 }
 
-type Env string
-
-const (
-	EnvProduction  Env = "production"
-	EnvDevelopment Env = "development"
-)
-
-func (e *Env) UnmarshalYAML(b []byte) error {
-	var s string
-	if err := yaml.Unmarshal(b, &s); err != nil {
-		return err
-	}
-	switch s {
-	case EnvProduction.String(), EnvDevelopment.String():
-		*e = Env(s)
-		return nil
-	default:
-		return fmt.Errorf("invalid environment %q (must be %q or %q)", s, EnvProduction, EnvDevelopment)
-	}
+type WorkerCfg struct {
+	Manual    WorkerItem `yaml:"manual"`
+	Catchup   WorkerItem `yaml:"catchup"`
+	Rescanner WorkerItem `yaml:"rescanner"`
 }
 
-func (e Env) String() string { return string(e) }
+type WorkerItem struct {
+	Enabled bool `yaml:"enabled"`
+}
 
-// Load reads YAML, applies defaults & per-chain merges, resolves node auth, and validates.
 func Load(path string) (Config, error) {
 	var cfg Config
-
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return cfg, err
@@ -203,198 +102,22 @@ func Load(path string) (Config, error) {
 		return cfg, err
 	}
 
-	applyDefaults(&cfg)
-	if err := finalizeNodes(&cfg); err != nil {
+	// merge defaults
+	for name, chain := range cfg.Chains.Items {
+		if err := mergo.Merge(&chain, cfg.Chains.Defaults); err != nil {
+			return cfg, err
+		}
+		cfg.Chains.Items[name] = chain
+	}
+
+	// finalize nodes
+	if err := cfg.Chains.FinalizeNodes(); err != nil {
 		return cfg, err
 	}
-	if err := validate(cfg); err != nil {
+
+	// validate
+	if err := validate.Struct(cfg); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
-}
-
-// ---- defaults & merging ----
-
-func applyDefaults(cfg *Config) {
-	def := cfg.Chains.Defaults
-	for name, c := range cfg.Chains.Items {
-		if c.BatchSize == 0 {
-			c.BatchSize = def.BatchSize
-		}
-		if c.PollInterval == 0 {
-			c.PollInterval = def.PollInterval
-		}
-		// client defaults
-		if c.Client.Timeout == 0 {
-			c.Client.Timeout = def.Client.Timeout
-		}
-		if c.Client.MaxRetries == 0 {
-			c.Client.MaxRetries = def.Client.MaxRetries
-		}
-		if c.Client.RetryDelay == 0 {
-			c.Client.RetryDelay = def.Client.RetryDelay
-		}
-		if c.Client.Throttle.RPS == 0 {
-			c.Client.Throttle.RPS = def.Client.Throttle.RPS
-		}
-		if c.Client.Throttle.Burst == 0 {
-			c.Client.Throttle.Burst = def.Client.Throttle.Burst
-		}
-		cfg.Chains.Items[name] = c
-	}
-}
-
-// finalizeNodes:
-// - fills ApiKey from env if needed
-// - substitutes ${API_KEY} in URL/Headers/Query
-// - infers node Type from URL scheme if empty
-// - materializes query params into the URL (keeps Headers as-is)
-func finalizeNodes(cfg *Config) error {
-	for chainName, c := range cfg.Chains.Items {
-		nodes := make([]Node, len(c.Nodes))
-		for i, n := range c.Nodes {
-			// ensure maps are non-nil so we can assign safely
-			if n.Headers == nil {
-				n.Headers = map[string]string{}
-			}
-			if n.Query == nil {
-				n.Query = map[string]string{}
-			}
-
-			key := n.ApiKey
-			if key == "" && n.ApiKeyEnv != "" {
-				key = os.Getenv(n.ApiKeyEnv)
-			}
-			// Substitute ${API_KEY} in URL, headers, query
-			n.URL = substituteKey(n.URL, key)
-			for hk, hv := range n.Headers {
-				n.Headers[hk] = substituteEnvVars(hv)
-			}
-			for qk, qv := range n.Query {
-				n.Query[qk] = substituteEnvVars(qv)
-			}
-
-			// Infer type from scheme if empty
-			if n.Type == "" {
-				u, err := url.Parse(n.URL)
-				if err != nil || u.Scheme == "" {
-					return fmt.Errorf("%s: invalid node url: %q", chainName, n.URL)
-				}
-				switch u.Scheme {
-				case "ws", "wss":
-					n.Type = "ws"
-				default:
-					n.Type = "http"
-				}
-			}
-
-			// Attach query params into URL
-			if len(n.Query) > 0 {
-				u, err := url.Parse(n.URL)
-				if err != nil {
-					return fmt.Errorf("%s: invalid node url: %q", chainName, n.URL)
-				}
-				q := u.Query()
-				for k, v := range n.Query {
-					q.Set(k, v)
-				}
-				u.RawQuery = q.Encode()
-				n.URL = u.String()
-			}
-
-			nodes[i] = n
-		}
-		c.Nodes = nodes
-		cfg.Chains.Items[chainName] = c
-	}
-	return nil
-}
-
-func substituteKey(s, key string) string {
-	if s == "" || key == "" {
-		return s
-	}
-	// Replace ${API_KEY} for backward compatibility
-	s = strings.ReplaceAll(s, "${API_KEY}", key)
-
-	// Also handle environment variable patterns like ${TRONGRID_TOKEN}
-	// Find all ${VAR_NAME} patterns and replace with the key if they match the ApiKeyEnv
-	return s
-}
-
-// substituteEnvVars replaces all ${VAR_NAME} patterns with their environment values
-func substituteEnvVars(s string) string {
-	if s == "" {
-		return s
-	}
-
-	// Find all ${VAR_NAME} patterns
-	for {
-		start := strings.Index(s, "${")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(s[start:], "}")
-		if end == -1 {
-			break
-		}
-		end += start
-
-		// Extract variable name
-		varName := s[start+2 : end]
-		envValue := os.Getenv(varName)
-
-		// Replace the pattern with the environment value
-		pattern := "${" + varName + "}"
-		s = strings.ReplaceAll(s, pattern, envValue)
-	}
-
-	return s
-}
-
-// ---- validation ----
-
-func validate(cfg Config) error {
-	if cfg.NATS.URL == "" {
-		return errors.New("nats.url is required")
-	}
-	switch cfg.KVStore.Type {
-	case "badger":
-		if cfg.KVStore.Badger.Directory == "" {
-			return errors.New("kvstore.badger.directory is required for badger")
-		}
-	case "consul":
-		if cfg.KVStore.Consul.Address == "" {
-			return errors.New("kvstore.consul.address is required for consul")
-		}
-	}
-	if len(cfg.Chains.Items) == 0 {
-		return errors.New("no chains configured under chains")
-	}
-	for name, c := range cfg.Chains.Items {
-		if len(c.Nodes) == 0 {
-			return fmt.Errorf("%s: chains.<name>.nodes is required", name)
-		}
-		for _, n := range c.Nodes {
-			if n.URL == "" {
-				return fmt.Errorf("%s: node url is required", name)
-			}
-			if n.Type != "" && n.Type != "http" && n.Type != "ws" {
-				return fmt.Errorf("%s: node type must be http or ws", name)
-			}
-		}
-		if !c.FromLatest && c.StartBlock == 0 {
-			return fmt.Errorf("%s: start_block required when from_latest=false", name)
-		}
-		if c.BatchSize <= 0 {
-			return fmt.Errorf("%s: batch_size must be > 0", name)
-		}
-		if c.Client.MaxRetries < 0 {
-			return fmt.Errorf("%s: client.max_retries must be >= 0", name)
-		}
-		if c.Client.Throttle.RPS < 0 || c.Client.Throttle.Burst < 0 {
-			return fmt.Errorf("%s: throttle rps/burst must be >= 0", name)
-		}
-	}
-	return nil
 }

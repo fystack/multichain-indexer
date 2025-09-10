@@ -23,6 +23,7 @@ const (
 	ModeRegular   WorkerMode = "regular"
 	ModeCatchup   WorkerMode = "catchup"
 	ModeRescanner WorkerMode = "rescanner"
+	ModeManual    WorkerMode = "manual"
 )
 
 type Worker interface {

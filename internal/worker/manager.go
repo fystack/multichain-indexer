@@ -11,7 +11,6 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/kvstore"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
@@ -27,7 +26,8 @@ type FailedBlockEvent struct {
 type Manager struct {
 	ctx         context.Context
 	cfg         *config.Config
-	store       infra.KVStore
+	kvstore     infra.KVStore
+	redisClient infra.RedisClient
 	blockStore  *blockstore.Store
 	emitter     *events.Emitter
 	workers     []Worker
@@ -35,30 +35,14 @@ type Manager struct {
 	failedChan  chan FailedBlockEvent
 }
 
-func NewManager(ctx context.Context, cfg *config.Config, db *gorm.DB, redisClient infra.RedisClient) (*Manager, error) {
-	store, err := kvstore.NewFromConfig(cfg.KVStore)
-	if err != nil {
-		return nil, err
-	}
-	logger.Info("KVStore initialized", "store", store.GetName())
-	emitter, err := events.NewEmitter(cfg.NATS.URL, cfg.NATS.SubjectPrefix)
-	if err != nil {
-		return nil, fmt.Errorf("emitter init: %w", err)
-	}
-
-	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter, db, redisClient)
-	if err := addressBF.Initialize(ctx); err != nil {
-		return nil, fmt.Errorf("address bloom filter init: %w", err)
-	}
-	pubkeyStore := pubkeystore.NewPublicKeyStore(store, addressBF)
-
+func NewManager(ctx context.Context, cfg *config.Config, db *gorm.DB, kvstore infra.KVStore, bf addressbloomfilter.WalletAddressBloomFilter, emitter *events.Emitter, redisClient infra.RedisClient) (*Manager, error) {
 	return &Manager{
 		ctx:         ctx,
 		cfg:         cfg,
-		store:       store,
-		blockStore:  blockstore.NewBlockStore(store),
+		kvstore:     kvstore,
+		blockStore:  blockstore.NewBlockStore(kvstore),
+		pubkeyStore: pubkeystore.NewPublicKeyStore(kvstore, bf),
 		emitter:     emitter,
-		pubkeyStore: pubkeyStore,
 		failedChan:  make(chan FailedBlockEvent, 1000),
 	}, nil
 }
@@ -66,7 +50,7 @@ func NewManager(ctx context.Context, cfg *config.Config, db *gorm.DB, redisClien
 // Start kicks off all regular workers (one per chain)
 func (m *Manager) Start(chainNames []string, mode WorkerMode) error {
 	for _, chainName := range chainNames {
-		chainCfg, err := m.cfg.GetChain(chainName)
+		chainCfg, err := m.cfg.Chains.GetChain(chainName)
 		if err != nil {
 			return fmt.Errorf("get chain %s: %w", chainName, err)
 		}
@@ -115,11 +99,13 @@ func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig
 func (m *Manager) createWorkerByMode(chain indexer.Indexer, config config.ChainConfig, mode WorkerMode) Worker {
 	switch mode {
 	case ModeRegular:
-		return NewRegularWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
+		return NewRegularWorker(m.ctx, chain, config, m.kvstore, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
 	case ModeCatchup:
-		return NewCatchupWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
+		return NewCatchupWorker(m.ctx, chain, config, m.kvstore, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
 	case ModeRescanner:
-		return NewRescannerWorker(m.ctx, chain, config, m.store, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
+		return NewRescannerWorker(m.ctx, chain, config, m.kvstore, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
+	case ModeManual:
+		return NewManualWorker(m.ctx, chain, config, m.kvstore, m.redisClient, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
 	default:
 		return nil
 	}
