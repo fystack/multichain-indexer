@@ -1,7 +1,6 @@
 package infra
 
 import (
-	"sync"
 	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
@@ -9,31 +8,6 @@ import (
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
-
-var (
-	globalDB *gorm.DB
-	dbOnce   sync.Once
-)
-
-// InitGlobalDB sets the DB client only once.
-func InitGlobalDB(c *gorm.DB) {
-	dbOnce.Do(func() {
-		globalDB = c
-	})
-}
-
-// GlobalDB returns the global DB client (may be nil).
-func GlobalDB() *gorm.DB {
-	return globalDB
-}
-
-// MustGlobalDB returns the global DB client or panics if not initialized.
-func MustGlobalDB() *gorm.DB {
-	if globalDB == nil {
-		logger.Fatal("global DB not initialized")
-	}
-	return globalDB
-}
 
 func NewDBConnection(dsn string, environment string) (*gorm.DB, error) {
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})

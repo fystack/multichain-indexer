@@ -15,6 +15,7 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
+	"gorm.io/gorm"
 )
 
 type FailedBlockEvent struct {
@@ -34,7 +35,7 @@ type Manager struct {
 	failedChan  chan FailedBlockEvent
 }
 
-func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
+func NewManager(ctx context.Context, cfg *config.Config, db *gorm.DB, redisClient infra.RedisClient) (*Manager, error) {
 	store, err := kvstore.NewFromConfig(cfg.KVStore)
 	if err != nil {
 		return nil, err
@@ -45,7 +46,7 @@ func NewManager(ctx context.Context, cfg *config.Config) (*Manager, error) {
 		return nil, fmt.Errorf("emitter init: %w", err)
 	}
 
-	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter)
+	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter, db, redisClient)
 	if err := addressBF.Initialize(ctx); err != nil {
 		return nil, fmt.Errorf("address bloom filter init: %w", err)
 	}

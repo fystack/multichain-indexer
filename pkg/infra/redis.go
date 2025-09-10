@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"runtime"
-	"sync"
 	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
@@ -29,32 +28,6 @@ type RedisClient interface {
 // RedisWrapper is a struct that implements the RedisClient interface using a Redis client pointer.
 type RedisWrapper struct {
 	client *redis.Client
-}
-
-var (
-	globalRedisClient RedisClient
-	redisOnce         sync.Once
-)
-
-// InitGlobalRedisClient sets the client only once.
-func InitGlobalRedisClient(c RedisClient) {
-	redisOnce.Do(func() {
-		globalRedisClient = c
-	})
-}
-
-// GlobalRedisClient returns the initialized client (may be nil).
-func GlobalRedisClient() RedisClient {
-	return globalRedisClient
-}
-
-// MustGlobalRedisClient returns the global client or panics if not initialized.
-func MustGlobalRedisClient() RedisClient {
-	c := GlobalRedisClient()
-	if c == nil {
-		logger.Fatal("global Redis client not initialized")
-	}
-	return c
 }
 
 func getTlsConfig(caCertPath string, clientCertPath string, clientKeyPath string) (*tls.Config, error) {
