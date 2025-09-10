@@ -8,13 +8,13 @@ import (
 	"log/slog"
 
 	"github.com/fystack/transaction-indexer/internal/indexer"
-	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
+	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
+	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
 )
 
 type WorkerMode string

@@ -3,12 +3,11 @@ package addressbloomfilter
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/model"
 	"github.com/fystack/transaction-indexer/pkg/repository"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -19,21 +18,15 @@ func TestRedisBloomFilter_AddAndContains(t *testing.T) {
 		t.Skip("Skipping Redis integration test in short mode")
 	}
 
-	// Create a real Redis client for testing
-	client := redis.NewClient(&redis.Options{
-		Addr: redisAddr,
-		DB:   1, // Use DB 1 to avoid conflicts
-	})
+	client, err := infra.NewRedisClient(redisAddr, "", "test")
+	if err != nil {
+		t.Skipf("Cannot create Redis client: %v", err)
+	}
 	defer client.Close()
 
-	// Test connection
 	ctx := context.Background()
-	if err := client.Ping(ctx).Err(); err != nil {
-		t.Skipf("Redis not available at %s: %v", redisAddr, err)
-	}
-
 	// Check if RedisBloom module is available
-	modules, err := client.Do(ctx, "MODULE", "LIST").Result()
+	modules, err := client.GetClient().Do(ctx, "MODULE", "LIST").Result()
 	if err != nil {
 		t.Skipf("Cannot check Redis modules: %v", err)
 	}
@@ -59,7 +52,7 @@ func TestRedisBloomFilter_AddAndContains(t *testing.T) {
 
 	// Create the bloom filter
 	rbf := NewRedisBloomFilter(RedisBloomConfig{
-		RedisClient:       &RedisWrapper{client: client},
+		RedisClient:       client,
 		WalletAddressRepo: mockRepo,
 		KeyPrefix:         "test_bloom",
 		ErrorRate:         0.01,
@@ -165,29 +158,4 @@ type MockWalletAddressRepo struct{}
 func (m *MockWalletAddressRepo) Find(ctx context.Context, options repository.FindOptions) ([]*model.WalletAddress, error) {
 	// Return empty result for testing
 	return []*model.WalletAddress{}, nil
-}
-
-// RedisWrapper implements the RedisClient interface
-type RedisWrapper struct {
-	client *redis.Client
-}
-
-func (r *RedisWrapper) GetClient() *redis.Client {
-	return r.client
-}
-
-func (r *RedisWrapper) Set(key string, value any, expiration time.Duration) error {
-	return r.client.Set(context.Background(), key, value, expiration).Err()
-}
-
-func (r *RedisWrapper) Get(key string) (string, error) {
-	return r.client.Get(context.Background(), key).Result()
-}
-
-func (r *RedisWrapper) Del(keys ...string) error {
-	return r.client.Del(context.Background(), keys...).Err()
-}
-
-func (r *RedisWrapper) Close() error {
-	return r.client.Close()
 }

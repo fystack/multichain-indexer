@@ -22,6 +22,13 @@ type RedisClient interface {
 	Set(key string, value any, expiration time.Duration) error
 	Get(key string) (string, error)
 	Del(keys ...string) error
+
+	ZAdd(key string, members ...redis.Z) error
+	ZRem(key string, members ...interface{}) error
+	ZRange(key string, start, stop int64) ([]string, error)
+	ZRangeWithScores(key string, start, stop int64) ([]redis.Z, error)
+	ZRevRangeWithScores(key string, start, stop int64) ([]redis.Z, error)
+
 	Close() error
 }
 
@@ -126,6 +133,28 @@ func (rw *RedisWrapper) Get(key string) (string, error) {
 
 func (rw *RedisWrapper) Del(keys ...string) error {
 	return rw.client.Del(context.Background(), keys...).Err()
+}
+
+func (rw *RedisWrapper) ZAdd(key string, members ...redis.Z) error {
+	return rw.client.ZAdd(context.Background(), key, members...).Err()
+}
+
+func (rw *RedisWrapper) ZRem(key string, members ...interface{}) error {
+	return rw.client.ZRem(context.Background(), key, members...).Err()
+}
+
+// ZRange implements the RedisClient interface for getting members in a sorted set.
+func (rw *RedisWrapper) ZRange(key string, start, stop int64) ([]string, error) {
+	return rw.client.ZRange(context.Background(), key, start, stop).Result()
+}
+
+// ZRangeWithScores implements the RedisClient interface for getting members with their scores.
+func (rw *RedisWrapper) ZRangeWithScores(key string, start, stop int64) ([]redis.Z, error) {
+	return rw.client.ZRangeWithScores(context.Background(), key, start, stop).Result()
+}
+
+func (rw *RedisWrapper) ZRevRangeWithScores(key string, start, stop int64) ([]redis.Z, error) {
+	return rw.client.ZRevRangeWithScores(context.Background(), key, start, stop).Result()
 }
 
 func (rw *RedisWrapper) Close() error {
