@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/indexer"
-	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
+	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
+	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
 )
 
 type BlockRange struct {

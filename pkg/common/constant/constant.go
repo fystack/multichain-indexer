@@ -1,5 +1,7 @@
 package constant
 
+import "time"
+
 const (
 	EnvProduction  = "production"
 	EnvDevelopment = "development"
@@ -11,4 +13,6 @@ const (
 	KVPrefixProgressCatchup = "catchup_progress"
 	KVPrefixFailedBlocks    = "failed_blocks"
 	KVPrefixBlockHash       = "block_hash"
+
+	RangeProcessingTimeout = 3 * time.Minute
 )

@@ -2,12 +2,12 @@ package addressbloomfilter
 
 import (
 	"context"
-	logger "log/slog"
 	"math"
 	"sync"
 
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/model"
 	"github.com/fystack/transaction-indexer/pkg/repository"
 	"github.com/samber/lo"

@@ -6,15 +6,15 @@ import (
 
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
-	"github.com/fystack/transaction-indexer/pkg/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
-	"github.com/fystack/transaction-indexer/pkg/pubkeystore"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
+	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
+	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
 	"gorm.io/gorm"
 )
 
