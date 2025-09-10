@@ -63,6 +63,13 @@ chains:
     from_latest: true
     reorg_rollback_window: 30
 
+worker:
+  manual:
+    enabled: true
+  catchup:
+    enabled: true
+  rescanner:
+    enabled: true
 
 nats:
   url: "nats://localhost:4222"

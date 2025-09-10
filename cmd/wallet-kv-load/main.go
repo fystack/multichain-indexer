@@ -43,7 +43,7 @@ func (c *RunCmd) Run() error {
 	}
 
 	// Init DB (required for repository)
-	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment.String())
+	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment)
 	if err != nil {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
