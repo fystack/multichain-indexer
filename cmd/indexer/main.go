@@ -20,35 +20,47 @@ import (
 )
 
 type CLI struct {
-	Index IndexCmd `cmd:"" help:"Run the indexer (regular + optional catchup)."`
+	Index IndexCmd `cmd:"" help:"Start the multi-chain transaction indexer with configurable worker modes."`
 }
 
 type IndexCmd struct {
-	Chains     []string `help:"Chains to index (if empty, all configured chains will be used)" sep:"," name:"chain"`
-	ConfigPath string   `help:"Path to config file." default:"configs/config.yaml" name:"config"`
-	Debug      bool     `help:"Enable debug logs." name:"debug"`
-	Manual     bool     `help:"Run manual indexer." name:"manual"`
-	Catchup    bool     `help:"Run catchup alongside regular indexer." name:"catchup"`
-	Latest     bool     `help:"Start from latest block (overrides config)." name:"latest"`
+	// Core configuration
+	ConfigPath string `help:"Path to configuration file containing chain and worker settings." default:"configs/config.yaml" short:"c" name:"config"`
+
+	// Chain selection
+	Chains []string `help:"Specific blockchain chains to index (comma-separated). If not specified, all configured chains will be indexed." sep:"," short:"n" name:"chains" placeholder:"ethereum,polygon"`
+
+	// Logging
+	Debug bool `help:"Enable debug-level logging for detailed troubleshooting information." short:"d" name:"debug"`
+
+	// Worker modes (these can override config settings)
+	EnableCatchup bool `help:"Enable catchup worker to process historical blocks alongside regular indexing. Overrides config setting." name:"catchup"`
+	EnableManual  bool `help:"Enable manual worker for processing specific block ranges via Redis queue. Overrides config setting." name:"manual"`
+
+	// Block starting point
+	FromLatest bool `help:"Start indexing from the latest blockchain block instead of configured starting points. Useful for fresh deployments." name:"from-latest"`
 }
 
 func (c *IndexCmd) Run() error {
-	runIndexer(c.Chains, c.ConfigPath, c.Debug, c.Manual, c.Catchup, c.Latest)
+	runIndexer(c.Chains, c.ConfigPath, c.Debug, c.EnableManual, c.EnableCatchup, c.FromLatest)
 	return nil
 }
 
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
-		kong.Name("indexer"),
-		kong.Description("Multi-chain transaction indexer & NATS log printer."),
+		kong.Name("transaction-indexer"),
+		kong.Description("Multi-chain blockchain transaction indexer with support for regular, catchup, manual, and rescanner worker modes."),
 		kong.UsageOnError(),
+		kong.Vars{
+			"version": "1.0.0", // You can add version info
+		},
 	)
 	err := ctx.Run()
 	ctx.FatalIfErrorf(err)
 }
 
-func runIndexer(chains []string, configPath string, debug, manual, catchup, latest bool) {
+func runIndexer(chains []string, configPath string, debug, manual, catchup, fromLatest bool) {
 	ctx := context.Background()
 
 	level := slog.LevelInfo
@@ -102,6 +114,8 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, late
 	if len(chains) == 0 {
 		chains = cfg.Chains.GetAllChainNames()
 		logger.Info("No chains specified, using all configured chains", "chains", chains)
+	} else {
+		logger.Info("Indexing specified chains", "chains", chains)
 	}
 
 	// Validate chains
@@ -110,9 +124,9 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, late
 	}
 
 	// Override from_latest from CLI if requested
-	if latest {
+	if fromLatest {
 		cfg.Chains.OverrideFromLatest(chains)
-		logger.Info("Overriding start to latest for chains", "chains", chains)
+		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
 	manager, err := worker.NewManager(ctx, &cfg, db, kvstore, addressBF, emitter, redisClient)
@@ -120,34 +134,44 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, late
 		logger.Fatal("Create indexer manager failed", "err", err)
 	}
 
-	// start regular worker
+	// Always start regular worker (core indexing functionality)
+	logger.Info("Starting regular worker for real-time block processing")
 	if err := manager.Start(chains, worker.ModeRegular); err != nil {
 		logger.Fatal("Start regular worker failed", "err", err)
 	}
 
-	// start rescanner worker
+	// Always start rescanner worker (handles failed blocks)
+	logger.Info("Starting rescanner worker for failed block recovery")
 	if err := manager.Start(chains, worker.ModeRescanner); err != nil {
 		logger.Fatal("Start rescanner worker failed", "err", err)
 	}
 
-	// optionally run catchup
+	// Conditionally start catchup worker
 	if catchup || cfg.Worker.Catchup.Enabled {
+		logger.Info("Starting catchup worker for historical block processing")
 		if err := manager.Start(chains, worker.ModeCatchup); err != nil {
-			logger.Fatal("Start catchup failed", "err", err)
+			logger.Fatal("Start catchup worker failed", "err", err)
 		}
+	} else {
+		logger.Info("Catchup worker disabled")
 	}
 
-	// optionally run manual
+	// Conditionally start manual worker
 	if manual || cfg.Worker.Manual.Enabled {
+		logger.Info("Starting manual worker for Redis queue-based processing")
 		if err := manager.Start(chains, worker.ModeManual); err != nil {
-			logger.Fatal("Start manual failed", "err", err)
+			logger.Fatal("Start manual worker failed", "err", err)
 		}
+	} else {
+		logger.Info("Manual worker disabled")
 	}
 
-	logger.Info("Indexer is running... Press Ctrl+C to stop")
+	logger.Info("🚀 Transaction indexer is running... Press Ctrl+C to stop")
 	waitForShutdown()
+
+	logger.Info("Shutting down indexer...")
 	manager.Stop()
-	logger.Info("Indexer stopped")
+	logger.Info("✅ Indexer stopped gracefully")
 }
 
 func waitForShutdown() {
