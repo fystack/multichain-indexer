@@ -58,7 +58,7 @@ func (rw *RescannerWorker) Start() {
 	// Goroutine 1: sync failedChan from BaseWorker
 	go func() {
 		for evt := range rw.failedChan {
-			rw.AddFailedBlock(evt.Block, fmt.Sprintf("from failedChan attempt %d", evt.Attempt))
+			rw.addFailedBlock(evt.Block, fmt.Sprintf("from failedChan attempt %d", evt.Attempt))
 		}
 	}()
 
@@ -74,8 +74,8 @@ func failedBlocksPrefix(chain string) string {
 	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixFailedBlocks)
 }
 
-// AddFailedBlock add block to cache + KVStore
-func (rw *RescannerWorker) AddFailedBlock(block uint64, errMsg string) {
+// addFailedBlock add block to cache + KVStore
+func (rw *RescannerWorker) addFailedBlock(block uint64, errMsg string) {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
 
