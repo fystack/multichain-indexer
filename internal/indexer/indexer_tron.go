@@ -203,7 +203,6 @@ func (t *TronIndexer) processBlock(tronBlock *rpc.TronBlock, txns []*rpc.TronTra
 				continue // Skip malformed contracts
 			}
 
-			logger.Debug("Processed transaction", "contract", contract.Type, "transaction", tr)
 			// Assign fee only if not already assigned to this transaction
 			if !feeAssigned[rawTx.TxID] {
 				tr.TxFee = fee

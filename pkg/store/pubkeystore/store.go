@@ -5,7 +5,6 @@ import (
 
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
@@ -35,7 +34,6 @@ func (s *publicKeyStore) Exist(addressType enum.AddressType, publicKey string) b
 		return false
 	}
 
-	logger.Info("Exist in bloom filter", "addressType", addressType, "publicKey", publicKey)
 	// Since bloom filters may have false positives, check the underlying KV store.
 	v, err := s.kvstore.GetWithOptions(composeKey(addressType, publicKey), &kvstore.DefaultCacheOptions)
 	if v == "" || err != nil {
