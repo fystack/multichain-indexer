@@ -40,6 +40,7 @@ func NewManager(ctx context.Context, cfg *config.Config, db *gorm.DB, kvstore in
 		ctx:         ctx,
 		cfg:         cfg,
 		kvstore:     kvstore,
+		redisClient: redisClient,
 		blockStore:  blockstore.NewBlockStore(kvstore),
 		pubkeyStore: pubkeystore.NewPublicKeyStore(kvstore, bf),
 		emitter:     emitter,

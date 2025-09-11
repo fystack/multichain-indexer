@@ -1,3 +1,5 @@
+environment: "development"
+
 chains:
   defaults:
     batch_size: 10
@@ -67,9 +69,9 @@ worker:
   manual:
     enabled: true
   catchup:
-    enabled: true
+    enabled: false
   rescanner:
-    enabled: true
+    enabled: false
 
 nats:
   url: "nats://localhost:4222"
@@ -110,5 +112,3 @@ bloomfilter:
 redis:
   url: "localhost:6379"
   password: ""
-
-environment: "development"
