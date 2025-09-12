@@ -15,4 +15,8 @@ const (
 	KVPrefixBlockHash       = "block_hash"
 
 	RangeProcessingTimeout = 3 * time.Minute
+
+	TxnTypeTransfer      = "transfer"
+	TxnTypeTRC10Transfer = "trc10_transfer"
+	TxnTypeERC20Transfer = "erc20_transfer"
 )

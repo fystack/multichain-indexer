@@ -35,7 +35,7 @@ type IndexCmd struct {
 
 	// Worker modes (these can override config settings)
 	EnableCatchup bool `help:"Enable catchup worker to process historical blocks alongside regular indexing. Overrides config setting." name:"catchup"`
-	EnableManual  bool `help:"Enable manual worker for processing specific block ranges via Redis queue. Overrides config setting." name:"manual"`
+	EnableManual  bool `help:"Enable manual worker for processing specific block ranges via Redis queue. Overrides config setting."     name:"manual"`
 
 	// Block starting point
 	FromLatest bool `help:"Start indexing from the latest blockchain block instead of configured starting points. Useful for fresh deployments." name:"from-latest"`
@@ -48,9 +48,12 @@ func (c *IndexCmd) Run() error {
 
 func main() {
 	var cli CLI
-	ctx := kong.Parse(&cli,
+	ctx := kong.Parse(
+		&cli,
 		kong.Name("transaction-indexer"),
-		kong.Description("Multi-chain blockchain transaction indexer with support for regular, catchup, manual, and rescanner worker modes."),
+		kong.Description(
+			"Multi-chain blockchain transaction indexer with support for regular, catchup, manual, and rescanner worker modes.",
+		),
 		kong.UsageOnError(),
 		kong.Vars{
 			"version": "1.0.0", // You can add version info
@@ -74,52 +77,60 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		logger.Fatal("Load config failed", "err", err)
+		logger.Fatal("Failed to load configuration",
+			"config_path", configPath,
+			"error", err.Error(),
+			"hint", "Check the config file syntax and structure")
 	}
 	logger.Info("Config loaded", "environment", cfg.Environment)
 
+	services := cfg.Services
 	// start redis
-	redisClient, err := infra.NewRedisClient(cfg.Redis.URL, cfg.Redis.Password, cfg.Environment)
+	redisClient, err := infra.NewRedisClient(
+		services.Redis.URL,
+		services.Redis.Password,
+		string(cfg.Environment),
+	)
 	if err != nil {
 		logger.Fatal("Create redis client failed", "err", err)
 	}
 
 	// start db
-	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment)
+	db, err := infra.NewDBConnection(services.Database.URL, string(cfg.Environment))
 	if err != nil {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
 
 	// start kvstore
-	kvstore, err := kvstore.NewFromConfig(cfg.KVStore)
+	kvstore, err := kvstore.NewFromConfig(services.KVS)
 	if err != nil {
 		logger.Fatal("Create kvstore failed", "err", err)
 	}
 	defer kvstore.Close()
 
 	// start emitter
-	emitter, err := events.NewEmitter(cfg.NATS.URL, cfg.NATS.SubjectPrefix)
+	emitter, err := events.NewEmitter(services.Nats.URL, services.Nats.SubjectPrefix)
 	if err != nil {
 		logger.Fatal("Create emitter failed", "err", err)
 	}
 	defer emitter.Close()
 
 	// start address bloom filter
-	addressBF := addressbloomfilter.NewBloomFilter(cfg.BloomFilter, db, redisClient)
+	addressBF := addressbloomfilter.NewBloomFilter(services.Bloomfilter, db, redisClient)
 	if err := addressBF.Initialize(ctx); err != nil {
 		logger.Fatal("Address bloom filter init failed", "err", err)
 	}
 
 	// If no chains specified, use all configured chains
 	if len(chains) == 0 {
-		chains = cfg.Chains.GetAllChainNames()
+		chains = cfg.Chains.Names()
 		logger.Info("No chains specified, using all configured chains", "chains", chains)
 	} else {
 		logger.Info("Indexing specified chains", "chains", chains)
 	}
 
 	// Validate chains
-	if err := cfg.Chains.ValidateChains(chains); err != nil {
+	if err := cfg.Chains.Validate(chains); err != nil {
 		logger.Fatal("Validate chains failed", "err", err)
 	}
 
@@ -129,42 +140,27 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
-	manager, err := worker.NewManager(ctx, &cfg, db, kvstore, addressBF, emitter, redisClient)
-	if err != nil {
-		logger.Fatal("Create indexer manager failed", "err", err)
+	// Create manager with all workers using factory
+	managerCfg := worker.ManagerConfig{
+		Chains:        chains,
+		EnableCatchup: catchup,
+		EnableManual:  manual,
 	}
 
-	// Always start regular worker (core indexing functionality)
-	logger.Info("Starting regular worker for real-time block processing")
-	if err := manager.Start(chains, worker.ModeRegular); err != nil {
-		logger.Fatal("Start regular worker failed", "err", err)
-	}
+	manager := worker.CreateManagerWithWorkers(
+		ctx,
+		cfg,
+		kvstore,
+		db,
+		addressBF,
+		emitter,
+		redisClient,
+		managerCfg,
+	)
 
-	// Always start rescanner worker (handles failed blocks)
-	logger.Info("Starting rescanner worker for failed block recovery")
-	if err := manager.Start(chains, worker.ModeRescanner); err != nil {
-		logger.Fatal("Start rescanner worker failed", "err", err)
-	}
-
-	// Conditionally start catchup worker
-	if catchup || cfg.Worker.Catchup.Enabled {
-		logger.Info("Starting catchup worker for historical block processing")
-		if err := manager.Start(chains, worker.ModeCatchup); err != nil {
-			logger.Fatal("Start catchup worker failed", "err", err)
-		}
-	} else {
-		logger.Info("Catchup worker disabled")
-	}
-
-	// Conditionally start manual worker
-	if manual || cfg.Worker.Manual.Enabled {
-		logger.Info("Starting manual worker for Redis queue-based processing")
-		if err := manager.Start(chains, worker.ModeManual); err != nil {
-			logger.Fatal("Start manual worker failed", "err", err)
-		}
-	} else {
-		logger.Info("Manual worker disabled")
-	}
+	// Start all workers
+	logger.Info("Starting all workers")
+	manager.Start()
 
 	logger.Info("🚀 Transaction indexer is running... Press Ctrl+C to stop")
 	waitForShutdown()

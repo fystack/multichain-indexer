@@ -59,7 +59,7 @@ func NewRedisBloomFilter(cfg RedisBloomConfig) WalletAddressBloomFilter {
 	}
 }
 
-func (rbf *redisBloomFilter) getKey(addressType enum.AddressType) string {
+func (rbf *redisBloomFilter) getKey(addressType enum.NetworkType) string {
 	return fmt.Sprintf("%s:%s", rbf.keyPrefix, addressType)
 }
 
@@ -67,12 +67,9 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()
 
-	types := []enum.AddressType{
-		enum.AddressTypeEvm,
-		// enum.AddressTypeBtc,
-		// enum.AddressTypeSolana,
-		// enum.AddressTypeAptos,
-		enum.AddressTypeTron,
+	types := []enum.NetworkType{
+		enum.NetworkTypeEVM,
+		enum.NetworkTypeTron,
 	}
 
 	for _, addrType := range types {
@@ -136,7 +133,11 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 	return nil
 }
 
-func (rbf *redisBloomFilter) addBatchToBloom(ctx context.Context, key string, addresses []string) error {
+func (rbf *redisBloomFilter) addBatchToBloom(
+	ctx context.Context,
+	key string,
+	addresses []string,
+) error {
 	client := rbf.redisClient.GetClient()
 	args := make([]any, 0, len(addresses)+2)
 	args = append(args, "BF.MADD", key)
@@ -147,7 +148,7 @@ func (rbf *redisBloomFilter) addBatchToBloom(ctx context.Context, key string, ad
 	return err
 }
 
-func (rbf *redisBloomFilter) Add(address string, addressType enum.AddressType) {
+func (rbf *redisBloomFilter) Add(address string, addressType enum.NetworkType) {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()
 
@@ -160,7 +161,7 @@ func (rbf *redisBloomFilter) Add(address string, addressType enum.AddressType) {
 	}
 }
 
-func (rbf *redisBloomFilter) AddBatch(addresses []string, addressType enum.AddressType) {
+func (rbf *redisBloomFilter) AddBatch(addresses []string, addressType enum.NetworkType) {
 	if len(addresses) == 0 {
 		return
 	}
@@ -173,7 +174,7 @@ func (rbf *redisBloomFilter) AddBatch(addresses []string, addressType enum.Addre
 	}
 }
 
-func (rbf *redisBloomFilter) Contains(address string, addressType enum.AddressType) bool {
+func (rbf *redisBloomFilter) Contains(address string, addressType enum.NetworkType) bool {
 	rbf.mu.RLock()
 	defer rbf.mu.RUnlock()
 
@@ -188,7 +189,7 @@ func (rbf *redisBloomFilter) Contains(address string, addressType enum.AddressTy
 	return result
 }
 
-func (rbf *redisBloomFilter) Clear(addressType enum.AddressType) {
+func (rbf *redisBloomFilter) Clear(addressType enum.NetworkType) {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()
 
@@ -196,7 +197,7 @@ func (rbf *redisBloomFilter) Clear(addressType enum.AddressType) {
 	_ = rbf.redisClient.Del(key)
 }
 
-func (rbf *redisBloomFilter) Stats(addressType enum.AddressType) map[string]any {
+func (rbf *redisBloomFilter) Stats(addressType enum.NetworkType) map[string]any {
 	rbf.mu.RLock()
 	defer rbf.mu.RUnlock()
 

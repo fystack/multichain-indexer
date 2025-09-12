@@ -1,114 +1,106 @@
-environment: "development"
+env: "dev"
+
+# Global defaults - applies to all chains unless overridden
+defaults:
+  from_latest: true
+  poll_interval: "5s"
+  reorg_rollback_window: 20
+  client:
+    timeout: "20s"
+    max_retries: 3
+    retry_delay: "5s"
+  throttle:
+    rps: 8
+    burst: 16
+    batch_size: 100
+    concurrency: 3
 
 chains:
-  defaults:
-    batch_size: 10
-    poll_interval: "5s"
-    client:
-      timeout: "15s"
-      max_retries: 3
-      retry_delay: "5s"
-      throttle:
-        rps: 8
-        burst: 16
-
-  tron-mainnet:
-    name: "tron-mainnet"
+  tron_mainnet:
     type: "tron"
-    nodes:
-      # Primary: TronGrid with API key (15 QPS limit)
-      - url: "https://api.trongrid.io"
-        headers:
-          TRON-PRO-API-KEY: "${TRONGRID_TOKEN}"
-        api_key_env: "TRONGRID_TOKEN"
-      # Fallback: Public nodes (lower rate limits, no key needed)
-      - url: "https://tron-rpc.publicnode.com"
-      # - url: "https://tron.drpc.org" # not support solidity wallet
     start_block: 75144237
-    from_latest: true
-    poll_interval: "8s"  # Slower to respect rate limits and reduce concurrent requests
-    client:
-      timeout: "15s"     # Longer timeout for potential rate limiting delays
-      max_retries: 5     # More retries for 429/403 handling
-      retry_delay: "10s" # Longer delay between retries for 403 blocks
-      throttle:
-        rps: 5           # Very conservative: accounts for both workers + buffer
-        burst: 8         # Reduced burst allowance
-
-  ethereum-mainnet:
-    name: "ethereum-mainnet"
-    type: "evm"
+    poll_interval: "8s"
     nodes:
-      - url: "https://ethereum-rpc.publicnode.com"
-      - url: "https://1rpc.io/eth"
-      # - url: "https://eth-mainnet.g.alchemy.com/v2/${API_KEY}"
-        # api_key_env: "ALCHEMY_KEY"
-      # - url: "wss://mainnet.infura.io/ws/v3/${API_KEY}"
-        # api_key_env: "INFURA_KEY"
+      - url: "https://api.trongrid.io"
+        auth:
+          type: "header"
+          key: "TRON-PRO-API-KEY"
+          value: "a8ae1eff-23e5-4c63-912d-9136b1a442ce"
+      - url: "https://tron-rpc.publicnode.com"
+    client:
+      max_retries: 5
+      retry_delay: "10s"
+    throttle:
+      rps: 5
+      burst: 8
+
+  ethereum_mainnet:
+    type: "evm"
     start_block: 23080871
-    from_latest: true
-    reorg_rollback_window: 20
+    poll_interval: "3s"
     client:
       timeout: "30s"
-      throttle:
-        rps: 5
-        burst: 10
+    throttle:
+      batch_size: 20
+    nodes:
+      - url: "https://ethereum-rpc.publicnode.com"
+      - url: "https://eth.rpc.blxrbdn.com"
+      - url: "https://eth.llamarpc.com"
+      - url: "https://rpc.mevblocker.io"
+      # - url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
 
-  bnb-mainnet:
-    name: "bnb-mainnet"
+  bnb_mainnet:
+    internal_code: "BNB_MAINNET"
     type: "evm"
+    start_block: 59040717
+    reorg_rollback_window: 30
     nodes:
       - url: "https://bsc-rpc.publicnode.com"
       - url: "https://bsc.blockrazor.xyz"
       - url: "https://bnb.rpc.subquery.network/public"
-    start_block: 59040717
-    from_latest: true
-    reorg_rollback_window: 30
 
-worker:
-  manual:
-    enabled: true
-  catchup:
-    enabled: false
-  rescanner:
-    enabled: false
+# Infrastructure services
+services:
+  worker:
+    manual:
+      enabled: false
+    catchup:
+      enabled: false
+    rescanner:
+      enabled: true
+    regular:
+      enabled: true
 
-nats:
-  url: "nats://localhost:4222"
-  subject_prefix: "indexer.transaction"
+  nats:
+    url: "nats://localhost:4222"
+    subject_prefix: "indexer.transaction"
 
-kvstore:
-  type: "consul"            # badger | consul 
-  badger:
-    directory: "data/badger"
-    prefix: ""              # optional key prefix
-  consul:
-    scheme: "http"
-    address: "127.0.0.1:8500"
-    folder: "indexer"
-    token: ""
-    http_auth:
-      username: ""
-      password: ""
+  database:
+    url: "postgres://postgres:postgres@localhost:5432/postgres"
 
-db:
-  type: "postgres"
-  url: "postgres://postgres:postgres@localhost:5432/postgres"
-
-bloomfilter:
-  backend: "redis"
   redis:
-    wallet_address_repo: "wallet_address"
-    batch_size: 1000
-    key_prefix: "bloomfilter"
-    error_rate: 0.01
-    capacity: 1000000
-  in_memory:
-    wallet_address_repo: "wallet_address"
-    expected_items: 1000000
-    false_positive_rate: 0.01
-    batch_size: 1000
+    url: "localhost:6379"
+    password: ""
 
-redis:
-  url: "localhost:6379"
-  password: ""
+  kvstore:
+    type: "consul"
+    consul:
+      scheme: "http"
+      address: "127.0.0.1:8500"
+      folder: "indexer"
+      token: ""
+      # http_auth:  # uncomment if needed
+      #   username: ""
+      #   password: ""
+
+  bloomfilter:
+    type: "redis"
+    wallet_address_repo: "wallet_address"
+    batch_size: 1000
+    redis:
+      key_prefix: "bloomfilter"
+      error_rate: 0.01
+      capacity: 1000000
+    in_memory:  # alternative config
+      expected_items: 1000000
+      false_positive_rate: 0.01

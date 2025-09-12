@@ -3,10 +3,9 @@ package enum
 // each wallet could have multiple keys
 type WalletType string
 type KeyType string
-type AddressType string
 type AddressStandard string
-type ChainType string
-type BFBackend string
+type NetworkType string
+type BFType string
 type KVStoreType string
 
 const (
@@ -20,28 +19,16 @@ const (
 )
 
 const (
-	AddressTypeEvm    AddressType = "evm"
-	AddressTypeBtc    AddressType = "btc"
-	AddressTypeSolana AddressType = "sol"
-	AddressTypeAptos  AddressType = "aptos"
-	AddressTypeTron   AddressType = "tron"
+	NetworkTypeEVM  NetworkType = "evm"
+	NetworkTypeTron NetworkType = "tron"
+	NetworkTypeBtc  NetworkType = "btc"
+	NetworkTypeSol  NetworkType = "sol"
+	NetworkTypeApt  NetworkType = "apt"
 )
 
 const (
-	ChainTypeEVM  ChainType = "evm"
-	ChainTypeTron ChainType = "tron"
-	ChainTypeBtc  ChainType = "btc"
-	ChainTypeSol  ChainType = "sol"
-	ChainTypeApt  ChainType = "apt"
-)
-
-func (c ChainType) String() string {
-	return string(c)
-}
-
-const (
-	BFBackendRedis    BFBackend = "redis"
-	BFBackendInMemory BFBackend = "in_memory"
+	BFBackendRedis    BFType = "redis"
+	BFBackendInMemory BFType = "in_memory"
 )
 
 const (

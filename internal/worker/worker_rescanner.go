@@ -2,16 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
@@ -21,20 +17,22 @@ import (
 const (
 	RescannerMaxRetries = 3
 	RescannerInterval   = 10 * time.Second
-)
 
-// KV schema
-type FailedBlockInfo struct {
-	Retries   int    `json:"retries"`
-	LastError string `json:"last_error,omitempty"`
-}
+	BatchFlushSize     = 10
+	BatchFlushInterval = 5 * time.Second
+)
 
 type RescannerWorker struct {
 	*BaseWorker
 	mu           sync.Mutex
-	failedBlocks map[uint64]int
-	maxRetries   int
+	failedBlocks map[uint64]uint8
+	maxRetries   uint8
 	interval     time.Duration
+
+	// batching
+	batchMu        sync.Mutex
+	pendingSaves   []uint64
+	pendingRemoves []uint64
 }
 
 func NewRescannerWorker(
@@ -42,16 +40,28 @@ func NewRescannerWorker(
 	chain indexer.Indexer,
 	cfg config.ChainConfig,
 	kv infra.KVStore,
-	blockStore *blockstore.Store,
-	emitter *events.Emitter,
+	blockStore blockstore.Store,
+	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
 ) *RescannerWorker {
 	return &RescannerWorker{
-		BaseWorker:   newWorkerWithMode(ctx, chain, cfg, kv, blockStore, emitter, pubkeyStore, ModeRescanner, failedChan),
-		failedBlocks: make(map[uint64]int),
-		maxRetries:   RescannerMaxRetries,
-		interval:     RescannerInterval,
+		BaseWorker: newWorkerWithMode(
+			ctx,
+			chain,
+			cfg,
+			kv,
+			blockStore,
+			emitter,
+			pubkeyStore,
+			ModeRescanner,
+			failedChan,
+		),
+		failedBlocks:   make(map[uint64]uint8),
+		maxRetries:     RescannerMaxRetries,
+		interval:       RescannerInterval,
+		pendingSaves:   make([]uint64, 0, BatchFlushSize),
+		pendingRemoves: make([]uint64, 0, BatchFlushSize),
 	}
 }
 
@@ -62,106 +72,85 @@ func (rw *RescannerWorker) Start() {
 		"maxRetries", rw.maxRetries,
 	)
 
-	// Goroutine 1: listen failedChan
+	// listen failedChan
 	go func() {
 		for evt := range rw.failedChan {
 			rw.addFailedBlock(evt.Block, fmt.Sprintf("from failedChan attempt %d", evt.Attempt))
 		}
 	}()
 
-	// Goroutine 2: periodic rescan
+	// periodic rescan
 	go rw.run(rw.processRescan)
+
+	// periodic flush
+	go rw.periodicBatchFlush()
 }
 
-func failedBlocksKey(chain string, block uint64) string {
-	return fmt.Sprintf("%s/%s/%d", chain, constant.KVPrefixFailedBlocks, block)
-}
-func failedBlocksPrefix(chain string) string {
-	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixFailedBlocks)
-}
-
-// persist helper
-func (rw *RescannerWorker) persistBlockInfo(block uint64, retries int, errMsg string) {
-	info := FailedBlockInfo{Retries: retries, LastError: errMsg}
-	if data, err := json.Marshal(info); err == nil {
-		_ = rw.kvstore.Set(failedBlocksKey(rw.chain.GetName(), block), string(data))
+func (rw *RescannerWorker) periodicBatchFlush() {
+	ticker := time.NewTicker(BatchFlushInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-rw.ctx.Done():
+			rw.flush()
+			return
+		case <-ticker.C:
+			rw.flush()
+		}
 	}
 }
 
-// add new failed block
 func (rw *RescannerWorker) addFailedBlock(block uint64, errMsg string) {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
-
 	if _, exists := rw.failedBlocks[block]; !exists {
 		rw.failedBlocks[block] = 0
+		rw.addSave(block)
+		rw.logger.Info("Added failed block", "block", block, "error", errMsg)
 	}
-	rw.persistBlockInfo(block, rw.failedBlocks[block], errMsg)
-	rw.logger.Info("Added failed block", "block", block, "error", errMsg)
 }
 
-// syncFromKV
 func (rw *RescannerWorker) syncFromKV() error {
-	pairs, err := rw.kvstore.List(failedBlocksPrefix(rw.chain.GetName()))
+	blocks, err := rw.blockStore.GetFailedBlocks(rw.chain.GetName())
 	if err != nil {
 		return err
 	}
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
-	for _, p := range pairs {
-		parts := strings.Split(p.Key, "/")
-		if len(parts) < 3 {
-			continue
-		}
-		if block, err := strconv.ParseUint(parts[len(parts)-1], 10, 64); err == nil {
-			var info FailedBlockInfo
-			_ = json.Unmarshal([]byte(p.Value), &info)
-			if info.Retries > rw.failedBlocks[block] {
-				rw.failedBlocks[block] = info.Retries
-			}
+	for _, num := range blocks {
+		if _, ok := rw.failedBlocks[num]; !ok {
+			rw.failedBlocks[num] = 0
 		}
 	}
 	return nil
 }
 
-// remove
-func (rw *RescannerWorker) removeBlock(block uint64) {
+func (rw *RescannerWorker) removeBlocks(blocks []uint64) {
+	if len(blocks) == 0 {
+		return
+	}
 	rw.mu.Lock()
-	defer rw.mu.Unlock()
-	delete(rw.failedBlocks, block)
-	_ = rw.kvstore.Delete(failedBlocksKey(rw.chain.GetName(), block))
+	for _, b := range blocks {
+		delete(rw.failedBlocks, b)
+	}
+	rw.mu.Unlock()
+	rw.addRemove(blocks...)
 }
 
-// retry logic
-func (rw *RescannerWorker) incrementRetry(block uint64, errMsg string) {
+func (rw *RescannerWorker) incrementRetry(block uint64) {
 	rw.mu.Lock()
 	defer rw.mu.Unlock()
 	if count, ok := rw.failedBlocks[block]; ok {
 		if count+1 >= rw.maxRetries {
+			delete(rw.failedBlocks, block)
+			rw.addRemove(block)
 			rw.logger.Error("Max retries reached; giving up",
 				"chain", rw.chain.GetName(), "block", block)
-			delete(rw.failedBlocks, block)
-			_ = rw.kvstore.Delete(failedBlocksKey(rw.chain.GetName(), block))
 		} else {
 			rw.failedBlocks[block] = count + 1
-			rw.persistBlockInfo(block, rw.failedBlocks[block], errMsg)
+			rw.addSave(block)
 		}
 	}
-}
-
-// main rescan loop
-func (rw *RescannerWorker) processRescan() error {
-	if err := rw.syncFromKV(); err != nil {
-		rw.logger.Error("Failed sync KV", "error", err)
-	}
-
-	blocks := rw.collectBlocksForRetry()
-	if len(blocks) == 0 {
-		time.Sleep(rw.interval)
-		return nil
-	}
-	rw.logger.Info("Got blocks for rescan", "chain", rw.chain.GetName(), "blocks", len(blocks))
-	return rw.processBatch(blocks)
 }
 
 func (rw *RescannerWorker) collectBlocksForRetry() []uint64 {
@@ -174,33 +163,92 @@ func (rw *RescannerWorker) collectBlocksForRetry() []uint64 {
 	return blocks
 }
 
+func (rw *RescannerWorker) processRescan() error {
+	if err := rw.syncFromKV(); err != nil {
+		rw.logger.Error("Failed sync KV", "error", err)
+	}
+	blocks := rw.collectBlocksForRetry()
+	if len(blocks) == 0 {
+		time.Sleep(rw.interval)
+		return nil
+	}
+	rw.logger.Info("Got blocks for rescan", "chain", rw.chain.GetName(), "blocks", len(blocks))
+	return rw.processBatch(blocks)
+}
+
 func (rw *RescannerWorker) processBatch(blocks []uint64) error {
 	batchSize := 20
-	if len(blocks) < batchSize {
-		batchSize = len(blocks)
+	if len(blocks) > batchSize {
+		blocks = blocks[:batchSize]
 	}
-	batch := blocks[:batchSize]
 
-	results, err := rw.chain.GetBlocksByNumbers(rw.ctx, batch)
+	results, err := rw.chain.GetBlocksByNumbers(rw.ctx, blocks)
 	if err != nil {
 		return fmt.Errorf("rescanner get blocks: %w", err)
 	}
 
+	var toRemove []uint64
 	success := 0
+
 	for _, res := range results {
 		if rw.handleBlockResult(res) {
 			success++
-			rw.removeBlock(res.Number)
+			toRemove = append(toRemove, res.Number)
 		} else {
-			rw.incrementRetry(res.Number, "handleBlock failed")
+			rw.incrementRetry(res.Number)
 		}
+	}
+	if len(toRemove) > 0 {
+		rw.removeBlocks(toRemove)
 	}
 
 	rw.logger.Info("Rescanner pass",
 		"chain", rw.chain.GetName(),
-		"retried", len(batch),
+		"retried", len(blocks),
 		"success", success,
 		"remaining", len(rw.failedBlocks),
 	)
 	return nil
+}
+
+// batching helpers
+func (rw *RescannerWorker) addSave(blocks ...uint64) {
+	rw.batchMu.Lock()
+	defer rw.batchMu.Unlock()
+	rw.pendingSaves = append(rw.pendingSaves, blocks...)
+	if len(rw.pendingSaves) >= BatchFlushSize {
+		rw.flushUnsafe()
+	}
+}
+
+func (rw *RescannerWorker) addRemove(blocks ...uint64) {
+	rw.batchMu.Lock()
+	defer rw.batchMu.Unlock()
+	rw.pendingRemoves = append(rw.pendingRemoves, blocks...)
+	if len(rw.pendingRemoves) >= BatchFlushSize {
+		rw.flushUnsafe()
+	}
+}
+
+func (rw *RescannerWorker) flush() {
+	rw.batchMu.Lock()
+	defer rw.batchMu.Unlock()
+	rw.flushUnsafe()
+}
+
+func (rw *RescannerWorker) flushUnsafe() {
+	if len(rw.pendingSaves) > 0 {
+		_ = rw.blockStore.SaveFailedBlocks(rw.chain.GetName(), rw.pendingSaves)
+		rw.logger.Debug("Batch saved failed blocks",
+			"chain", rw.chain.GetName(),
+			"count", len(rw.pendingSaves))
+		rw.pendingSaves = rw.pendingSaves[:0]
+	}
+	if len(rw.pendingRemoves) > 0 {
+		_ = rw.blockStore.RemoveFailedBlocks(rw.chain.GetName(), rw.pendingRemoves)
+		rw.logger.Debug("Batch removed failed blocks",
+			"chain", rw.chain.GetName(),
+			"count", len(rw.pendingRemoves))
+		rw.pendingRemoves = rw.pendingRemoves[:0]
+	}
 }

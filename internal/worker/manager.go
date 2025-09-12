@@ -2,19 +2,13 @@ package worker
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/fystack/transaction-indexer/internal/indexer"
-	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
-	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
 	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
 	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
-	"gorm.io/gorm"
 )
 
 type FailedBlockEvent struct {
@@ -25,89 +19,70 @@ type FailedBlockEvent struct {
 
 type Manager struct {
 	ctx         context.Context
-	cfg         *config.Config
-	kvstore     infra.KVStore
-	redisClient infra.RedisClient
-	blockStore  *blockstore.Store
-	emitter     *events.Emitter
 	workers     []Worker
+	kvstore     infra.KVStore
+	blockStore  blockstore.Store
+	emitter     events.Emitter
 	pubkeyStore pubkeystore.Store
 	failedChan  chan FailedBlockEvent
 }
 
-func NewManager(ctx context.Context, cfg *config.Config, db *gorm.DB, kvstore infra.KVStore, bf addressbloomfilter.WalletAddressBloomFilter, emitter *events.Emitter, redisClient infra.RedisClient) (*Manager, error) {
+func NewManager(
+	ctx context.Context,
+	kvstore infra.KVStore,
+	blockStore blockstore.Store,
+	emitter events.Emitter,
+	pubkeyStore pubkeystore.Store,
+	failedChan chan FailedBlockEvent,
+) *Manager {
 	return &Manager{
 		ctx:         ctx,
-		cfg:         cfg,
 		kvstore:     kvstore,
-		redisClient: redisClient,
-		blockStore:  blockstore.NewBlockStore(kvstore),
-		pubkeyStore: pubkeystore.NewPublicKeyStore(kvstore, bf),
+		blockStore:  blockStore,
 		emitter:     emitter,
-		failedChan:  make(chan FailedBlockEvent, 1000),
-	}, nil
+		pubkeyStore: pubkeyStore,
+		failedChan:  failedChan,
+	}
 }
 
-// Start kicks off all regular workers (one per chain)
-func (m *Manager) Start(chainNames []string, mode WorkerMode) error {
-	for _, chainName := range chainNames {
-		chainCfg, err := m.cfg.Chains.GetChain(chainName)
-		if err != nil {
-			return fmt.Errorf("get chain %s: %w", chainName, err)
-		}
-		idxr, err := m.createIndexer(chainCfg.Type, chainCfg)
-		if err != nil {
-			return fmt.Errorf("create indexer for %s: %w", chainCfg.Name, err)
-		}
-		w := m.createWorkerByMode(idxr, chainCfg, mode)
-		if w == nil {
-			return fmt.Errorf("unsupported or uninitialized worker mode: %s", mode)
-		}
+// Start launches all injected workers
+func (m *Manager) Start() {
+	for _, w := range m.workers {
 		w.Start()
-		m.workers = append(m.workers, w)
 	}
-	return nil
 }
 
 // Stop shuts down all workers + resources
 func (m *Manager) Stop() {
+	// Stop all workers
 	for _, w := range m.workers {
-		w.Stop()
+		if w != nil {
+			w.Stop()
+		}
 	}
-	if m.emitter != nil {
-		m.emitter.Close()
-	}
-	if m.blockStore != nil {
-		_ = m.blockStore.Close()
-		m.blockStore = nil
-	}
-	// Clean up global rate limiters
+
+	// Close resources
+	m.closeResource("emitter", m.emitter, func() error { m.emitter.Close(); return nil })
+	m.closeResource("block store", m.blockStore, m.blockStore.Close)
+	m.closeResource("pubkey store", m.pubkeyStore, m.pubkeyStore.Close)
+	m.closeResource("KV store", m.kvstore, m.kvstore.Close)
+
+	// Close all rate limiters
 	ratelimiter.CloseAllRateLimiters()
+
 	logger.Info("Manager stopped")
 }
 
-func (m *Manager) createIndexer(chainType enum.ChainType, cfg config.ChainConfig) (indexer.Indexer, error) {
-	switch chainType {
-	case enum.ChainTypeEVM:
-		return indexer.NewEVMIndexer(cfg)
-	case enum.ChainTypeTron:
-		return indexer.NewTronIndexer(cfg)
-	default:
-		return nil, fmt.Errorf("unsupported chain: %s", chainType)
+// closeResource is a helper to close resources with consistent error handling
+func (m *Manager) closeResource(name string, resource interface{}, closer func() error) {
+	if resource != nil {
+		if err := closer(); err != nil {
+			logger.Error("Failed to close "+name, "err", err)
+		}
 	}
 }
 
-func (m *Manager) createWorkerByMode(chain indexer.Indexer, config config.ChainConfig, mode WorkerMode) Worker {
-	switch mode {
-	case ModeRegular:
-		return NewRegularWorker(m.ctx, chain, config, m.kvstore, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
-	case ModeCatchup:
-		return NewCatchupWorker(m.ctx, chain, config, m.kvstore, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
-	case ModeRescanner:
-		return NewRescannerWorker(m.ctx, chain, config, m.kvstore, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
-	case ModeManual:
-		return NewManualWorker(m.ctx, chain, config, m.kvstore, m.redisClient, m.blockStore, m.emitter, m.pubkeyStore, m.failedChan)
-	default:
-		return nil
-	}
+// Inject workers into manager
+func (m *Manager) AddWorkers(workers ...Worker) {
+	m.workers = append(m.workers, workers...)
 }

@@ -183,7 +183,10 @@ func (r *repository[T]) Count(ctx context.Context, options FindOptions) (int64, 
 	return count, nil
 }
 
-func (r *repository[T]) Transaction(ctx context.Context, fn func(txRepo Repository[T]) error) error {
+func (r *repository[T]) Transaction(
+	ctx context.Context,
+	fn func(txRepo Repository[T]) error,
+) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		txRepo := NewRepository[T](tx)
 		return fn(txRepo)

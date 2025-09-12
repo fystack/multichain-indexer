@@ -41,6 +41,17 @@ func (t *Transaction) UnmarshalBinary(data []byte) error {
 }
 
 func (t Transaction) String() string {
-	return fmt.Sprintf("{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d}",
-		t.TxHash, t.NetworkId, t.BlockNumber, t.FromAddress, t.ToAddress, t.AssetAddress, t.Amount, t.Type, t.TxFee, t.Timestamp)
+	return fmt.Sprintf(
+		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d}",
+		t.TxHash,
+		t.NetworkId,
+		t.BlockNumber,
+		t.FromAddress,
+		t.ToAddress,
+		t.AssetAddress,
+		t.Amount,
+		t.Type,
+		t.TxFee,
+		t.Timestamp,
+	)
 }

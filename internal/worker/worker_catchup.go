@@ -4,33 +4,28 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strconv"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/indexer"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
 	"github.com/fystack/transaction-indexer/pkg/events"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
 	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
 )
 
-type BlockRange struct {
-	Start, End uint64
-}
+const (
+	MAX_RANGE_SIZE         = 20
+	CATCHUP_WORKERS        = 3 // Number of parallel workers
+	PROGRESS_SAVE_INTERVAL = 1 // Save progress every N batches
+)
 
 type CatchupWorker struct {
 	*BaseWorker
-	blockRanges []BlockRange
-}
-
-func composeCatchupKey(chain string) string {
-	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixProgressCatchup)
-}
-func catchupKey(chain string, start, end uint64) string {
-	return fmt.Sprintf("%s/%s/%d-%d", chain, constant.KVPrefixProgressCatchup, start, end)
+	blockRanges []blockstore.CatchupRange
+	workerPool  chan struct{}
+	progressMu  sync.Mutex
 }
 
 func NewCatchupWorker(
@@ -38,48 +33,91 @@ func NewCatchupWorker(
 	chain indexer.Indexer,
 	cfg config.ChainConfig,
 	kv infra.KVStore,
-	blockStore *blockstore.Store,
-	emitter *events.Emitter,
+	blockStore blockstore.Store,
+	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
 ) *CatchupWorker {
-	worker := newWorkerWithMode(ctx, chain, cfg, kv, blockStore, emitter, pubkeyStore, ModeCatchup, failedChan)
-	cw := &CatchupWorker{BaseWorker: worker}
+	worker := newWorkerWithMode(
+		ctx,
+		chain,
+		cfg,
+		kv,
+		blockStore,
+		emitter,
+		pubkeyStore,
+		ModeCatchup,
+		failedChan,
+	)
+	cw := &CatchupWorker{
+		BaseWorker: worker,
+		workerPool: make(chan struct{}, CATCHUP_WORKERS),
+	}
 	cw.blockRanges = cw.loadCatchupProgress()
 	return cw
 }
 
 func (cw *CatchupWorker) Start() {
-	cw.logger.Info("Starting catchup worker",
-		"chain", cw.chain.GetName(),
-		"ranges", cw.blockRanges,
-	)
-	go cw.run(cw.processCatchupBlocks)
-}
-
-func (cw *CatchupWorker) loadCatchupProgress() []BlockRange {
-	var ranges []BlockRange
-
-	// 1. Existing progress
-	if pairs, err := cw.kvstore.List(composeCatchupKey(cw.chain.GetName())); err == nil {
-		for _, p := range pairs {
-			if s, e := extractRangeFromKey(p.Key); s > 0 {
-				ranges = append(ranges, BlockRange{Start: s, End: e})
-			}
-		}
+	totalBlocks := uint64(0)
+	for _, r := range cw.blockRanges {
+		totalBlocks += r.End - r.Start + 1
 	}
 
-	// 2. If nothing queued, enqueue fresh catchup
+	cw.logger.Info("Starting optimized catchup worker",
+		"chain", cw.chain.GetName(),
+		"ranges", len(cw.blockRanges),
+		"total_blocks", totalBlocks,
+		"parallel_workers", CATCHUP_WORKERS,
+	)
+	go cw.run(cw.processCatchupBlocksParallel)
+}
+
+func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
+	var ranges []blockstore.CatchupRange
+
+	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetName()); err == nil {
+		cw.logger.Info("Loading existing catchup progress",
+			"chain", cw.chain.GetName(),
+			"progress_ranges", len(progress),
+		)
+		for _, p := range progress {
+			// Split large ranges into smaller chunks
+			subRanges := cw.splitLargeRange(p)
+			ranges = append(ranges, subRanges...)
+		}
+	} else {
+		cw.logger.Warn("Failed to load catchup progress, will create new range",
+			"chain", cw.chain.GetName(),
+			"error", err,
+		)
+	}
+
 	if len(ranges) == 0 {
 		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetName()); err1 == nil {
 			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
 				start, end := latest+1, head
-				_ = cw.kvstore.Set(catchupKey(cw.chain.GetName(), start, end), strconv.FormatUint(start-1, 10))
-				ranges = append(ranges, BlockRange{Start: start, End: end})
-				cw.logger.Info("Queued fresh catchup range",
+				cw.logger.Info("Creating new catchup range",
 					"chain", cw.chain.GetName(),
-					"start", start, "end", end,
+					"latest_block", latest,
+					"head_block", head,
+					"catchup_start", start, "catchup_end", end,
+					"blocks_to_catchup", end-latest,
 				)
+
+				// Split new range if it's too large
+				newRanges := cw.splitLargeRange(blockstore.CatchupRange{
+					Start: start, End: end, Current: start - 1,
+				})
+
+				for _, nr := range newRanges {
+					_ = cw.blockStore.SaveCatchupProgress(
+						cw.chain.GetName(),
+						nr.Start,
+						nr.End,
+						nr.Current,
+					)
+				}
+				ranges = append(ranges, newRanges...)
 			}
 		}
 	}
@@ -87,102 +125,250 @@ func (cw *CatchupWorker) loadCatchupProgress() []BlockRange {
 	return mergeRanges(ranges)
 }
 
-func (cw *CatchupWorker) processCatchupBlocks() error {
+// Split large ranges into smaller, more manageable chunks
+func (cw *CatchupWorker) splitLargeRange(r blockstore.CatchupRange) []blockstore.CatchupRange {
+	rangeSize := r.End - r.Start + 1
+	if rangeSize <= MAX_RANGE_SIZE {
+		return []blockstore.CatchupRange{r}
+	}
+
+	var subRanges []blockstore.CatchupRange
+	current := r.Start
+
+	for current <= r.End {
+		chunkEnd := min(current+MAX_RANGE_SIZE-1, r.End)
+		chunkCurrent := current - 1
+		if current <= r.Current {
+			chunkCurrent = min(r.Current, chunkEnd)
+		}
+
+		subRanges = append(subRanges, blockstore.CatchupRange{
+			Start:   current,
+			End:     chunkEnd,
+			Current: chunkCurrent,
+		})
+		current = chunkEnd + 1
+	}
+
+	cw.logger.Info("Split large catchup range",
+		"chain", cw.chain.GetName(),
+		"original_range", fmt.Sprintf("%d-%d", r.Start, r.End),
+		"original_size", rangeSize,
+		"sub_ranges", len(subRanges),
+	)
+
+	return subRanges
+}
+
+func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 	if len(cw.blockRanges) == 0 {
-		return nil // idle
+		cw.logger.Info("No catchup ranges to process")
+		return nil
 	}
 
-	r := cw.blockRanges[0]
-	pKey := catchupKey(cw.chain.GetName(), r.Start, r.End)
-	progressStr, _ := cw.kvstore.Get(pKey)
-	current := parseProgress(r.Start, r.End, progressStr)
+	// Process multiple ranges in parallel
+	var wg sync.WaitGroup
+	rangeChan := make(chan blockstore.CatchupRange, len(cw.blockRanges))
 
-	if current > r.End {
-		return cw.completeRange(r, pKey)
+	// Fill channel with ranges
+	for _, r := range cw.blockRanges {
+		rangeChan <- r
+	}
+	close(rangeChan)
+
+	// Start parallel workers
+	for i := 0; i < CATCHUP_WORKERS; i++ {
+		wg.Add(1)
+		go func(workerID int) {
+			defer wg.Done()
+			cw.logger.Debug("Starting catchup worker", "worker_id", workerID)
+
+			for r := range rangeChan {
+				if err := cw.processRange(r, workerID); err != nil {
+					cw.logger.Error("Failed to process range",
+						"worker_id", workerID,
+						"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+						"error", err,
+					)
+				}
+			}
+		}(i)
 	}
 
-	// Process batch [current, min(current+batch-1, r.End)]
-	end := min(current+uint64(cw.config.BatchSize)-1, r.End)
+	wg.Wait()
+	cw.logger.Info("Catchup processing completed")
+
+	// Reload ranges to check for any remaining work
+	cw.blockRanges = cw.loadCatchupProgress()
+	return nil
+}
+
+func (cw *CatchupWorker) processRange(r blockstore.CatchupRange, workerID int) error {
+	batchCount := 0
 	startTime := time.Now()
-	results, err := cw.chain.GetBlocks(cw.ctx, current, end)
-	if err != nil {
-		return fmt.Errorf("get catchup blocks: %w", err)
+
+	cw.logger.Info("Processing catchup range",
+		"worker_id", workerID,
+		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+		"size", r.End-r.Start+1,
+	)
+
+	// Get current progress
+	current := r.Current + 1
+	if current > r.End {
+		cw.logger.Debug("Range already completed",
+			"worker_id", workerID,
+			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+		)
+		return cw.completeRange(r)
 	}
 
+	batchSize := uint64(cw.config.Throttle.BatchSize)
 	lastSuccess := current - 1
-	for _, res := range results {
-		if cw.handleBlockResult(res) && res.Number > lastSuccess {
-			lastSuccess = res.Number
+
+	for current <= r.End {
+		// Check context cancellation
+		select {
+		case <-cw.ctx.Done():
+			return cw.ctx.Err()
+		default:
+		}
+
+		end := min(current+batchSize-1, r.End)
+
+		// Process batch
+		results, err := cw.chain.GetBlocks(cw.ctx, current, end, true)
+		if err != nil {
+			cw.logger.Warn("Failed to get blocks, retrying",
+				"worker_id", workerID,
+				"range", fmt.Sprintf("%d-%d", current, end),
+				"error", err,
+			)
+			time.Sleep(time.Second) // Brief pause before retry
+			continue
+		}
+
+		// Process results
+		batchSuccess := current - 1
+		for _, res := range results {
+			if cw.handleBlockResult(res) && res.Number > batchSuccess {
+				batchSuccess = res.Number
+			}
+		}
+
+		if batchSuccess >= current {
+			lastSuccess = batchSuccess
+			current = batchSuccess + 1
+		} else {
+			// If no progress made, move to next batch to avoid infinite loop
+			current = end + 1
+		}
+
+		batchCount++
+
+		// Save progress periodically
+		if batchCount%PROGRESS_SAVE_INTERVAL == 0 {
+			cw.saveProgress(r, min(lastSuccess, r.End))
+
+			// Log progress
+			processed := lastSuccess - r.Start + 1
+			total := r.End - r.Start + 1
+			progress := float64(processed) / float64(total) * 100
+			elapsed := time.Since(startTime)
+
+			cw.logger.Info("Catchup progress",
+				"worker_id", workerID,
+				"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+				"current", lastSuccess,
+				"progress", fmt.Sprintf("%.1f%%", progress),
+				"processed", processed,
+				"total", total,
+				"elapsed", elapsed.Truncate(time.Second),
+				"batches", batchCount,
+			)
 		}
 	}
+
+	// Final progress save
+	cw.saveProgress(r, min(lastSuccess, r.End))
 
 	elapsed := time.Since(startTime)
-	cw.logger.Info("Catchup processed batch",
-		"chain", cw.chain.GetName(),
-		"range_start", r.Start, "range_end", r.End,
-		"start", current, "end", end,
-		"elapsed", elapsed,
-		"last_success", lastSuccess,
-		"expected", end-current+1,
-		"got", len(results),
-	)
-
-	// persist progress
-	if lastSuccess >= current {
-		_ = cw.kvstore.Set(pKey, strconv.FormatUint(min(lastSuccess, r.End), 10))
-	}
-
-	// Progress log
-	processed := uint64(0)
-	if lastSuccess >= r.Start {
-		processed = (lastSuccess - r.Start) + 1
-	}
-	cw.logger.Info("Catchup progress",
-		"chain", cw.chain.GetName(),
-		"range_start", r.Start, "range_end", r.End,
-		"processed", processed, "total", r.End-r.Start+1,
-	)
-
-	// Finished?
-	if lastSuccess >= r.End {
-		return cw.completeRange(r, pKey)
-	}
-	return nil
-}
-
-func (cw *CatchupWorker) completeRange(r BlockRange, key string) error {
-	_ = cw.kvstore.Delete(key)
-	cw.blockRanges = cw.blockRanges[1:]
 	cw.logger.Info("Catchup range completed",
-		"chain", cw.chain.GetName(),
-		"range_start", r.Start, "range_end", r.End,
+		"worker_id", workerID,
+		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+		"blocks_processed", r.End-r.Start+1,
+		"elapsed", elapsed.Truncate(time.Second),
+		"batches", batchCount,
 	)
-	return nil
+
+	return cw.completeRange(r)
 }
 
-func parseProgress(start, end uint64, val string) uint64 {
-	if val == "" {
-		return start
-	}
-	if p, err := strconv.ParseUint(val, 10, 64); err == nil {
-		switch {
-		case p < start:
-			return start
-		case p >= end:
-			return end
-		default:
-			return p + 1
+func (cw *CatchupWorker) saveProgress(r blockstore.CatchupRange, current uint64) {
+	cw.progressMu.Lock()
+	defer cw.progressMu.Unlock()
+	cw.logger.Debug("Saving catchup progress",
+		"chain", cw.chain.GetName(),
+		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+		"current", current,
+	)
+	_ = cw.blockStore.SaveCatchupProgress(cw.chain.GetName(), r.Start, r.End, current)
+}
+
+func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
+	cw.progressMu.Lock()
+	defer cw.progressMu.Unlock()
+
+	cw.logger.Info("Completing catchup range",
+		"chain", cw.chain.GetName(),
+		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+	)
+
+	_ = cw.blockStore.DeleteCatchupRange(cw.chain.GetName(), r.Start, r.End)
+
+	// Remove from local ranges
+	for i, existing := range cw.blockRanges {
+		if existing.Start == r.Start && existing.End == r.End {
+			cw.blockRanges = append(cw.blockRanges[:i], cw.blockRanges[i+1:]...)
+			break
 		}
 	}
-	return start
+
+	return nil
 }
 
-func mergeRanges(ranges []BlockRange) []BlockRange {
+func (cw *CatchupWorker) Close() error {
+	cw.logger.Info("Closing catchup worker, saving progress...",
+		"chain", cw.chain.GetName(),
+		"ranges", len(cw.blockRanges),
+	)
+
+	cw.progressMu.Lock()
+	defer cw.progressMu.Unlock()
+
+	for _, r := range cw.blockRanges {
+		current := min(r.Current, r.End)
+		cw.logger.Debug("Saving final catchup progress on close",
+			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+			"current", current,
+		)
+		if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetName(), r.Start, r.End, current); err != nil {
+			cw.logger.Error("Failed to save progress on close",
+				"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+				"error", err,
+			)
+		}
+	}
+
+	return nil
+}
+
+func mergeRanges(ranges []blockstore.CatchupRange) []blockstore.CatchupRange {
 	if len(ranges) == 0 {
 		return ranges
 	}
 	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Start < ranges[j].Start })
-	merged := []BlockRange{ranges[0]}
+	merged := []blockstore.CatchupRange{ranges[0]}
 	for _, r := range ranges[1:] {
 		last := &merged[len(merged)-1]
 		if r.Start <= last.End+1 {
@@ -194,22 +380,4 @@ func mergeRanges(ranges []BlockRange) []BlockRange {
 		}
 	}
 	return merged
-}
-
-func extractRangeFromKey(key string) (uint64, uint64) {
-	// <chain>/catchup/<start>-<end>
-	parts := strings.Split(key, "/")
-	if len(parts) < 4 {
-		return 0, 0
-	}
-	se := strings.Split(parts[len(parts)-1], "-")
-	if len(se) != 2 {
-		return 0, 0
-	}
-	s, err1 := strconv.ParseUint(se[0], 10, 64)
-	e, err2 := strconv.ParseUint(se[1], 10, 64)
-	if err1 == nil && err2 == nil && s <= e {
-		return s, e
-	}
-	return 0, 0
 }

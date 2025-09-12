@@ -5,66 +5,91 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/fystack/transaction-indexer/pkg/common/constant"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
-func (bs *Store) latestBlockKey(chainName string) string {
+type CatchupRange struct {
+	Start   uint64 `json:"start"`
+	End     uint64 `json:"end"`
+	Current uint64 `json:"current"`
+}
+
+func latestBlockKey(chainName string) string {
 	return fmt.Sprintf("%s/%s", chainName, constant.KVPrefixLatestBlock)
 }
 
-func (bs *Store) failedBlocksKey(chainName string) string {
-	return fmt.Sprintf("%s/%s/", chainName, constant.KVPrefixFailedBlocks)
+func failedBlocksKey(chainName string) string {
+	return fmt.Sprintf("%s/%s", chainName, constant.KVPrefixFailedBlocks)
 }
 
-func (bs *Store) blockHashKey(chainName string, blockNumber uint64) string {
-	return fmt.Sprintf("%s/%s/%d", chainName, constant.KVPrefixBlockHash, blockNumber)
+// Catchup progress keys
+func composeCatchupKey(chain string) string {
+	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixProgressCatchup)
 }
 
-type Store struct {
+func catchupKey(chain string, start, end uint64) string {
+	return fmt.Sprintf("%s/%s/%d-%d", chain, constant.KVPrefixProgressCatchup, start, end)
+}
+
+type blockStore struct {
 	store infra.KVStore
 }
 
-func NewBlockStore(store infra.KVStore) *Store {
-	return &Store{store: store}
+type Store interface {
+	GetLatestBlock(chainName string) (uint64, error)
+	SaveLatestBlock(chainName string, blockNumber uint64) error
+
+	GetFailedBlocks(chainName string) ([]uint64, error)
+	SaveFailedBlock(chainName string, blockNumber uint64) error
+	SaveFailedBlocks(chainName string, blockNumbers []uint64) error
+	RemoveFailedBlocks(chainName string, blockNumbers []uint64) error
+
+	SaveCatchupProgress(chain string, start, end, current uint64) error
+	GetCatchupProgress(chain string) ([]CatchupRange, error)
+	DeleteCatchupRange(chain string, start, end uint64) error
+
+	Close() error
 }
 
-func (bs *Store) GetLatestBlock(chainName string) (uint64, error) {
-	startBlock, err := bs.store.Get(bs.latestBlockKey(chainName))
+func NewBlockStore(store infra.KVStore) Store {
+	return &blockStore{store: store}
+}
+
+func (bs *blockStore) GetLatestBlock(chainName string) (uint64, error) {
+	startBlock, err := bs.store.Get(latestBlockKey(chainName))
 	if err != nil {
 		return 0, err
 	}
 	return strconv.ParseUint(startBlock, 10, 64)
 }
 
-func (bs *Store) SaveLatestBlock(chainName string, blockNumber uint64) error {
+func (bs *blockStore) SaveLatestBlock(chainName string, blockNumber uint64) error {
 	if chainName == "" {
 		return errors.New("chain name is required")
 	}
 	if blockNumber == 0 {
 		return errors.New("block number is required")
 	}
-	logger.Info("Saving latest block", "chainName", chainName, "blockNumber", blockNumber)
-	return bs.store.Set(bs.latestBlockKey(chainName), strconv.FormatUint(blockNumber, 10))
+	return bs.store.Set(latestBlockKey(chainName), strconv.FormatUint(blockNumber, 10))
 }
 
-func (bs *Store) GetFailedBlocks(chainName string) ([]uint64, error) {
+func (bs *blockStore) GetFailedBlocks(chainName string) ([]uint64, error) {
 	failedBlocks := []uint64{}
-	ok, err := bs.store.GetAny(bs.failedBlocksKey(chainName), &failedBlocks)
+	ok, err := bs.store.GetAny(failedBlocksKey(chainName), &failedBlocks)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		logger.Info("No failed blocks found", "chainName", chainName)
 		return nil, nil
 	}
 	return failedBlocks, nil
 }
 
 // SaveFailedBlock appends a failed block to the per-chain list (deduplicated and sorted)
-func (bs *Store) SaveFailedBlock(chainName string, blockNumber uint64) error {
+func (bs *blockStore) SaveFailedBlock(chainName string, blockNumber uint64) error {
 	if chainName == "" {
 		return errors.New("chain name is required")
 	}
@@ -72,7 +97,7 @@ func (bs *Store) SaveFailedBlock(chainName string, blockNumber uint64) error {
 		return errors.New("block number is required")
 	}
 
-	key := bs.failedBlocksKey(chainName)
+	key := failedBlocksKey(chainName)
 	var blocks []uint64
 	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
 
@@ -88,15 +113,43 @@ func (bs *Store) SaveFailedBlock(chainName string, blockNumber uint64) error {
 	return nil
 }
 
-// RemoveFailedBlocksInRange removes all failed blocks within [start, end]
-func (bs *Store) RemoveFailedBlocksInRange(chainName string, start, end uint64) error {
+// SaveFailedBlocks appends multiple failed blocks (deduplicated + sorted).
+func (bs *blockStore) SaveFailedBlocks(chainName string, blocksToAdd []uint64) error {
 	if chainName == "" {
 		return errors.New("chain name is required")
 	}
-	if end < start {
+	if len(blocksToAdd) == 0 {
 		return nil
 	}
-	key := bs.failedBlocksKey(chainName)
+
+	key := failedBlocksKey(chainName)
+	var blocks []uint64
+	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
+
+	// merge + dedup
+	for _, b := range blocksToAdd {
+		if b == 0 {
+			continue
+		}
+		if !slices.Contains(blocks, b) {
+			blocks = append(blocks, b)
+		}
+	}
+	slices.Sort(blocks)
+
+	return bs.store.SetAny(key, blocks)
+}
+
+// RemoveFailedBlocks removes a set of blocks from the failed list.
+func (bs *blockStore) RemoveFailedBlocks(chainName string, blockNumbers []uint64) error {
+	if chainName == "" {
+		return errors.New("chain name is required")
+	}
+	if len(blockNumbers) == 0 {
+		return nil
+	}
+
+	key := failedBlocksKey(chainName)
 	var blocks []uint64
 	ok, err := bs.store.GetAny(key, &blocks)
 	if err != nil {
@@ -105,55 +158,81 @@ func (bs *Store) RemoveFailedBlocksInRange(chainName string, start, end uint64) 
 	if !ok {
 		return nil
 	}
+
+	toRemove := make(map[uint64]struct{}, len(blockNumbers))
+	for _, b := range blockNumbers {
+		toRemove[b] = struct{}{}
+	}
+
 	filtered := make([]uint64, 0, len(blocks))
 	for _, b := range blocks {
-		if b < start || b > end {
+		if _, drop := toRemove[b]; !drop {
 			filtered = append(filtered, b)
 		}
 	}
+
 	return bs.store.SetAny(key, filtered)
 }
 
-// SaveBlockHash stores the hash of a processed block for reorg detection.
-func (bs *Store) SaveBlockHash(chainName string, blockNumber uint64, hash string) error {
-	if chainName == "" {
-		return errors.New("chain name is required")
+// SaveCatchupProgress saves or updates a catchup range with current progress.
+func (bs *blockStore) SaveCatchupProgress(chain string, start, end, current uint64) error {
+	if chain == "" || start == 0 || end < start {
+		return errors.New("invalid catchup range")
 	}
-	if blockNumber == 0 {
-		return errors.New("block number is required")
-	}
-	if hash == "" {
-		return errors.New("block hash is required")
-	}
-	return bs.store.Set(bs.blockHashKey(chainName, blockNumber), hash)
+	key := catchupKey(chain, start, end)
+	return bs.store.Set(key, fmt.Sprintf("%d", current))
 }
 
-// GetBlockHash retrieves the stored hash for a block number; returns empty string if not found.
-func (bs *Store) GetBlockHash(chainName string, blockNumber uint64) (string, error) {
-	if chainName == "" {
-		return "", errors.New("chain name is required")
+// GetCatchupProgress returns all catchup ranges (struct-based).
+func (bs *blockStore) GetCatchupProgress(chain string) ([]CatchupRange, error) {
+	if chain == "" {
+		return nil, errors.New("chain name is required")
 	}
-	if blockNumber == 0 {
-		return "", errors.New("block number is required")
-	}
-	v, err := bs.store.Get(bs.blockHashKey(chainName, blockNumber))
+	prefix := composeCatchupKey(chain)
+	kvs, err := bs.store.List(prefix)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return v, nil
+
+	var ranges []CatchupRange
+	for _, kv := range kvs {
+		s, e := extractRangeFromKey(kv.Key)
+		if s == 0 || e == 0 {
+			continue
+		}
+		cur, _ := strconv.ParseUint(string(kv.Value), 10, 64)
+		ranges = append(ranges, CatchupRange{Start: s, End: e, Current: cur})
+	}
+	return ranges, nil
 }
 
-// DeleteBlockHashesInRange deletes stored block hashes in [start, end].
-func (bs *Store) DeleteBlockHashesInRange(chainName string, start, end uint64) error {
-	if chainName == "" || end < start || start == 0 {
+// DeleteCatchupRange removes a saved range.
+func (bs *blockStore) DeleteCatchupRange(chain string, start, end uint64) error {
+	if chain == "" || start == 0 || end < start {
 		return nil
 	}
-	for b := start; b <= end; b++ {
-		_ = bs.store.Delete(bs.blockHashKey(chainName, b))
-	}
-	return nil
+	key := catchupKey(chain, start, end)
+	return bs.store.Delete(key)
 }
 
-func (bs *Store) Close() error {
+func (bs *blockStore) Close() error {
 	return bs.store.Close()
+}
+
+func extractRangeFromKey(key string) (uint64, uint64) {
+	// <chain>/catchup/<start>-<end>
+	parts := strings.Split(key, "/")
+	if len(parts) < 4 {
+		return 0, 0
+	}
+	se := strings.Split(parts[len(parts)-1], "-")
+	if len(se) != 2 {
+		return 0, 0
+	}
+	s, err1 := strconv.ParseUint(se[0], 10, 64)
+	e, err2 := strconv.ParseUint(se[1], 10, 64)
+	if err1 == nil && err2 == nil && s <= e {
+		return s, e
+	}
+	return 0, 0
 }
