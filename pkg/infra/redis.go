@@ -37,7 +37,11 @@ type RedisWrapper struct {
 	client *redis.Client
 }
 
-func getTlsConfig(caCertPath string, clientCertPath string, clientKeyPath string) (*tls.Config, error) {
+func getTlsConfig(
+	caCertPath string,
+	clientCertPath string,
+	clientKeyPath string,
+) (*tls.Config, error) {
 	// Load the CA cert
 	caCert, err := os.ReadFile(stringutils.ExpandTildePath(caCertPath))
 	if err != nil {

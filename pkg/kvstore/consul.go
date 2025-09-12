@@ -42,7 +42,8 @@ func checkKeyAndValue(k string, v any) error {
 
 // ConsulClient implement infra.KVStore
 type ConsulClient struct {
-	c      *api.KV
+	client *api.Client
+	kv     *api.KV
 	folder string
 	codec  infra.Codec
 }
@@ -63,7 +64,7 @@ func (c ConsulClient) Set(k string, v string) error {
 		Key:   k,
 		Value: []byte(v),
 	}
-	_, err := c.c.Put(&kvPair, nil)
+	_, err := c.kv.Put(&kvPair, nil)
 	if err != nil {
 		return err
 	}
@@ -80,7 +81,7 @@ func (c ConsulClient) Get(k string) (v string, err error) {
 	if c.folder != "" {
 		k = c.folder + "/" + k
 	}
-	kvPair, _, err := c.c.Get(k, nil)
+	kvPair, _, err := c.kv.Get(k, nil)
 	if err != nil {
 		return "", err
 	}
@@ -93,7 +94,10 @@ func (c ConsulClient) Get(k string) (v string, err error) {
 }
 
 // Get retrieves the stored value for the given key with caching options.
-func (c ConsulClient) GetWithOptions(k string, queryOptions *api.QueryOptions) (v string, err error) {
+func (c ConsulClient) GetWithOptions(
+	k string,
+	queryOptions *api.QueryOptions,
+) (v string, err error) {
 	if k == "" {
 		return "", ErrKeyEmpty
 	}
@@ -103,7 +107,7 @@ func (c ConsulClient) GetWithOptions(k string, queryOptions *api.QueryOptions) (
 	}
 
 	// Use the provided QueryOptions to control caching
-	kvPair, _, err := c.c.Get(k, queryOptions)
+	kvPair, _, err := c.kv.Get(k, queryOptions)
 	if err != nil {
 		return "", err
 	}
@@ -138,7 +142,7 @@ func (c ConsulClient) SetAny(k string, v any) error {
 		Key:   k,
 		Value: data,
 	}
-	_, err = c.c.Put(&kvPair, nil)
+	_, err = c.kv.Put(&kvPair, nil)
 	if err != nil {
 		return err
 	}
@@ -160,7 +164,7 @@ func (c ConsulClient) GetAny(k string, v any) (found bool, err error) {
 	if c.folder != "" {
 		k = c.folder + "/" + k
 	}
-	kvPair, _, err := c.c.Get(k, nil)
+	kvPair, _, err := c.kv.Get(k, nil)
 	if err != nil {
 		return false, err
 	}
@@ -181,7 +185,7 @@ func (c ConsulClient) List(prefix string) ([]*infra.KVPair, error) {
 		prefix = c.folder + "/" + prefix
 	}
 
-	kvPairs, _, err := c.c.List(prefix, nil)
+	kvPairs, _, err := c.kv.List(prefix, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +212,7 @@ func (c ConsulClient) Delete(k string) error {
 	if c.folder != "" {
 		k = c.folder + "/" + k
 	}
-	_, err := c.c.Delete(k, nil)
+	_, err := c.kv.Delete(k, nil)
 	return err
 }
 
@@ -304,7 +308,7 @@ func NewConsulClient(options Options) (infra.KVStore, error) {
 		return result, fmt.Errorf("failed to connect to Consul: %w", err)
 	}
 
-	result.c = client.KV()
+	result.kv = client.KV()
 	result.folder = options.Folder
 	result.codec = options.Codec
 

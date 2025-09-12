@@ -259,7 +259,9 @@ func main() {
 		}
 
 		if *dbPath == "" {
-			log.Fatal("Database path not specified. Use -db flag or ensure 'data' directory exists.")
+			log.Fatal(
+				"Database path not specified. Use -db flag or ensure 'data' directory exists.",
+			)
 		}
 	}
 

@@ -10,7 +10,7 @@ import (
 )
 
 // NewFromConfig constructs an infra.KVStore based on kvstore configuration.
-func NewFromConfig(cfg config.KVStoreCfg) (infra.KVStore, error) {
+func NewFromConfig(cfg config.KVSConfig) (infra.KVStore, error) {
 	switch cfg.Type {
 	case enum.KVStoreTypeBadger:
 		return NewBadgerStore(cfg.Badger.Directory, cfg.Badger.Prefix, infra.JSON)

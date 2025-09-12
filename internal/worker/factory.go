@@ -1,0 +1,246 @@
+package worker
+
+import (
+	"context"
+	"strconv"
+
+	"github.com/fystack/transaction-indexer/internal/indexer"
+	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/internal/rpc/evm"
+	"github.com/fystack/transaction-indexer/internal/rpc/tron"
+	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/transaction-indexer/pkg/common/config"
+	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/transaction-indexer/pkg/events"
+	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
+	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
+	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
+	"gorm.io/gorm"
+)
+
+// WorkerDeps bundles dependencies injected into workers.
+type WorkerDeps struct {
+	Ctx        context.Context
+	KVStore    infra.KVStore
+	BlockStore blockstore.Store
+	Emitter    events.Emitter
+	Pubkey     pubkeystore.Store
+	Redis      infra.RedisClient
+	FailedChan chan FailedBlockEvent
+}
+
+// ManagerConfig defines which workers to enable per chain.
+type ManagerConfig struct {
+	Chains          []string
+	EnableRegular   bool
+	EnableRescanner bool
+	EnableCatchup   bool
+	EnableManual    bool
+}
+
+// BuildWorkers constructs workers for a given mode.
+func BuildWorkers(
+	idxr indexer.Indexer,
+	cfg config.ChainConfig,
+	mode WorkerMode,
+	deps WorkerDeps,
+) []Worker {
+	switch mode {
+	case ModeRegular:
+		return []Worker{
+			NewRegularWorker(
+				deps.Ctx,
+				idxr,
+				cfg,
+				deps.KVStore,
+				deps.BlockStore,
+				deps.Emitter,
+				deps.Pubkey,
+				deps.FailedChan,
+			),
+		}
+	case ModeCatchup:
+		return []Worker{
+			NewCatchupWorker(
+				deps.Ctx,
+				idxr,
+				cfg,
+				deps.KVStore,
+				deps.BlockStore,
+				deps.Emitter,
+				deps.Pubkey,
+				deps.FailedChan,
+			),
+		}
+	case ModeRescanner:
+		return []Worker{
+			NewRescannerWorker(
+				deps.Ctx,
+				idxr,
+				cfg,
+				deps.KVStore,
+				deps.BlockStore,
+				deps.Emitter,
+				deps.Pubkey,
+				deps.FailedChan,
+			),
+		}
+	case ModeManual:
+		return []Worker{
+			NewManualWorker(
+				deps.Ctx,
+				idxr,
+				cfg,
+				deps.KVStore,
+				deps.Redis,
+				deps.BlockStore,
+				deps.Emitter,
+				deps.Pubkey,
+				deps.FailedChan,
+			),
+		}
+	default:
+		return nil
+	}
+}
+
+// buildEVMIndexer constructs an EVM indexer with failover and providers.
+func buildEVMIndexer(chainName string, chainCfg config.ChainConfig) indexer.Indexer {
+	failover := rpc.NewFailover[evm.EthereumAPI](nil)
+
+	// Shared rate limiter for all nodes of this chain
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := evm.NewEthereumClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "rpc",
+			Client:     client,
+			State:      rpc.StateHealthy, // Initialize as healthy
+		})
+	}
+
+	return indexer.NewEVMIndexer(chainCfg, failover)
+}
+
+// buildTronIndexer constructs a Tron indexer with failover and providers.
+func buildTronIndexer(chainName string, chainCfg config.ChainConfig) indexer.Indexer {
+	failover := rpc.NewFailover[tron.TronAPI](nil)
+
+	// Shared rate limiter for all nodes of this chain
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := tron.NewTronClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "rpc",
+			Client:     client,
+			State:      rpc.StateHealthy, // Initialize as healthy
+		})
+	}
+
+	return indexer.NewTronIndexer(chainCfg, failover)
+}
+
+// CreateManagerWithWorkers initializes manager and all workers for configured chains.
+func CreateManagerWithWorkers(
+	ctx context.Context,
+	cfg *config.Config,
+	kvstore infra.KVStore,
+	db *gorm.DB,
+	addressBF addressbloomfilter.WalletAddressBloomFilter,
+	emitter events.Emitter,
+	redisClient infra.RedisClient,
+	managerCfg ManagerConfig,
+) *Manager {
+	// Shared stores
+	blockStore := blockstore.NewBlockStore(kvstore)
+	pubkeyStore := pubkeystore.NewPublicKeyStore(kvstore, addressBF)
+	failedChan := make(chan FailedBlockEvent, 100)
+
+	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore, failedChan)
+
+	// Loop each chain
+	for _, chainName := range managerCfg.Chains {
+		chainCfg, err := cfg.Chains.GetChain(chainName)
+		if err != nil {
+			logger.Error("Chain not found in config", "chain", chainName, "err", err)
+			continue
+		}
+
+		// Build indexer depending on type
+		var idxr indexer.Indexer
+		switch chainCfg.Type {
+		case enum.NetworkTypeEVM:
+			idxr = buildEVMIndexer(chainName, chainCfg)
+		case enum.NetworkTypeTron:
+			idxr = buildTronIndexer(chainName, chainCfg)
+		default:
+			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
+		}
+
+		// Worker deps
+		deps := WorkerDeps{
+			Ctx:        ctx,
+			KVStore:    kvstore,
+			BlockStore: blockStore,
+			Emitter:    emitter,
+			Pubkey:     pubkeyStore,
+			Redis:      redisClient,
+			FailedChan: failedChan,
+		}
+
+		// Helper: add workers if enabled
+		addIfEnabled := func(mode WorkerMode, enabled bool) {
+			if enabled {
+				ws := BuildWorkers(idxr, chainCfg, mode, deps)
+				manager.AddWorkers(ws...)
+				logger.Info("Worker enabled", "chain", chainName, "mode", mode)
+			} else {
+				logger.Info("Worker disabled", "chain", chainName, "mode", mode)
+			}
+		}
+
+		addIfEnabled(ModeRegular, managerCfg.EnableRegular || cfg.Services.Worker.Regular.Enabled)
+		addIfEnabled(
+			ModeRescanner,
+			managerCfg.EnableRescanner || cfg.Services.Worker.Rescanner.Enabled,
+		)
+		addIfEnabled(ModeCatchup, managerCfg.EnableCatchup || cfg.Services.Worker.Catchup.Enabled)
+		addIfEnabled(ModeManual, managerCfg.EnableManual || cfg.Services.Worker.Manual.Enabled)
+	}
+
+	return manager
+}

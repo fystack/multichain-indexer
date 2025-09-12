@@ -23,9 +23,9 @@ type CLI struct {
 }
 
 type RunCmd struct {
-	ConfigPath string `help:"Path to config file." default:"configs/config.yaml" name:"config"`
-	BatchSize  int    `help:"DB batch size per page." default:"1000" name:"batch"`
-	Debug      bool   `help:"Enable debug logs." name:"debug"`
+	ConfigPath string `help:"Path to config file."    default:"configs/config.yaml" name:"config"`
+	BatchSize  int    `help:"DB batch size per page." default:"1000"                name:"batch"`
+	Debug      bool   `help:"Enable debug logs."                                    name:"debug"`
 }
 
 func (c *RunCmd) Run() error {
@@ -43,16 +43,16 @@ func (c *RunCmd) Run() error {
 	}
 
 	// Init DB (required for repository)
-	db, err := infra.NewDBConnection(cfg.DB.URL, cfg.Environment)
+	db, err := infra.NewDBConnection(cfg.Services.Database.URL, string(cfg.Environment))
 	if err != nil {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
 
 	// Build KV store from config; must be consul
-	if cfg.KVStore.Type != enum.KVStoreTypeConsul {
-		logger.Fatal("KVStore type must be consul for this command", "type", cfg.KVStore.Type)
+	if cfg.Services.KVS.Type != enum.KVStoreTypeConsul {
+		logger.Fatal("KVStore type must be consul for this command", "type", cfg.Services.KVS.Type)
 	}
-	store, err := kvstore.NewFromConfig(cfg.KVStore)
+	store, err := kvstore.NewFromConfig(cfg.Services.KVS)
 	if err != nil {
 		logger.Fatal("Create KV store failed", "err", err)
 	}
@@ -70,12 +70,9 @@ func (c *RunCmd) Run() error {
 		batch = 1000
 	}
 
-	candidateTypes := []enum.AddressType{
-		enum.AddressTypeEvm,
-		enum.AddressTypeTron,
-		enum.AddressTypeBtc,
-		enum.AddressTypeSolana,
-		enum.AddressTypeAptos,
+	candidateTypes := []enum.NetworkType{
+		enum.NetworkTypeTron,
+		enum.NetworkTypeEVM,
 	}
 
 	for _, t := range candidateTypes {

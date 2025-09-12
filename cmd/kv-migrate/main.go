@@ -48,7 +48,7 @@ const (
 )
 
 type CLI struct {
-	Config string `help:"YAML config file for migration" required:"true"`
+	Config string `help:"YAML config file for migration"               required:"true"`
 	DryRun bool   `help:"dry run mode (print actions without writing)"`
 }
 
@@ -60,9 +60,9 @@ type MigrationConfig struct {
 }
 
 type EndpointConfig struct {
-	Type   enum.KVStoreType   `yaml:"type"`
-	Badger config.BadgerKVCfg `yaml:"badger,omitempty"`
-	Consul config.ConsulKVCfg `yaml:"consul,omitempty"`
+	Type   enum.KVStoreType    `yaml:"type"`
+	Badger config.BadgerConfig `yaml:"badger,omitempty"`
+	Consul config.ConsulConfig `yaml:"consul,omitempty"`
 }
 
 func main() {
@@ -106,8 +106,20 @@ func printBanner() {
 func printConfig(cfg *MigrationConfig, dryRun bool) {
 	fmt.Printf("%s%s Configuration:%s\n", colorBold, colorBlue, colorReset)
 	fmt.Printf("  %s Source: %s%s%s\n", emojiSearch, colorYellow, cfg.Source.Type, colorReset)
-	fmt.Printf("  %s Destination: %s%s%s\n", emojiSearch, colorYellow, cfg.Destination.Type, colorReset)
-	fmt.Printf("  %s Prefixes: %s%s%s\n", emojiSearch, colorYellow, strings.Join(cfg.Prefixes, ", "), colorReset)
+	fmt.Printf(
+		"  %s Destination: %s%s%s\n",
+		emojiSearch,
+		colorYellow,
+		cfg.Destination.Type,
+		colorReset,
+	)
+	fmt.Printf(
+		"  %s Prefixes: %s%s%s\n",
+		emojiSearch,
+		colorYellow,
+		strings.Join(cfg.Prefixes, ", "),
+		colorReset,
+	)
 	fmt.Printf("  %s Verify: %s%v%s\n", emojiSearch, colorYellow, cfg.Verify, colorReset)
 	if dryRun {
 		fmt.Printf("  %s Mode: %sDRY RUN%s\n", emojiWarning, colorRed, colorReset)
@@ -120,13 +132,25 @@ func printSummary(total, copied int, duration time.Duration, dryRun bool) {
 	fmt.Printf("%s%s Migration Summary:%s\n", colorBold, colorGreen, colorReset)
 
 	if dryRun {
-		fmt.Printf("  %s Would migrate: %s%d%s keys\n", emojiProgress, colorYellow, total, colorReset)
+		fmt.Printf(
+			"  %s Would migrate: %s%d%s keys\n",
+			emojiProgress,
+			colorYellow,
+			total,
+			colorReset,
+		)
 	} else {
 		fmt.Printf("  %s Total keys: %s%d%s\n", emojiProgress, colorYellow, total, colorReset)
 		fmt.Printf("  %s Copied: %s%d%s\n", emojiCheck, colorGreen, copied, colorReset)
 	}
 
-	fmt.Printf("  %s Duration: %s%s%s\n", emojiProgress, colorYellow, duration.Round(time.Millisecond), colorReset)
+	fmt.Printf(
+		"  %s Duration: %s%s%s\n",
+		emojiProgress,
+		colorYellow,
+		duration.Round(time.Millisecond),
+		colorReset,
+	)
 
 	if !dryRun && total > 0 {
 		rate := float64(copied) / duration.Seconds()
@@ -134,7 +158,12 @@ func printSummary(total, copied int, duration time.Duration, dryRun bool) {
 	}
 
 	if dryRun {
-		fmt.Printf("\n%s%s Dry run completed - no data was modified%s\n", colorBold, colorYellow, colorReset)
+		fmt.Printf(
+			"\n%s%s Dry run completed - no data was modified%s\n",
+			colorBold,
+			colorYellow,
+			colorReset,
+		)
 	} else {
 		fmt.Printf("\n%s%s Migration completed successfully! %s%s\n", colorBold, colorGreen, emojiComplete, colorReset)
 	}
@@ -206,7 +235,14 @@ func migrate(src, dst infra.KVStore, prefixes []string, verify, dryRun bool) (in
 	}
 
 	total := len(allPairs)
-	fmt.Printf("\n%s%s Total keys to migrate: %s%d%s\n", emojiProgress, colorBold, colorYellow, total, colorReset)
+	fmt.Printf(
+		"\n%s%s Total keys to migrate: %s%d%s\n",
+		emojiProgress,
+		colorBold,
+		colorYellow,
+		total,
+		colorReset,
+	)
 
 	if total == 0 {
 		fmt.Printf("%s%s No keys found to migrate%s\n", emojiWarning, colorYellow, colorReset)
@@ -214,7 +250,12 @@ func migrate(src, dst infra.KVStore, prefixes []string, verify, dryRun bool) (in
 	}
 
 	if dryRun {
-		fmt.Printf("\n%s%s DRY RUN - Keys that would be migrated:%s\n", emojiWarning, colorRed, colorReset)
+		fmt.Printf(
+			"\n%s%s DRY RUN - Keys that would be migrated:%s\n",
+			emojiWarning,
+			colorRed,
+			colorReset,
+		)
 		for i, kv := range allPairs {
 			fmt.Printf("  %s %s\n", emojiMigrate, kv.Key)
 			if i >= 9 && len(allPairs) > 10 {
@@ -242,8 +283,12 @@ func migrate(src, dst infra.KVStore, prefixes []string, verify, dryRun bool) (in
 				return total, copied, fmt.Errorf("verifying key %q: %w", kv.Key, err)
 			}
 			if got != string(kv.Value) {
-				return total, copied, fmt.Errorf("verification failed for key %q: expected %q, got %q",
-					kv.Key, string(kv.Value), got)
+				return total, copied, fmt.Errorf(
+					"verification failed for key %q: expected %q, got %q",
+					kv.Key,
+					string(kv.Value),
+					got,
+				)
 			}
 		}
 

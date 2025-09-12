@@ -4,66 +4,53 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"math/big"
-	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/transaction-indexer/internal/rpc/evm"
 	"github.com/fystack/transaction-indexer/pkg/common/config"
 	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/transaction-indexer/pkg/common/logger"
 	"github.com/fystack/transaction-indexer/pkg/common/types"
-	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
-
-	"github.com/shopspring/decimal"
-)
-
-const (
-	ERC20_TRANSFER_TOPIC    = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-	ERC20_TRANSFER_SIG      = "0xa9059cbb"
-	ERC20_TRANSFER_FROM_SIG = "0x23b872dd"
+	"github.com/fystack/transaction-indexer/pkg/common/utils"
+	"golang.org/x/sync/errgroup"
 )
 
 type EVMIndexer struct {
-	config   config.ChainConfig
-	failover *rpc.FailoverManager
+	config              config.ChainConfig
+	failover            *rpc.Failover[evm.EthereumAPI]
+	maxBatchSize        int // Maximum batch size to prevent RPC timeouts
+	maxReceiptBatchSize int // Specific limit for receipt batches (usually smaller)
 }
 
-func NewEVMIndexer(config config.ChainConfig) (*EVMIndexer, error) {
-	fm := rpc.NewFailoverManager(rpc.DefaultFailoverConfig())
-	for i, nodeURL := range config.Nodes {
-		name := fmt.Sprintf("evm-%s-%d", config.Name, i)
+func NewEVMIndexer(config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI]) *EVMIndexer {
+	maxBatchSize := 20 // Default max batch size for blocks
+	if config.Throttle.BatchSize > 0 && config.Throttle.BatchSize < maxBatchSize {
+		maxBatchSize = config.Throttle.BatchSize
+	}
 
-		// Create shared rate limiter for each node URL to prevent doubling when multiple workers are running
-		var rl *ratelimiter.PooledRateLimiter
-		if config.Client.Throttle.RPS > 0 {
-			rl = ratelimiter.GetOrCreateSharedPooledRateLimiter(nodeURL.URL, config.Client.Throttle.RPS, config.Client.Throttle.Burst)
-		}
-
-		if err := fm.AddEthereumProvider(name, nodeURL.URL, nil, rl); err != nil {
-			return nil, fmt.Errorf("add provider: %w", err)
-		}
+	// Receipt batches need to be smaller due to RPC provider limits
+	maxReceiptBatchSize := 25 // Conservative limit that works with most providers
+	if config.Throttle.BatchSize > 0 && config.Throttle.BatchSize < maxReceiptBatchSize {
+		maxReceiptBatchSize = config.Throttle.BatchSize
 	}
 
 	return &EVMIndexer{
-		config:   config,
-		failover: fm,
-	}, nil
+		config:              config,
+		failover:            failover,
+		maxBatchSize:        maxBatchSize,
+		maxReceiptBatchSize: maxReceiptBatchSize,
+	}
 }
 
-func (e *EVMIndexer) GetName() string { return e.config.Name }
-
-func (e *EVMIndexer) GetAddressType() enum.AddressType {
-	return enum.AddressTypeEvm
-}
-
-func (e *EVMIndexer) GetChainType() enum.ChainType {
-	return enum.ChainTypeEVM
-}
+func (e *EVMIndexer) GetName() string                  { return strings.ToUpper(e.config.Name) }
+func (e *EVMIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeEVM }
 
 func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
-	err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+	err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
 		n, err := c.GetBlockNumber(ctx)
 		latest = n
 		return err
@@ -72,125 +59,431 @@ func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 }
 
 func (e *EVMIndexer) GetBlock(ctx context.Context, number uint64) (*types.Block, error) {
-	// Fetch block
-	var eb *rpc.EthBlock
-	hexNum := fmt.Sprintf("0x%x", number)
-	if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-		var err error
-		eb, err = c.GetBlockByNumber(ctx, hexNum, true)
-		return err
-	}); err != nil {
+	results, err := e.fetchBlocks(ctx, []uint64{number}, false)
+	if err != nil {
 		return nil, err
 	}
 
-	// Fetch receipts if needed
-	receipts := make(map[string]*rpc.EthTransactionReceipt)
-	if len(eb.Transactions) > 0 {
-		var txHashes []string
-		for _, tx := range eb.Transactions {
-			if e.needsReceipt(tx) {
-				txHashes = append(txHashes, tx.Hash)
-			}
+	if len(results) == 0 || results[0].Error != nil {
+		if len(results) > 0 && results[0].Error != nil {
+			return nil, fmt.Errorf("block error: %s", results[0].Error.Message)
 		}
-		if len(txHashes) > 0 {
-			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-				r, err := c.BatchGetTransactionReceipts(ctx, txHashes)
-				if err == nil && r != nil {
-					receipts = r
-				}
-				return nil
-			})
-		}
+		return nil, fmt.Errorf("block not found")
 	}
 
-	// Convert
-	return e.convertBlock(eb, receipts)
+	return results[0].Block, nil
 }
 
-func (e *EVMIndexer) GetBlocks(ctx context.Context, from, to uint64) ([]BlockResult, error) {
+func (e *EVMIndexer) GetBlocks(
+	ctx context.Context,
+	from, to uint64,
+	isParallel bool,
+) ([]BlockResult, error) {
 	if to < from {
 		return nil, fmt.Errorf("invalid range")
 	}
 
-	// Prepare block numbers
 	blockNums := make([]uint64, 0, to-from+1)
 	for n := from; n <= to; n++ {
 		blockNums = append(blockNums, n)
 	}
 
-	return e.getBlocks(ctx, blockNums)
+	return e.fetchBlocks(ctx, blockNums, isParallel)
 }
 
-func (e *EVMIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
-	return e.getBlocks(ctx, blockNumbers)
+func (e *EVMIndexer) GetBlocksByNumbers(
+	ctx context.Context,
+	blockNumbers []uint64,
+) ([]BlockResult, error) {
+	return e.fetchBlocks(ctx, blockNumbers, false)
 }
 
-func (e *EVMIndexer) getBlocks(ctx context.Context, blockNums []uint64) ([]BlockResult, error) {
+// Unified block fetching logic
+func (e *EVMIndexer) fetchBlocks(
+	ctx context.Context,
+	blockNums []uint64,
+	isParallel bool,
+) ([]BlockResult, error) {
 	if len(blockNums) == 0 {
 		return nil, nil
 	}
 
-	var results []BlockResult
-	var blocks map[uint64]*rpc.EthBlock
-
-	// Try batch fetch
-	if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-		var err error
-		blocks, err = c.BatchGetBlocksByNumber(ctx, blockNums, true)
-		return err
-	}); err != nil {
-		// fallback to individual if batch fails
-		if ferr := e.fallbackIndividual(ctx, blockNums, &results); ferr != nil {
-			return nil, ferr
-		}
-		return results, nil
+	// Fetch raw blocks
+	blocks, err := e.getRawBlocks(ctx, blockNums, isParallel)
+	if err != nil {
+		return e.fallbackIndividual(ctx, blockNums)
 	}
 
-	// Collect tx hashes needing receipts
-	var allTxHashes []string
-	blockTxMap := make(map[uint64][]string)
+	// Process blocks and fetch receipts
+	return e.processBlocksAndReceipts(ctx, blockNums, blocks, isParallel)
+}
+
+// Simplified raw block fetching
+func (e *EVMIndexer) getRawBlocks(
+	ctx context.Context,
+	blockNums []uint64,
+	isParallel bool,
+) (map[uint64]*evm.Block, error) {
+	if isParallel {
+		return e.getRawBlocksParallel(ctx, blockNums)
+	}
+
+	// Sequential processing with batch size limits
+	return e.getRawBlocksSequential(ctx, blockNums)
+}
+
+func (e *EVMIndexer) getRawBlocksParallel(
+	ctx context.Context,
+	blockNums []uint64,
+) (map[uint64]*evm.Block, error) {
+	providers := e.failover.GetAvailableProviders()
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("no available providers")
+	}
+
+	// First split by providers
+	providerChunks := utils.ChunkBySize(blockNums, len(providers))
+	var (
+		mu     sync.Mutex
+		blocks = make(map[uint64]*evm.Block)
+	)
+
+	var g errgroup.Group
+	for i, chunk := range providerChunks {
+		if len(chunk) == 0 {
+			continue
+		}
+
+		provider := providers[i]
+		g.Go(func() error {
+			// Further split each provider's chunk into smaller batches
+			batches := utils.ChunkBySize(chunk, (len(chunk)+e.maxBatchSize-1)/e.maxBatchSize)
+
+			for _, batch := range batches {
+				var subBlocks map[uint64]*evm.Block
+
+				// Try with the assigned provider first
+				err := e.failover.ExecuteWithRetryProvider(
+					ctx,
+					provider,
+					func(c evm.EthereumAPI) error {
+						var err error
+						subBlocks, err = c.BatchGetBlocksByNumber(ctx, batch, true)
+						return err
+					},
+				)
+
+				if err != nil {
+					// Try with all providers as fallback
+					logger.Warn("provider-specific batch failed, trying with failover",
+						"provider", provider, "error", err, "batch_size", len(batch))
+
+					err = e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+						var err error
+						subBlocks, err = c.BatchGetBlocksByNumber(ctx, batch, true)
+						return err
+					})
+
+					if err != nil {
+						// Final fallback to individual blocks
+						logger.Warn("all providers failed for batch, falling back to individual",
+							"error", err, "batch_size", len(batch))
+
+						individualBlocks, fallbackErr := e.fallbackBatchToIndividual(ctx, batch)
+						if fallbackErr != nil {
+							return fmt.Errorf("all fallback methods failed: %w", fallbackErr)
+						}
+						subBlocks = individualBlocks
+					}
+				}
+
+				mu.Lock()
+				maps.Copy(blocks, subBlocks)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	return blocks, g.Wait()
+}
+
+func (e *EVMIndexer) getRawBlocksSequential(
+	ctx context.Context,
+	blockNums []uint64,
+) (map[uint64]*evm.Block, error) {
+	allBlocks := make(map[uint64]*evm.Block)
+
+	// Split into manageable batches
+	batches := utils.ChunkBySize(blockNums, (len(blockNums)+e.maxBatchSize-1)/e.maxBatchSize)
+
+	for _, batch := range batches {
+		var blocks map[uint64]*evm.Block
+
+		// Try with failover across all providers
+		err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+			var err error
+			blocks, err = c.BatchGetBlocksByNumber(ctx, batch, true)
+			return err
+		})
+
+		if err != nil {
+			// Fallback to individual block fetching for this batch
+			logger.Warn("batch failed, falling back to individual blocks",
+				"error", err, "batch_size", len(batch))
+
+			individualBlocks, fallbackErr := e.fallbackBatchToIndividual(ctx, batch)
+			if fallbackErr != nil {
+				return allBlocks, fmt.Errorf(
+					"batch and individual fallback failed: %w",
+					fallbackErr,
+				)
+			}
+			maps.Copy(allBlocks, individualBlocks)
+		} else {
+			maps.Copy(allBlocks, blocks)
+		}
+	}
+
+	return allBlocks, nil
+}
+
+// Unified block processing and receipt fetching
+func (e *EVMIndexer) processBlocksAndReceipts(
+	ctx context.Context,
+	blockNums []uint64,
+	blocks map[uint64]*evm.Block,
+	isParallel bool,
+) ([]BlockResult, error) {
+	// Handle missing blocks by fetching them individually
+	missingNums := e.findMissingBlocks(blockNums, blocks)
+	if len(missingNums) > 0 {
+		missingBlocks, err := e.fetchMissingBlocksRaw(ctx, missingNums)
+		if err != nil {
+			logger.Warn("failed to fetch missing blocks", "error", err, "count", len(missingNums))
+		} else {
+			maps.Copy(blocks, missingBlocks)
+		}
+	}
+
+	// Extract transaction hashes that need receipts
+	txHashMap := e.extractReceiptTxHashes(blocks)
+
+	// Fetch all receipts at once
+	allReceipts, err := e.fetchAllReceipts(ctx, txHashMap, isParallel)
+	if err != nil {
+		logger.Warn("failed to fetch receipts", "error", err)
+	}
+
+	// Build final results
+	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts), nil
+}
+
+// fetchMissingBlocksRaw fetches missing blocks as raw evm.Block objects
+func (e *EVMIndexer) fetchMissingBlocksRaw(
+	ctx context.Context,
+	blockNums []uint64,
+) (map[uint64]*evm.Block, error) {
+	results := make(map[uint64]*evm.Block)
+
+	for _, num := range blockNums {
+		var eb *evm.Block
+		hexNum := fmt.Sprintf("0x%x", num)
+
+		err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+			var err error
+			eb, err = c.GetBlockByNumber(ctx, hexNum, true)
+			return err
+		})
+
+		if err != nil {
+			logger.Warn("failed to fetch individual block", "block_num", num, "error", err)
+			continue
+		}
+
+		results[num] = eb
+	}
+
+	return results, nil
+}
+
+func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[uint64][]string {
+	txHashMap := make(map[uint64][]string)
 	for blockNum, block := range blocks {
 		if block == nil {
 			continue
 		}
 		for _, tx := range block.Transactions {
-			if e.needsReceipt(tx) {
-				blockTxMap[blockNum] = append(blockTxMap[blockNum], tx.Hash)
-				allTxHashes = append(allTxHashes, tx.Hash)
+			if tx.NeedReceipt() {
+				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
 			}
 		}
 	}
+	return txHashMap
+}
 
-	// Batch get all receipts
-	allReceipts := make(map[string]*rpc.EthTransactionReceipt)
-	if len(allTxHashes) > 0 {
-		const chunkSize = 50
-		for i := 0; i < len(allTxHashes); i += chunkSize {
-			end := min(uint64(i+chunkSize), uint64(len(allTxHashes)))
-			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-				if receipts, err := c.BatchGetTransactionReceipts(ctx, allTxHashes[i:end]); err == nil {
-					maps.Copy(allReceipts, receipts)
-				}
-				return nil
-			})
-		}
+func (e *EVMIndexer) fetchAllReceipts(
+	ctx context.Context,
+	txHashMap map[uint64][]string,
+	isParallel bool,
+) (map[string]*evm.TxnReceipt, error) {
+	// Flatten all tx hashes
+	var allTxHashes []string
+	for _, hashes := range txHashMap {
+		allTxHashes = append(allTxHashes, hashes...)
 	}
 
-	// Process results in the order of blockNums
-	results = make([]BlockResult, 0, len(blockNums))
-	for _, n := range blockNums {
-		block := blocks[n]
+	if len(allTxHashes) == 0 {
+		return nil, nil
+	}
+
+	if isParallel {
+		return e.fetchReceiptsParallel(ctx, allTxHashes)
+	}
+	return e.fetchReceiptsSequential(ctx, allTxHashes)
+}
+
+func (e *EVMIndexer) fetchReceiptsSequential(
+	ctx context.Context,
+	txHashes []string,
+) (map[string]*evm.TxnReceipt, error) {
+	allReceipts := make(map[string]*evm.TxnReceipt)
+
+	// Use the specific receipt batch size limit
+	batches := utils.ChunkBySize(txHashes, e.maxReceiptBatchSize)
+
+	for batchIdx, batch := range batches {
+		var receipts map[string]*evm.TxnReceipt
+
+		logger.Debug(
+			"fetching receipt batch",
+			"batch",
+			batchIdx+1,
+			"total_batches",
+			len(batches),
+			"batch_size",
+			len(batch),
+		)
+
+		// Try with failover across all providers
+		err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+			var err error
+			receipts, err = c.BatchGetTransactionReceipts(ctx, batch)
+			return err
+		})
+
+		if err != nil {
+			logger.Warn(
+				"receipt batch failed",
+				"error",
+				err,
+				"batch_size",
+				len(batch),
+				"batch_idx",
+				batchIdx,
+			)
+			return allReceipts, err
+		}
+
+		maps.Copy(allReceipts, receipts)
+	}
+
+	return allReceipts, nil
+}
+
+func (e *EVMIndexer) fetchReceiptsParallel(
+	ctx context.Context,
+	txHashes []string,
+) (map[string]*evm.TxnReceipt, error) {
+	providers := e.failover.GetAvailableProviders()
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("no available providers")
+	}
+
+	providerChunks := utils.ChunkBySize(txHashes, len(providers))
+	var (
+		mu       sync.Mutex
+		receipts = make(map[string]*evm.TxnReceipt)
+		errs     types.MultiError
+	)
+
+	var g errgroup.Group
+	for i, chunk := range providerChunks {
+		if len(chunk) == 0 {
+			continue
+		}
+
+		provider := providers[i]
+		providerIdx := i
+
+		g.Go(func() error {
+			batches := utils.ChunkBySize(
+				chunk,
+				(len(chunk)+e.maxReceiptBatchSize-1)/e.maxReceiptBatchSize,
+			)
+
+			for batchIdx, batch := range batches {
+				var subReceipts map[string]*evm.TxnReceipt
+
+				err := e.failover.ExecuteWithRetryProvider(
+					ctx,
+					provider,
+					func(c evm.EthereumAPI) error {
+						var err error
+						subReceipts, err = c.BatchGetTransactionReceipts(ctx, batch)
+						return err
+					},
+				)
+
+				if err != nil {
+					logger.Warn("receipt batch failed",
+						"chain", e.GetName(),
+						"provider_idx", providerIdx,
+						"batch_idx", batchIdx+1,
+						"batch_size", len(batch),
+						"error", err,
+					)
+					errs.Add(fmt.Errorf("provider %s batch %d: %w", provider.Name, batchIdx+1, err))
+					continue
+				}
+
+				mu.Lock()
+				maps.Copy(receipts, subReceipts)
+				mu.Unlock()
+			}
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+
+	if !errs.IsEmpty() {
+		return receipts, &errs
+	}
+	return receipts, nil
+}
+
+func (e *EVMIndexer) buildBlockResults(
+	blockNums []uint64,
+	blocks map[uint64]*evm.Block,
+	txHashMap map[uint64][]string,
+	allReceipts map[string]*evm.TxnReceipt,
+) []BlockResult {
+	results := make([]BlockResult, 0, len(blockNums))
+
+	for _, num := range blockNums {
+		block := blocks[num]
 		if block == nil {
 			results = append(results, BlockResult{
-				Number: n, Block: nil,
-				Error: &Error{ErrorType: ErrorTypeUnknown, Message: "block not found"},
+				Number: num,
+				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: "block not found"},
 			})
 			continue
 		}
 
-		// Get receipts for this block
-		blockReceipts := make(map[string]*rpc.EthTransactionReceipt)
-		for _, txHash := range blockTxMap[n] {
+		// Build receipts map for this block
+		blockReceipts := make(map[string]*evm.TxnReceipt)
+		for _, txHash := range txHashMap[num] {
 			if receipt := allReceipts[txHash]; receipt != nil {
 				blockReceipts[txHash] = receipt
 			}
@@ -199,62 +492,109 @@ func (e *EVMIndexer) getBlocks(ctx context.Context, blockNums []uint64) ([]Block
 		typesBlock, err := e.convertBlock(block, blockReceipts)
 		if err != nil {
 			results = append(results, BlockResult{
-				Number: n, Block: nil,
-				Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
+				Number: num,
+				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
 			})
 		} else {
-			results = append(results, BlockResult{Number: n, Block: typesBlock})
+			results = append(results, BlockResult{Number: num, Block: typesBlock})
 		}
 	}
 
-	return results, nil
+	return results
 }
 
-func (e *EVMIndexer) fallbackIndividual(ctx context.Context, blockNums []uint64, results *[]BlockResult) error {
-	*results = make([]BlockResult, 0, len(blockNums))
+func (e *EVMIndexer) fallbackIndividual(
+	ctx context.Context,
+	blockNums []uint64,
+) ([]BlockResult, error) {
+	results := make([]BlockResult, 0, len(blockNums))
 
-	for _, n := range blockNums {
-		hexNum := fmt.Sprintf("0x%x", n)
-		var b *rpc.EthBlock
-		if err := e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
+	for _, num := range blockNums {
+		var eb *evm.Block
+		hexNum := fmt.Sprintf("0x%x", num)
+
+		err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
 			var err error
-			b, err = c.GetBlockByNumber(ctx, hexNum, true)
+			eb, err = c.GetBlockByNumber(ctx, hexNum, true)
 			return err
-		}); err != nil {
-			*results = append(*results, BlockResult{
-				Number: n, Block: nil,
-				Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
+		})
+
+		if err != nil {
+			results = append(results, BlockResult{
+				Number: num,
+				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
 			})
 			continue
 		}
 
-		receipts := make(map[string]*rpc.EthTransactionReceipt)
-		var txHashes []string
-		for _, tx := range b.Transactions {
-			if e.needsReceipt(tx) {
-				txHashes = append(txHashes, tx.Hash)
+		// Fetch receipts for this block
+		var needReceiptTxs []string
+		for _, tx := range eb.Transactions {
+			if tx.NeedReceipt() {
+				needReceiptTxs = append(needReceiptTxs, tx.Hash)
 			}
 		}
-		if len(txHashes) > 0 {
-			_ = e.failover.ExecuteEthereumCall(ctx, func(c *rpc.EthereumClient) error {
-				if r, err := c.BatchGetTransactionReceipts(ctx, txHashes); err == nil && r != nil {
+
+		receipts := make(map[string]*evm.TxnReceipt)
+		if len(needReceiptTxs) > 0 {
+			_ = e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+				r, err := c.BatchGetTransactionReceipts(ctx, needReceiptTxs)
+				if err == nil && r != nil {
 					receipts = r
 				}
 				return nil
 			})
 		}
 
-		block, err := e.convertBlock(b, receipts)
+		block, err := e.convertBlock(eb, receipts)
 		if err != nil {
-			*results = append(*results, BlockResult{
-				Number: n, Block: nil,
-				Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
+			results = append(results, BlockResult{
+				Number: num,
+				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
 			})
 		} else {
-			*results = append(*results, BlockResult{Number: n, Block: block})
+			results = append(results, BlockResult{Number: num, Block: block})
 		}
 	}
-	return nil
+
+	return results, nil
+}
+
+// fallbackBatchToIndividual fetches blocks individually when batch operations fail
+func (e *EVMIndexer) fallbackBatchToIndividual(
+	ctx context.Context,
+	blockNums []uint64,
+) (map[uint64]*evm.Block, error) {
+	blocks := make(map[uint64]*evm.Block)
+	var errs types.MultiError
+
+	for _, num := range blockNums {
+		var eb *evm.Block
+		hexNum := fmt.Sprintf("0x%x", num)
+
+		err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+			var err error
+			eb, err = c.GetBlockByNumber(ctx, hexNum, true)
+			return err
+		})
+
+		if err != nil {
+			logger.Warn("individual block fetch failed",
+				"chain", e.GetName(),
+				"block", num,
+				"error", err,
+			)
+			errs.Add(fmt.Errorf("block %d: %w", num, err))
+			continue
+		}
+
+		blocks[num] = eb
+	}
+
+	if !errs.IsEmpty() {
+		return blocks, &errs
+	}
+	return blocks, nil
 }
 
 func (e *EVMIndexer) IsHealthy() bool {
@@ -264,14 +604,17 @@ func (e *EVMIndexer) IsHealthy() bool {
 	return err == nil
 }
 
-func (e *EVMIndexer) convertBlock(eb *rpc.EthBlock, receipts map[string]*rpc.EthTransactionReceipt) (*types.Block, error) {
-	num, _ := parseHexUint64(eb.Number)
-	ts, _ := parseHexUint64(eb.Timestamp)
+func (e *EVMIndexer) convertBlock(
+	eb *evm.Block,
+	receipts map[string]*evm.TxnReceipt,
+) (*types.Block, error) {
+	num, _ := utils.ParseHexUint64(eb.Number)
+	ts, _ := utils.ParseHexUint64(eb.Timestamp)
 
 	var allTransfers []types.Transaction
 	for _, tx := range eb.Transactions {
 		receipt := receipts[tx.Hash]
-		transfers := e.extractTransfers(tx, receipt, num, ts)
+		transfers := tx.ExtractTransfers(e.GetName(), receipt, num, ts)
 		allTransfers = append(allTransfers, transfers...)
 	}
 
@@ -284,187 +627,13 @@ func (e *EVMIndexer) convertBlock(eb *rpc.EthBlock, receipts map[string]*rpc.Eth
 	}, nil
 }
 
-func (e *EVMIndexer) extractTransfers(tx rpc.EthTransaction, receipt *rpc.EthTransactionReceipt, blockNumber, ts uint64) []types.Transaction {
-	var out []types.Transaction
-	fee := e.calcFee(tx, receipt)
-
-	// Native transfer
-	if valueWei, err := parseHexBigInt(tx.Value); err == nil && valueWei.Cmp(big.NewInt(0)) > 0 && tx.To != "" {
-		out = append(out, types.Transaction{
-			TxHash:       tx.Hash,
-			NetworkId:    e.GetName(),
-			BlockNumber:  blockNumber,
-			FromAddress:  tx.From,
-			ToAddress:    tx.To,
-			AssetAddress: "",
-			Amount:       valueWei.String(),
-			Type:         "transfer",
-			TxFee:        fee,
-			Timestamp:    ts,
-		})
-	}
-
-	// ERC20 transfers
-	if receipt != nil {
-		out = append(out, e.parseERC20Logs(tx.Hash, receipt.Logs, blockNumber, ts)...)
-	} else if erc20 := e.parseERC20Input(tx, fee, blockNumber, ts); erc20 != nil {
-		out = append(out, *erc20)
-	}
-
-	// Deduplicate exact same transfers within the same transaction
-	if len(out) <= 1 {
-		return out
-	}
-	seen := make(map[string]struct{}, len(out))
-	unique := make([]types.Transaction, 0, len(out))
-	for _, t := range out {
-		key := t.TxHash + "|" + t.Type + "|" + t.AssetAddress + "|" + t.FromAddress + "|" + t.ToAddress + "|" + t.Amount + "|" + strconv.FormatUint(t.BlockNumber, 10)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		unique = append(unique, t)
-	}
-	return unique
-}
-
-func (e *EVMIndexer) parseERC20Logs(txHash string, logs []rpc.EthLog, blockNumber, ts uint64) []types.Transaction {
-	var transfers []types.Transaction
-	for _, log := range logs {
-		if len(log.Topics) < 3 || log.Topics[0] != ERC20_TRANSFER_TOPIC {
-			continue
-		}
-
-		from := "0x" + log.Topics[1][len(log.Topics[1])-40:]
-		to := "0x" + log.Topics[2][len(log.Topics[2])-40:]
-		amount, err := parseHexBigInt(log.Data)
-		if err != nil {
-			continue
-		}
-
-		transfers = append(transfers, types.Transaction{
-			TxHash:       txHash,
-			NetworkId:    e.GetName(),
-			BlockNumber:  blockNumber,
-			FromAddress:  from,
-			ToAddress:    to,
-			AssetAddress: log.Address,
-			Amount:       amount.String(),
-			Type:         "erc20_transfer",
-			TxFee:        decimal.Zero,
-			Timestamp:    ts,
-		})
-	}
-	return transfers
-}
-
-func (e *EVMIndexer) parseERC20Input(tx rpc.EthTransaction, fee decimal.Decimal, blockNumber, ts uint64) *types.Transaction {
-	if len(tx.Input) < 10 {
-		return nil
-	}
-
-	sig := tx.Input[:10]
-	switch sig {
-	case ERC20_TRANSFER_SIG:
-		// method(4 bytes) + 2 params (2 * 32 bytes) = 10 + 64 + 64 = 138 chars
-		if len(tx.Input) < 138 {
-			return nil
-		}
-		// First param (address) occupies [10:74] (64 hex chars). Keep last 40 hex chars
-		to := "0x" + tx.Input[10:74][24:]
-		// Second param (uint256 amount) occupies [74:138]
-		amount, err := parseHexBigInt("0x" + tx.Input[74:138])
-		if err != nil {
-			return nil
-		}
-		return &types.Transaction{
-			TxHash:       tx.Hash,
-			NetworkId:    e.GetName(),
-			BlockNumber:  blockNumber,
-			FromAddress:  tx.From,
-			ToAddress:    to,
-			AssetAddress: tx.To,
-			Amount:       amount.String(),
-			Type:         "erc20_transfer",
-			TxFee:        fee,
-			Timestamp:    ts,
-		}
-	case ERC20_TRANSFER_FROM_SIG:
-		// method(4 bytes) + 3 params (3 * 32 bytes) = 10 + 64 + 64 + 64 = 202 chars
-		if len(tx.Input) < 202 {
-			return nil
-		}
-		// from address = first param [10:74], keep last 40 hex chars
-		from := "0x" + tx.Input[10:74][24:]
-		// to address = second param [74:138], keep last 40 hex chars
-		to := "0x" + tx.Input[74:138][24:]
-		// amount (uint256) = third param [138:202]
-		amount, err := parseHexBigInt("0x" + tx.Input[138:202])
-		if err != nil {
-			return nil
-		}
-		return &types.Transaction{
-			TxHash:       tx.Hash,
-			NetworkId:    e.GetName(),
-			BlockNumber:  blockNumber,
-			FromAddress:  from,
-			ToAddress:    to,
-			AssetAddress: tx.To,
-			Amount:       amount.String(),
-			Type:         "erc20_transfer",
-			TxFee:        decimal.Zero,
-			Timestamp:    ts,
+// Helper functions for cleaner code
+func (e *EVMIndexer) findMissingBlocks(blockNums []uint64, blocks map[uint64]*evm.Block) []uint64 {
+	var missing []uint64
+	for _, num := range blockNums {
+		if blocks[num] == nil {
+			missing = append(missing, num)
 		}
 	}
-	return nil
-}
-
-func (e *EVMIndexer) calcFee(tx rpc.EthTransaction, receipt *rpc.EthTransactionReceipt) decimal.Decimal {
-	if receipt != nil {
-		if gasUsed, err1 := parseHexBigInt(receipt.GasUsed); err1 == nil {
-			if gasPrice, err2 := parseHexBigInt(receipt.EffectiveGasPrice); err2 == nil {
-				return decimal.NewFromBigInt(new(big.Int).Mul(gasUsed, gasPrice), 0)
-			}
-		}
-	}
-	if gas, err1 := parseHexBigInt(tx.Gas); err1 == nil {
-		if gasPrice, err2 := parseHexBigInt(tx.GasPrice); err2 == nil {
-			return decimal.NewFromBigInt(new(big.Int).Mul(gas, gasPrice), 0)
-		}
-	}
-	return decimal.Zero
-}
-
-func (e *EVMIndexer) needsReceipt(tx rpc.EthTransaction) bool {
-	inputLen := len(strings.TrimSpace(tx.Input))
-	if inputLen <= 2 {
-		return false
-	}
-	if inputLen >= 10 {
-		sig := tx.Input[:10]
-		if sig == ERC20_TRANSFER_SIG || sig == ERC20_TRANSFER_FROM_SIG {
-			return false
-		}
-	}
-	return true
-}
-
-func parseHexUint64(h string) (uint64, error) {
-	h = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(h)), "0x")
-	if h == "" {
-		return 0, fmt.Errorf("empty hex")
-	}
-	return strconv.ParseUint(h, 16, 64)
-}
-
-func parseHexBigInt(h string) (*big.Int, error) {
-	h = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(h)), "0x")
-	if h == "" {
-		return big.NewInt(0), nil
-	}
-	bi := new(big.Int)
-	if _, ok := bi.SetString(h, 16); !ok {
-		return nil, fmt.Errorf("invalid hex: %s", h)
-	}
-	return bi, nil
+	return missing
 }

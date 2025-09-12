@@ -68,7 +68,7 @@ func TestRedisBloomFilter_AddAndContains(t *testing.T) {
 		"TT1j2adMBb6bF2K8C2LX1QkkmSXHjiaAfw",
 	}
 
-	addressType := enum.AddressTypeEvm
+	addressType := enum.NetworkTypeEVM
 
 	// Clear any existing bloom filter
 	rbf.Clear(addressType)
@@ -115,19 +115,19 @@ func TestRedisBloomFilter_AddAndContains(t *testing.T) {
 		tronAddress := testAddresses[2]
 
 		// Add to different types
-		rbf.Add(evmAddress, enum.AddressTypeEvm)
-		rbf.Add(tronAddress, enum.AddressTypeTron)
+		rbf.Add(evmAddress, enum.NetworkTypeEVM)
+		rbf.Add(tronAddress, enum.NetworkTypeTron)
 
 		// Check EVM address in EVM filter
-		exists := rbf.Contains(evmAddress, enum.AddressTypeEvm)
+		exists := rbf.Contains(evmAddress, enum.NetworkTypeEVM)
 		assert.True(t, exists, "EVM address should exist in EVM bloom filter")
 
 		// Check Tron address in Tron filter
-		exists = rbf.Contains(tronAddress, enum.AddressTypeTron)
+		exists = rbf.Contains(tronAddress, enum.NetworkTypeTron)
 		assert.True(t, exists, "Tron address should exist in Tron bloom filter")
 
 		// Check EVM address in Tron filter (should not exist)
-		notExists := rbf.Contains(evmAddress, enum.AddressTypeTron)
+		notExists := rbf.Contains(evmAddress, enum.NetworkTypeTron)
 		assert.False(t, notExists, "EVM address should not exist in Tron bloom filter")
 	})
 
@@ -149,13 +149,16 @@ func TestRedisBloomFilter_AddAndContains(t *testing.T) {
 
 	// Clean up
 	rbf.Clear(addressType)
-	rbf.Clear(enum.AddressTypeTron)
+	rbf.Clear(enum.NetworkTypeTron)
 }
 
 // MockWalletAddressRepo for testing
 type MockWalletAddressRepo struct{}
 
-func (m *MockWalletAddressRepo) Find(ctx context.Context, options repository.FindOptions) ([]*model.WalletAddress, error) {
+func (m *MockWalletAddressRepo) Find(
+	ctx context.Context,
+	options repository.FindOptions,
+) ([]*model.WalletAddress, error) {
 	// Return empty result for testing
 	return []*model.WalletAddress{}, nil
 }

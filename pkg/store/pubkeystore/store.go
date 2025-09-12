@@ -9,13 +9,14 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/kvstore"
 )
 
-func composeKey(addressType enum.AddressType, publicKey string) string {
+func composeKey(addressType enum.NetworkType, publicKey string) string {
 	return fmt.Sprintf("%s/%s", addressType, publicKey)
 }
 
 type Store interface {
-	Exist(addressType enum.AddressType, publicKey string) bool
-	Save(addressType enum.AddressType, publicKey string) error
+	Exist(addressType enum.NetworkType, publicKey string) bool
+	Save(addressType enum.NetworkType, publicKey string) error
+	Close() error
 }
 
 type publicKeyStore struct {
@@ -23,11 +24,14 @@ type publicKeyStore struct {
 	bloomFilter addressbloomfilter.WalletAddressBloomFilter
 }
 
-func NewPublicKeyStore(client infra.KVStore, bloomFilter addressbloomfilter.WalletAddressBloomFilter) Store {
+func NewPublicKeyStore(
+	client infra.KVStore,
+	bloomFilter addressbloomfilter.WalletAddressBloomFilter,
+) Store {
 	return &publicKeyStore{kvstore: client, bloomFilter: bloomFilter}
 }
 
-func (s *publicKeyStore) Exist(addressType enum.AddressType, publicKey string) bool {
+func (s *publicKeyStore) Exist(addressType enum.NetworkType, publicKey string) bool {
 	// First check the bloom filter.
 	// If the bloom filter returns false, the key definitely doesn't exist.
 	if !s.bloomFilter.Contains(publicKey, addressType) {
@@ -35,7 +39,10 @@ func (s *publicKeyStore) Exist(addressType enum.AddressType, publicKey string) b
 	}
 
 	// Since bloom filters may have false positives, check the underlying KV store.
-	v, err := s.kvstore.GetWithOptions(composeKey(addressType, publicKey), &kvstore.DefaultCacheOptions)
+	v, err := s.kvstore.GetWithOptions(
+		composeKey(addressType, publicKey),
+		&kvstore.DefaultCacheOptions,
+	)
 	if v == "" || err != nil {
 		return false
 	}
@@ -43,7 +50,11 @@ func (s *publicKeyStore) Exist(addressType enum.AddressType, publicKey string) b
 	return true
 }
 
-func (s *publicKeyStore) Save(addressType enum.AddressType, publicKey string) error {
+func (s *publicKeyStore) Save(addressType enum.NetworkType, publicKey string) error {
 	s.bloomFilter.Add(publicKey, addressType)
 	return s.kvstore.Set(composeKey(addressType, publicKey), "ok")
+}
+
+func (s *publicKeyStore) Close() error {
+	return s.kvstore.Close()
 }

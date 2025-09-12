@@ -10,6 +10,7 @@ import (
 
 const (
 	DefaultMaxAttempts = 3
+	DefaultInterval    = 5 * time.Second
 )
 
 type Operation func() error

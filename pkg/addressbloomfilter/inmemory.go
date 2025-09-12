@@ -29,25 +29,22 @@ type walletBloomFilter struct {
 
 type addressBloomFilter struct {
 	mu      sync.RWMutex
-	filters map[enum.AddressType]*walletBloomFilter
+	filters map[enum.NetworkType]*walletBloomFilter
 	config  Config
 }
 
 // NewAddressBloomFilter creates a new singleton bloom filter container using the provided config.
 func NewAddressBloomFilter(cfg Config) WalletAddressBloomFilter {
 	return &addressBloomFilter{
-		filters: make(map[enum.AddressType]*walletBloomFilter),
+		filters: make(map[enum.NetworkType]*walletBloomFilter),
 		config:  cfg,
 	}
 }
 
 func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
-	types := []enum.AddressType{
-		enum.AddressTypeEvm,
-		// enum.AddressTypeBtc,
-		// enum.AddressTypeSolana,
-		// enum.AddressTypeAptos,
-		enum.AddressTypeTron,
+	types := []enum.NetworkType{
+		enum.NetworkTypeEVM,
+		enum.NetworkTypeTron,
 	}
 
 	for _, addrType := range types {
@@ -83,7 +80,7 @@ func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
 	return nil
 }
 
-func (abf *addressBloomFilter) getOrCreateFilter(addressType enum.AddressType) *walletBloomFilter {
+func (abf *addressBloomFilter) getOrCreateFilter(addressType enum.NetworkType) *walletBloomFilter {
 	abf.mu.Lock()
 	defer abf.mu.Unlock()
 
@@ -102,7 +99,7 @@ func (abf *addressBloomFilter) getOrCreateFilter(addressType enum.AddressType) *
 	return bf
 }
 
-func (abf *addressBloomFilter) Add(address string, addressType enum.AddressType) {
+func (abf *addressBloomFilter) Add(address string, addressType enum.NetworkType) {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.Lock()
 	defer bf.mu.Unlock()
@@ -110,7 +107,7 @@ func (abf *addressBloomFilter) Add(address string, addressType enum.AddressType)
 	bf.addressCount++
 }
 
-func (abf *addressBloomFilter) AddBatch(addresses []string, addressType enum.AddressType) {
+func (abf *addressBloomFilter) AddBatch(addresses []string, addressType enum.NetworkType) {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.Lock()
 	defer bf.mu.Unlock()
@@ -120,14 +117,14 @@ func (abf *addressBloomFilter) AddBatch(addresses []string, addressType enum.Add
 	}
 }
 
-func (abf *addressBloomFilter) Contains(address string, addressType enum.AddressType) bool {
+func (abf *addressBloomFilter) Contains(address string, addressType enum.NetworkType) bool {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.RLock()
 	defer bf.mu.RUnlock()
 	return bf.filter.Test([]byte(address))
 }
 
-func (abf *addressBloomFilter) Clear(addressType enum.AddressType) {
+func (abf *addressBloomFilter) Clear(addressType enum.NetworkType) {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.Lock()
 	defer bf.mu.Unlock()
@@ -135,7 +132,7 @@ func (abf *addressBloomFilter) Clear(addressType enum.AddressType) {
 	bf.addressCount = 0
 }
 
-func (abf *addressBloomFilter) Stats(addressType enum.AddressType) map[string]any {
+func (abf *addressBloomFilter) Stats(addressType enum.NetworkType) map[string]any {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.RLock()
 	defer bf.mu.RUnlock()

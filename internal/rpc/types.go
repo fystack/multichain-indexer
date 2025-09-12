@@ -3,6 +3,7 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 )
 
 // Provider states - used to track the health status of blockchain providers
@@ -42,6 +43,25 @@ type RPCResponse struct {
 	JSONRPC string          `json:"jsonrpc"`
 	Result  json.RawMessage `json:"result,omitempty"`
 	Error   *RPCError       `json:"error,omitempty"`
+}
+
+func (r *RPCResponse) IDInt64() (int64, bool) {
+	switch v := r.ID.(type) {
+	case float64: // JSON number mặc định
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err == nil {
+			return n, true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
 }
 
 // RPCError represents a JSON-RPC error

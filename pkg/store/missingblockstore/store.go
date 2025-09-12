@@ -128,11 +128,18 @@ func (m *missingBlocksStore) composeProcessedKey(networkCode string, start, end 
 	return fmt.Sprintf("%s:%s:%d-%d", processedKeyPrefix, networkCode, start, end)
 }
 
-func (m *missingBlocksStore) composeProcessingLockKey(networkCode string, start, end uint64) string {
+func (m *missingBlocksStore) composeProcessingLockKey(
+	networkCode string,
+	start, end uint64,
+) string {
 	return fmt.Sprintf("%s:%s:%d-%d", lockKeyPrefix, networkCode, start, end)
 }
 
-func (m *missingBlocksStore) AddMissingBlockRange(ctx context.Context, networkCode string, start, end uint64) error {
+func (m *missingBlocksStore) AddMissingBlockRange(
+	ctx context.Context,
+	networkCode string,
+	start, end uint64,
+) error {
 	if start == 0 || end == 0 || start > end {
 		return fmt.Errorf("invalid range: start=%d, end=%d", start, end)
 	}
@@ -161,7 +168,10 @@ func (m *missingBlocksStore) AddMissingBlockRange(ctx context.Context, networkCo
 	return nil
 }
 
-func (m *missingBlocksStore) GetNextRange(ctx context.Context, networkCode string) (uint64, uint64, error) {
+func (m *missingBlocksStore) GetNextRange(
+	ctx context.Context,
+	networkCode string,
+) (uint64, uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
@@ -200,7 +210,11 @@ func (m *missingBlocksStore) GetNextRange(ctx context.Context, networkCode strin
 	return start, end, nil
 }
 
-func (m *missingBlocksStore) RemoveRange(ctx context.Context, networkCode string, start, end uint64) error {
+func (m *missingBlocksStore) RemoveRange(
+	ctx context.Context,
+	networkCode string,
+	start, end uint64,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
@@ -226,7 +240,11 @@ func (m *missingBlocksStore) RemoveRange(ctx context.Context, networkCode string
 	return nil
 }
 
-func (m *missingBlocksStore) SetRangeProcessed(ctx context.Context, networkCode string, start, end, current uint64) error {
+func (m *missingBlocksStore) SetRangeProcessed(
+	ctx context.Context,
+	networkCode string,
+	start, end, current uint64,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, lockTimeout)
 	defer cancel()
 
@@ -239,7 +257,11 @@ func (m *missingBlocksStore) SetRangeProcessed(ctx context.Context, networkCode 
 	return nil
 }
 
-func (m *missingBlocksStore) GetRangeProcessed(ctx context.Context, networkCode string, start, end uint64) (uint64, error) {
+func (m *missingBlocksStore) GetRangeProcessed(
+	ctx context.Context,
+	networkCode string,
+	start, end uint64,
+) (uint64, error) {
 	ctx, cancel := context.WithTimeout(ctx, lockTimeout)
 	defer cancel()
 
@@ -260,7 +282,10 @@ func (m *missingBlocksStore) GetRangeProcessed(ctx context.Context, networkCode 
 	return processed, nil
 }
 
-func (m *missingBlocksStore) ListRanges(ctx context.Context, networkCode string) ([]BlockRange, error) {
+func (m *missingBlocksStore) ListRanges(
+	ctx context.Context,
+	networkCode string,
+) ([]BlockRange, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 

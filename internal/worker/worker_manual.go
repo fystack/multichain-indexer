@@ -20,10 +20,15 @@ type ManualConfig struct {
 	DelayPerIteration time.Duration // delay after processing each range
 }
 
+var DefaultManualConfig = ManualConfig{
+	MaxEmptyAttempts: 3,
+	EmptySleep:       3 * time.Second,
+}
+
 type ManualWorker struct {
 	*BaseWorker
-	conf ManualConfig
-	mbs  missingblockstore.MissingBlocksStore
+	config ManualConfig
+	mbs    missingblockstore.MissingBlocksStore
 }
 
 func NewManualWorker(
@@ -32,18 +37,25 @@ func NewManualWorker(
 	cfg config.ChainConfig,
 	kv infra.KVStore,
 	redisClient infra.RedisClient,
-	blockStore *blockstore.Store,
-	emitter *events.Emitter,
+	blockStore blockstore.Store,
+	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
 ) *ManualWorker {
 	return &ManualWorker{
-		BaseWorker: newWorkerWithMode(ctx, chain, cfg, kv, blockStore, emitter, pubkeyStore, ModeManual, failedChan),
-		mbs:        missingblockstore.NewMissingBlocksStore(redisClient),
-		conf: ManualConfig{
-			MaxEmptyAttempts: 3,
-			EmptySleep:       3 * time.Second,
-		},
+		BaseWorker: newWorkerWithMode(
+			ctx,
+			chain,
+			cfg,
+			kv,
+			blockStore,
+			emitter,
+			pubkeyStore,
+			ModeManual,
+			failedChan,
+		),
+		mbs:    missingblockstore.NewMissingBlocksStore(redisClient),
+		config: DefaultManualConfig,
 	}
 }
 
@@ -88,13 +100,13 @@ func (mw *ManualWorker) loop() {
 		if start == 0 && end == 0 {
 			emptyAttempts++
 			count, _ := mw.mbs.CountRanges(ctx, mw.chain.GetName())
-			if emptyAttempts >= mw.conf.MaxEmptyAttempts {
-				mw.logger.Info("No ranges to process; sleeping",
+			if emptyAttempts >= mw.config.MaxEmptyAttempts {
+				mw.logger.Info("No ranges to process, sleeping",
 					"chain", mw.chain.GetName(),
-					"sleep", mw.conf.EmptySleep,
+					"sleep", mw.config.EmptySleep,
 					"queued_ranges", count,
 				)
-				time.Sleep(mw.conf.EmptySleep)
+				time.Sleep(mw.config.EmptySleep)
 				emptyAttempts = 0
 			} else {
 				time.Sleep(time.Second)
@@ -104,8 +116,8 @@ func (mw *ManualWorker) loop() {
 		emptyAttempts = 0
 
 		mw.handleRange(ctx, start, end)
-		if mw.conf.DelayPerIteration > 0 {
-			time.Sleep(mw.conf.DelayPerIteration)
+		if mw.config.DelayPerIteration > 0 {
+			time.Sleep(mw.config.DelayPerIteration)
 		}
 	}
 }
@@ -117,7 +129,7 @@ func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 		"end", end,
 	)
 
-	results, err := mw.chain.GetBlocks(ctx, start, end)
+	results, err := mw.chain.GetBlocks(ctx, start, end, false)
 	if err != nil {
 		mw.logger.Error("GetBlocks failed", "err", err, "chain", mw.chain.GetName())
 		time.Sleep(time.Second)
