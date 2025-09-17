@@ -3,6 +3,10 @@
 Production-ready indexer for multiple blockchains with four cooperating workers:
 **Regular (real-time)**, **Catchup (historical)**, **Rescanner (failed/missed blocks)**, **Manual (manual blocks)**.
 
+This indexer is designed to be used in a multi-chain environment, where each chain is indexed independently and emits events.
+
+---
+
 ## 🚀 Quick Start
 
 ```bash
@@ -13,13 +17,13 @@ cp configs/config.example.yaml configs/config.yaml
 go build -o indexer cmd/indexer/main.go
 
 # Index EVM & TRON in real-time
-./indexer index --chains=evm,tron
+./indexer index --chains=ethereum_mainnet,tron_mainnet
 
 # Add catchup worker for historical gaps
-./indexer index --chains=evm,tron --catchup
+./indexer index --chains=ethereum_mainnet,tron_mainnet --catchup
 
 # Add manual worker for missing blocks
-./indexer index --chains=evm,tron --manual
+./indexer index --chains=ethereum_mainnet,tron_mainnet --manual
 
 # For help
 ./indexer --help
@@ -57,23 +61,20 @@ go build -o indexer cmd/indexer/main.go
 
 ### **ManualWorker**
 
-* Special worker to handle **explicit missing blocks** (e.g. due to RPC errors, reorg skips, or manual intervention).
+* Handles **explicit missing blocks** (due to RPC errors, reorg skips, or manual intervention).
 * Missing ranges are stored in **Redis ZSET**:
 
   * Member format: `"start-end"`
-  * Score = `start` (to sort ranges by starting block)
-  * Each large range is split into small ranges (default 5 blocks) for finer-grained retries.
-* **Concurrent-safe with Redis locks**:
-
-  * Before a worker processes a range, it atomically acquires a **lock key** (via Lua script `SETNX + EX`).
-  * This ensures multiple ManualWorkers can run in parallel across processes without duplicate work.
+  * Score = `start` (to sort ranges by block number)
+  * Large ranges split into small ranges (default 5 blocks) for finer retries
+* **Concurrency-safe with Redis locks** (`SETNX + EX` via Lua)
 * Workflow:
 
-  1. Worker calls `GetNextRange()` → atomically claim one unprocessed range.
-  2. Process all blocks in `[start,end]`.
-  3. Update progress with `SetRangeProcessed()`.
-  4. On full success → `RemoveRange()` (delete ZSET member + lock).
-  5. On partial timeout → reinsert remaining `[current,end]` as a new range.
+  1. Claim unprocessed range (`GetNextRange`)
+  2. Process all blocks in `[start,end]`
+  3. Update progress with `SetRangeProcessed`
+  4. On full success → `RemoveRange`
+  5. On partial timeout → reinsert remaining `[current,end]`
 
 ---
 
@@ -82,7 +83,7 @@ go build -o indexer cmd/indexer/main.go
 * Re-processes failed blocks from KV `<chain>/failed_blocks/<block>` or `failedChan`
 * Updates KV when retry succeeds
 * Removes blocks after max retry attempts
-* Avoids processing the current chain head block to reduce reorg risk
+* Skips chain head block to reduce reorg risk
 
 ---
 
@@ -94,7 +95,6 @@ go build -o indexer cmd/indexer/main.go
 | `<chain>/catchup_progress/<start>-<end>` | CatchupWorker progress per range    |
 | `<chain>/failed_blocks/<block>`          | Failed blocks metadata for retry    |
 | `<chain_type>/<address>`                 | Public key store                    |
-| `<chain>/block_hash/<block>`             | Block hash for reorg detection      |
 | `missing_blocks:<chain>`                 | Redis ZSET of missing ranges        |
 | `processing:<chain>:<start>-<end>`       | Redis lock key for concurrent claim |
 | `processed:<chain>:<start>-<end>`        | Last processed block in range       |
@@ -144,73 +144,123 @@ flowchart TB
 
 **Logic Flow:**
 
-1. **RegularWorker**: processes latest blocks, detects reorgs, emits transactions, saves progress, reports errors.
-2. **CatchupWorker**: fills historical gaps, tracks range progress, deletes range when done.
-3. **ManualWorker**: pulls missing ranges from Redis, claims lock for concurrency, processes blocks, reinserts unfinished ranges.
-4. **RescannerWorker**: retries failed blocks, updates KV when successful.
+1. **RegularWorker**: real-time indexing, reorg handling, error reporting
+2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
+3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
+4. **RescannerWorker**: retries failed blocks, updates KV on success
 
 ---
 
 ## ✅ Prerequisites
 
-* Start required services before running the indexer (docker-compose provided):
+Start required services before running the indexer (docker-compose provided):
 
-  * NATS server (events)
-  * Consul (KV) or Badger (embedded) per your config
-  * PostgreSQL (wallet address repo)
-  * Redis (required if using Redis Bloom filter backend or ManualWorker)
+* NATS server (events)
+* Consul (KV) or Badger (embedded)
+* PostgreSQL (wallet address repo)
+* Redis (for Bloom filter or ManualWorker)
 
 ```bash
 docker-compose up -d
 ```
 
-For configuration and usage details, see `configs/config.example.yaml` and adapt `configs/config.yaml`.
-
 ---
 
 ## 🔧 Configuration
 
-* **Chains**: `evm`, `tron` (configurable `start_block`, `batch_size`, `poll_interval`)
+* **Chains**: configurable (`start_block`, `batch_size`, `poll_interval`)
 * **KVStore**: BadgerDB / in-memory / Consul
-* **Bloom Filter**: Redis or in-memory for wallet addresses
+* **Bloom Filter**: Redis or in-memory
 * **Event Emitter**: NATS streaming
-* **RPC Providers**: failover + rate-limiting per chain
+* **RPC Providers**: failover + rate-limiting
 
-See `configs/config.example.yaml` for a full reference of fields and example values.
+See `configs/config.example.yaml` for details.
 
 ---
 
 ## 🏗️ Core Principles
 
-* **Multi-chain support**: Independent workers per chain
-* **Auto-catchup**: Detect gaps → create ranges → process → cleanup
-* **Failed block recovery**: Persisted, retryable, deduplicated
-* **Manual backfill**: Claimable Redis ranges, safe for concurrency
+* **Multi-chain support**: independent workers per chain
+* **Auto-catchup**: detect gaps → backfill → cleanup
+* **Failed block recovery**: persisted + retryable
+* **Manual backfill**: Redis-driven, safe for concurrency
 * **State persistence**: KV + BlockStore → restart-safe
+
+---
+
+Got it 👍 — let’s clean this up and make it **English-only**, with a clear **Usage Highlights** section and an **Example `configs/config.yaml`** snippet so new devs immediately know where chain names come from.
 
 ---
 
 ## ⚡ Usage Highlights
 
+The chain names passed to `--chains` **must match the names defined in `configs/config.yaml`**.
+Example: `ethereum_mainnet`, `tron_mainnet`.
+
 ```bash
 # Real-time only
-./indexer index --chains=evm
+./indexer index --chains=ethereum_mainnet,tron_mainnet
 
-# Real-time + catchup
-./indexer index --chains=evm,tron --catchup
+# Real-time + catchup (fill historical gaps)
+./indexer index --chains=ethereum_mainnet,tron_mainnet --catchup
 
-# Add manual worker to process missing blocks
-./indexer index --chains=evm,tron --manual
+# Add manual worker to process missing blocks from Redis
+./indexer index --chains=ethereum_mainnet,tron_mainnet --manual
 
-# Debug
-./indexer index --chains=evm --debug
+# Debug mode (extra logs)
+./indexer index --chains=ethereum_mainnet,tron_mainnet --debug
 
-# NATS monitoring
+# NATS event monitoring
 ./indexer nats-printer
 
-# bloom filter and kvstore need to be initialized before running the indexer
+# Initialize bloom filter and kvstore
 ./wallet-kv-load run --config configs/config.yaml --batch 10000 --debug
 
-# migrate from badger to consul (edit migrate.yaml)
+# Migrate from Badger to Consul (edit migrate.yaml first)
 ./kv-migrate run --config configs/config.yaml --dry-run
+```
+
+---
+
+## 📝 Example `configs/config.yaml` (chains section)
+
+```yaml
+chains:
+  ethereum_mainnet: # <- this is the chain name
+    type: "evm"
+    nodes:
+      - url: "https://eth-mainnet.g.alchemy.com/v2/${API_KEY}"
+        auth:
+          type: "header"
+          key: "Authorization"
+          value: "Bearer ${API_KEY}"
+      - url: "https://rpc.ankr.com/eth"
+    start_block: 21500000
+    poll_interval: "6s"
+    client:
+      timeout: "20s"
+      max_retries: 3
+      retry_delay: "5s"
+      throttle:
+        rps: 8
+        burst: 16
+
+  tron_mainnet:
+    type: "tron"
+    nodes:
+      - url: "https://api.trongrid.io"
+        auth:
+          type: "header"
+          key: "TRON-PRO-API-KEY"
+          value: "${TRON_API_KEY}"
+      - url: "https://tron-rpc.publicnode.com"
+    start_block: 75144237
+    poll_interval: "8s"
+    client:
+      timeout: "20s"
+      max_retries: 5
+      retry_delay: "10s"
+      throttle:
+        rps: 5
+        burst: 8
 ```

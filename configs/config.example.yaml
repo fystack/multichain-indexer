@@ -1,111 +1,107 @@
+# Environment: "dev", "staging", or "prod"
+env: "dev"
+
+# Global defaults - applies to all chains unless overridden
+defaults:
+  from_latest: true                 # start indexing from the latest block
+  poll_interval: "5s"               # how often to poll for new blocks
+  reorg_rollback_window: 20         # number of blocks to roll back on reorg
+  client:
+    timeout: "20s"                  # RPC timeout per request
+    max_retries: 3                  # max retries per RPC call
+    retry_delay: "5s"               # delay between retries
+  throttle:
+    rps: 8                          # requests per second per RPC node
+    burst: 16                       # burst capacity
+    batch_size: 100                  # default batch size when fetching
+    concurrency: 3                   # number of concurrent workers
+
 chains:
-  defaults:
-    batch_size: 10                # Number of blocks to process in one batch (affects performance & latency)
-    poll_interval: "5s"           # Delay between each poll for new chain head (prevents spamming the node)
-    client:
-      timeout: "15s"              # Timeout for each RPC request
-      max_retries: 3              # Number of retries if the request fails (429/timeout)
-      retry_delay: "5s"           # Delay between retry attempts
-      throttle:
-        rps: 8                    # Requests per second limit to avoid being rate-limited
-        burst: 16                 # Maximum short-term burst (token bucket)
-
-  tron-mainnet:
-    name: "tron-mainnet"          # Display name for the chain
-    type: "tron"                  # Chain type (tron/evm/bitcoin/solana/etc.)
+  tron_mainnet:
+    type: "tron"
+    start_block: 75144237
+    poll_interval: "8s"             # override default poll interval
     nodes:
-      # Primary node: TronGrid (API key required, 15 QPS limit)
       - url: "https://api.trongrid.io"
-        headers:
-          TRON-PRO-API-KEY: "${TRONGRID_TOKEN}"   # API key passed as header (read from env)
-        api_key_env: "TRONGRID_TOKEN"             # Environment variable that holds the API key
-      # Fallback nodes (free, lower rate limits)
+        auth:                       # API key required for higher rate limits
+          type: "header"
+          key: "TRON-PRO-API-KEY"
+          value: "a8ae1eff-23e5-4c63-912d-9136b1a442ce"
       - url: "https://tron-rpc.publicnode.com"
-      # - url: "https://tron.drpc.org" # Not supported for solidity wallet
-    start_block: 75144237          # Block number to start indexing from
-    from_latest: true              # true = start from the chain head instead of start_block
-    poll_interval: "8s"            # Slower polling to reduce load & respect limits
     client:
-      timeout: "15s"               # Longer timeout (Tron nodes often delay under rate limits)
-      max_retries: 5               # Increase retries for stability
-      retry_delay: "10s"           # Longer wait between retries to avoid bans
-      throttle:
-        rps: 5                     # Very conservative RPS (accounts for multiple workers)
-        burst: 8                   # Smaller burst allowance
+      max_retries: 5                # override global max retries
+      retry_delay: "10s"
+    throttle:
+      rps: 5
+      burst: 8
 
-  ethereum-mainnet:
-    name: "ethereum-mainnet"
+  ethereum_mainnet:
     type: "evm"
+    start_block: 23080871
+    poll_interval: "3s"             # faster polling for Ethereum
+    client:
+      timeout: "30s"                # override global timeout
+    throttle:
+      batch_size: 20                # smaller batch size
     nodes:
-      - url: "https://ethereum-rpc.publicnode.com"   # Public RPC node
-      - url: "https://1rpc.io/eth"                   # Fallback node
-      # - url: "https://eth-mainnet.g.alchemy.com/v2/${API_KEY}" # API key node
-        # api_key_env: "ALCHEMY_KEY"
-      # - url: "wss://mainnet.infura.io/ws/v3/${API_KEY}"        # WebSocket node
-        # api_key_env: "INFURA_KEY"
-    start_block: 23080871          # Starting block to index
-    from_latest: true              # Index from the latest head
-    reorg_rollback_window: 20      # Rollback window for reorg detection
-    client:
-      timeout: "30s"               # Longer timeout (Ethereum nodes can be slow)
-      throttle:
-        rps: 5                     # RPS limit
-        burst: 10                  # Slightly higher burst allowance
+      - url: "https://ethereum-rpc.publicnode.com"
+      - url: "https://eth.rpc.blxrbdn.com"
+      - url: "https://eth.llamarpc.com"
+      - url: "https://rpc.mevblocker.io"
+      # - url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
 
-  bnb-mainnet:
-    name: "bnb-mainnet"
+  bnb_mainnet:
+    internal_code: "BNB_MAINNET"
     type: "evm"
+    start_block: 59040717
+    reorg_rollback_window: 30       # custom rollback depth for BNB
     nodes:
       - url: "https://bsc-rpc.publicnode.com"
       - url: "https://bsc.blockrazor.xyz"
       - url: "https://bnb.rpc.subquery.network/public"
-    start_block: 59040717
-    from_latest: true              # Always start from head (reduces DB backfill load)
 
+# Infrastructure services
+services:
+  worker:
+    manual:
+      enabled: false
+    catchup:
+      enabled: false
+    rescanner:
+      enabled: true
+    regular:
+      enabled: true
 
-nats:
-  url: "nats://localhost:4222"     # NATS server connection URL
-  subject_prefix: "indexer.transaction" # Prefix for subjects to publish transaction events
+  nats:
+    url: "nats://localhost:4222"
+    subject_prefix: "indexer.transaction"
 
+  database:
+    url: "postgres://postgres:postgres@localhost:5432/postgres"
 
-kvstore:
-  type: "consul"                   # Backend type: badger | consul
-  badger:
-    directory: "data/badger"       # Folder for badger DB files
-    prefix: ""                     # Optional key prefix (namespacing)
-  consul:
-    scheme: "http"                 # Connection scheme (http/https)
-    address: "127.0.0.1:8500"      # Consul agent address
-    folder: "indexer"              # Root folder in Consul KV
-    token: ""                      # ACL token (if Consul security enabled)
-    http_auth:
-      username: ""                 # Basic auth username
-      password: ""                 # Basic auth password
-
-
-db:
-  type: "postgres"                 # Database type
-  url: "postgres://postgres:postgres@localhost:5432/postgres" # PostgreSQL DSN
-
-
-bloomfilter:
-  backend: "redis"                 # Backend type: redis | in_memory
   redis:
-    wallet_address_repo: "wallet_address" # Repo of wallet addresses to preload
-    batch_size: 1000               # Batch size when loading from DB
-    key_prefix: "bloomfilter"      # Key prefix in Redis
-    error_rate: 0.01               # Desired false positive rate
-    capacity: 1000000              # Expected capacity (# of items)
-  in_memory:
+    url: "localhost:6379"
+    password: ""
+
+  kvstore:
+    type: "consul"
+    consul:
+      scheme: "http"
+      address: "127.0.0.1:8500"
+      folder: "indexer"
+      token: ""
+      # http_auth:                   # optional: enable if consul is secured
+      #   username: ""
+      #   password: ""
+
+  bloomfilter:
+    type: "redis"                    # redis or in_memory
     wallet_address_repo: "wallet_address"
-    expected_items: 1000000        # Expected item count
-    false_positive_rate: 0.01      # Desired false positive rate
-    batch_size: 1000               # Batch size when loading from DB
-
-
-redis:
-  url: "localhost:6379"            # Redis server connection
-  password: ""                     # Password if authentication is enabled
-
-
-environment: "development"         # Environment mode (development | staging | production)
+    batch_size: 1000
+    redis:
+      key_prefix: "bloomfilter"
+      error_rate: 0.01               # expected false positive rate
+      capacity: 1000000              # max number of addresses
+    in_memory:                       # alternative config (if not using redis)
+      expected_items: 1000000
+      false_positive_rate: 0.01
