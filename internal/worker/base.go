@@ -18,22 +18,6 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
 )
 
-// WorkerMode defines the operating mode for a worker.
-type WorkerMode string
-
-const (
-	ModeRegular   WorkerMode = "regular"
-	ModeCatchup   WorkerMode = "catchup"
-	ModeRescanner WorkerMode = "rescanner"
-	ModeManual    WorkerMode = "manual"
-)
-
-// Worker is the interface implemented by all worker types.
-type Worker interface {
-	Start()
-	Stop()
-}
-
 // BaseWorker holds the common state and logic shared by all worker types.
 type BaseWorker struct {
 	ctx    context.Context
