@@ -11,12 +11,6 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
 )
 
-type FailedBlockEvent struct {
-	Chain   string
-	Block   uint64
-	Attempt int
-}
-
 type Manager struct {
 	ctx         context.Context
 	workers     []Worker
