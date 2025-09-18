@@ -1,8 +1,11 @@
 package types
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/shopspring/decimal"
 )
@@ -54,4 +57,21 @@ func (t Transaction) String() string {
 		t.TxFee,
 		t.Timestamp,
 	)
+}
+
+// Hash generates a deterministic hash for the transaction that can be used as an idempotent key.
+// It combines NetworkID, TxHash, FromAddress, ToAddress, and Timestamp to ensure uniqueness.
+func (t Transaction) Hash() string {
+	var builder strings.Builder
+	builder.WriteString(t.NetworkId)
+	builder.WriteByte('|')
+	builder.WriteString(t.TxHash)
+	builder.WriteByte('|')
+	builder.WriteString(t.FromAddress)
+	builder.WriteByte('|')
+	builder.WriteString(t.ToAddress)
+	builder.WriteByte('|')
+	builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
+	hash := sha256.Sum256([]byte(builder.String()))
+	return fmt.Sprintf("%x", hash)
 }

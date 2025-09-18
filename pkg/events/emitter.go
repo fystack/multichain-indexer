@@ -2,10 +2,9 @@ package events
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/fystack/transaction-indexer/pkg/common/types"
-	"github.com/nats-io/nats.go"
+	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
 const (
@@ -28,20 +27,15 @@ type Emitter interface {
 }
 
 type emitter struct {
-	conn          *nats.Conn
+	queue         infra.MessageQueue
 	subjectPrefix string
 }
 
-func NewEmitter(natsURL, subjectPrefix string) (Emitter, error) {
-	conn, err := nats.Connect(natsURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to NATS: %w", err)
-	}
-
+func NewEmitter(queue infra.MessageQueue, subjectPrefix string) Emitter {
 	return &emitter{
-		conn:          conn,
+		queue:         queue,
 		subjectPrefix: subjectPrefix,
-	}, nil
+	}
 }
 
 func (e *emitter) EmitBlock(chain string, block *types.Block) error {
@@ -54,7 +48,9 @@ func (e *emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	if err != nil {
 		return err
 	}
-	return e.conn.Publish(TransferEventTopic, txBytes)
+	return e.queue.Enqueue(infra.TransferEventTopicQueue, txBytes, &infra.EnqueueOptions{
+		IdempotententKey: tx.Hash(),
+	})
 }
 
 func (e *emitter) EmitError(chain string, err error) error {
@@ -68,11 +64,11 @@ func (e *emitter) Emit(event IndexerEvent) error {
 		return err
 	}
 	// All chains emit to the same subject
-	return e.conn.Publish(e.subjectPrefix, data)
+	return e.queue.Enqueue(e.subjectPrefix, data, nil)
 }
 
 func (e *emitter) Close() {
-	if e.conn != nil {
-		e.conn.Close()
+	if e.queue != nil {
+		e.queue.Close()
 	}
 }

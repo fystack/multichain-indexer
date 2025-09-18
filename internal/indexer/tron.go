@@ -38,13 +38,7 @@ func (t *TronIndexer) GetNetworkInternalCode() string {
 	return t.config.InternalCode
 }
 func (t *TronIndexer) GetNetworkId() string {
-	if t.config.NetworkId != "" {
-		return t.config.NetworkId
-	}
-	if t.config.InternalCode != "" {
-		return t.config.InternalCode
-	}
-	return t.GetName() // fallback to name if neither network_id nor internal_code configured
+	return t.config.NetworkId
 }
 
 func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {

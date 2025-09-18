@@ -91,7 +91,7 @@ func (mw *ManualWorker) loop() {
 		default:
 		}
 
-		start, end, err := mw.mbs.GetNextRange(ctx, mw.chain.GetName())
+		start, end, err := mw.mbs.GetNextRange(ctx, mw.chain.GetNetworkInternalCode())
 		if err != nil {
 			mw.logger.Error("GetNextRange failed", "err", err, "chain", mw.chain.GetName())
 			time.Sleep(time.Second)
@@ -99,7 +99,7 @@ func (mw *ManualWorker) loop() {
 		}
 		if start == 0 && end == 0 {
 			emptyAttempts++
-			count, _ := mw.mbs.CountRanges(ctx, mw.chain.GetName())
+			count, _ := mw.mbs.CountRanges(ctx, mw.chain.GetNetworkInternalCode())
 			if emptyAttempts >= mw.config.MaxEmptyAttempts {
 				mw.logger.Info("No ranges to process, sleeping",
 					"chain", mw.chain.GetName(),
@@ -151,17 +151,17 @@ func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 	)
 
 	if lastSuccess >= start {
-		_ = mw.mbs.SetRangeProcessed(ctx, mw.chain.GetName(), start, end, lastSuccess)
+		_ = mw.mbs.SetRangeProcessed(ctx, mw.chain.GetNetworkInternalCode(), start, end, lastSuccess)
 	}
 	if lastSuccess >= end {
-		if err := mw.mbs.RemoveRange(ctx, mw.chain.GetName(), start, end); err != nil {
+		if err := mw.mbs.RemoveRange(ctx, mw.chain.GetNetworkInternalCode(), start, end); err != nil {
 			mw.logger.Error("RemoveRange failed", "err", err, "chain", mw.chain.GetName())
 		}
 	}
 }
 
 func (mw *ManualWorker) logMissingRangesMetric() {
-	ranges, err := mw.mbs.ListRanges(mw.ctx, mw.chain.GetName())
+	ranges, err := mw.mbs.ListRanges(mw.ctx, mw.chain.GetNetworkInternalCode())
 	if err != nil {
 		mw.logger.Warn("ListRanges failed", "chain", mw.chain.GetName(), "err", err)
 		return

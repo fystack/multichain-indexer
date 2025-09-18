@@ -137,7 +137,7 @@ func buildEVMIndexer(chainName string, chainCfg config.ChainConfig) indexer.Inde
 		})
 	}
 
-	return indexer.NewEVMIndexer(chainCfg, failover)
+	return indexer.NewEVMIndexer(chainName, chainCfg, failover)
 }
 
 // buildTronIndexer constructs a Tron indexer with failover and providers.
@@ -171,7 +171,7 @@ func buildTronIndexer(chainName string, chainCfg config.ChainConfig) indexer.Ind
 		})
 	}
 
-	return indexer.NewTronIndexer(chainCfg, failover)
+	return indexer.NewTronIndexer(chainName, chainCfg, failover)
 }
 
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
