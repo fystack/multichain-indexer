@@ -19,13 +19,14 @@ import (
 )
 
 type EVMIndexer struct {
+	chainName           string
 	config              config.ChainConfig
 	failover            *rpc.Failover[evm.EthereumAPI]
 	maxBatchSize        int // Maximum batch size to prevent RPC timeouts
 	maxReceiptBatchSize int // Specific limit for receipt batches (usually smaller)
 }
 
-func NewEVMIndexer(config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI]) *EVMIndexer {
+func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI]) *EVMIndexer {
 	maxBatchSize := 20 // Default max batch size for blocks
 	if config.Throttle.BatchSize > 0 && config.Throttle.BatchSize < maxBatchSize {
 		maxBatchSize = config.Throttle.BatchSize
@@ -38,6 +39,7 @@ func NewEVMIndexer(config config.ChainConfig, failover *rpc.Failover[evm.Ethereu
 	}
 
 	return &EVMIndexer{
+		chainName:           chainName,
 		config:              config,
 		failover:            failover,
 		maxBatchSize:        maxBatchSize,
@@ -45,8 +47,14 @@ func NewEVMIndexer(config config.ChainConfig, failover *rpc.Failover[evm.Ethereu
 	}
 }
 
-func (e *EVMIndexer) GetName() string                  { return strings.ToUpper(e.config.Name) }
+func (e *EVMIndexer) GetName() string                  { return strings.ToUpper(e.chainName) }
 func (e *EVMIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeEVM }
+func (e *EVMIndexer) GetNetworkInternalCode() string {
+	return e.config.InternalCode
+}
+func (e *EVMIndexer) GetNetworkId() string {
+	return e.config.NetworkId
+}
 
 func (e *EVMIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
@@ -614,7 +622,7 @@ func (e *EVMIndexer) convertBlock(
 	var allTransfers []types.Transaction
 	for _, tx := range eb.Transactions {
 		receipt := receipts[tx.Hash]
-		transfers := tx.ExtractTransfers(e.GetName(), receipt, num, ts)
+		transfers := tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)
 		allTransfers = append(allTransfers, transfers...)
 	}
 

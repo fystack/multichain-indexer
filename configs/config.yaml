@@ -17,6 +17,8 @@ defaults:
 
 chains:
   tron_mainnet:
+    network_id: "c5725221-fa98-4d6c-a6ca-8c5cd65cd884"
+    internal_code: "TRON_SHASTA_TESTNET"
     type: "tron"
     start_block: 75144237
     poll_interval: "8s"
@@ -35,6 +37,8 @@ chains:
       burst: 8
 
   ethereum_mainnet:
+    network_id: "dd21bfb5-f809-4070-a789-18ec8abbee1b"
+    internal_code: "ETHEREUM_MAINNET"
     type: "evm"
     start_block: 23080871
     poll_interval: "3s"
@@ -87,7 +91,7 @@ services:
     consul:
       scheme: "http"
       address: "127.0.0.1:8500"
-      folder: "indexer"
+      folder: ""
       token: ""
       # http_auth:  # uncomment if needed
       #   username: ""
