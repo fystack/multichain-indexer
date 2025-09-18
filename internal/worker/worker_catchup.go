@@ -230,6 +230,12 @@ func (cw *CatchupWorker) processRange(r blockstore.CatchupRange, workerID int) e
 		// Check context cancellation
 		select {
 		case <-cw.ctx.Done():
+			cw.logger.Info("Context cancelled, saving progress before stopping",
+				"worker_id", workerID,
+				"range", fmt.Sprintf("%d-%d", r.Start, r.End),
+				"current_position", lastSuccess,
+			)
+			cw.saveProgress(r, lastSuccess)
 			return cw.ctx.Err()
 		default:
 		}

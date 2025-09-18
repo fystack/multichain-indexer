@@ -86,6 +86,11 @@ func (rw *RescannerWorker) Start() {
 	go rw.periodicBatchFlush()
 }
 
+func (rw *RescannerWorker) Stop() {
+	rw.flush()
+	rw.BaseWorker.Stop()
+}
+
 func (rw *RescannerWorker) periodicBatchFlush() {
 	ticker := time.NewTicker(BatchFlushInterval)
 	defer ticker.Stop()
