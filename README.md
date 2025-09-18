@@ -186,11 +186,6 @@ See `configs/config.example.yaml` for details.
 * **Manual backfill**: Redis-driven, safe for concurrency
 * **State persistence**: KV + BlockStore → restart-safe
 
----
-
-Got it 👍 — let’s clean this up and make it **English-only**, with a clear **Usage Highlights** section and an **Example `configs/config.yaml`** snippet so new devs immediately know where chain names come from.
-
----
 
 ## ⚡ Usage Highlights
 
