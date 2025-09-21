@@ -10,6 +10,7 @@ import (
 type Indexer interface {
 	GetName() string
 	GetNetworkType() enum.NetworkType
+	GetNetworkInternalCode() string
 	GetLatestBlockNumber(ctx context.Context) (uint64, error)
 	GetBlock(ctx context.Context, number uint64) (*types.Block, error)
 

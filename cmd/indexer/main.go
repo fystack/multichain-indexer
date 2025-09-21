@@ -108,11 +108,19 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	}
 	defer kvstore.Close()
 
-	// start emitter
-	emitter, err := events.NewEmitter(services.Nats.URL, services.Nats.SubjectPrefix)
+	natsConn, err := infra.GetNATSConnection(services.Nats, string(cfg.Environment))
 	if err != nil {
-		logger.Fatal("Create emitter failed", "err", err)
+		logger.Fatal("Create NATS connection failed", "err", err)
 	}
+	defer natsConn.Close()
+
+	transferEventQueueManager := infra.NewNATsMessageQueueManager("transfer", []string{
+		"transfer.event.*",
+	}, natsConn)
+
+	transferQueue := transferEventQueueManager.NewMessageQueue("dispatch")
+
+	emitter := events.NewEmitter(transferQueue, services.Nats.SubjectPrefix)
 	defer emitter.Close()
 
 	// start address bloom filter

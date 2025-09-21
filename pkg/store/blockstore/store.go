@@ -11,6 +11,10 @@ import (
 	"github.com/fystack/transaction-indexer/pkg/infra"
 )
 
+const (
+	BlockStates = "block_states"
+)
+
 type CatchupRange struct {
 	Start   uint64 `json:"start"`
 	End     uint64 `json:"end"`
@@ -18,20 +22,20 @@ type CatchupRange struct {
 }
 
 func latestBlockKey(chainName string) string {
-	return fmt.Sprintf("%s/%s", chainName, constant.KVPrefixLatestBlock)
+	return fmt.Sprintf("%s/%s/%s", BlockStates, chainName, constant.KVPrefixLatestBlock)
 }
 
 func failedBlocksKey(chainName string) string {
-	return fmt.Sprintf("%s/%s", chainName, constant.KVPrefixFailedBlocks)
+	return fmt.Sprintf("%s/%s/%s", BlockStates, chainName, constant.KVPrefixFailedBlocks)
 }
 
 // Catchup progress keys
 func composeCatchupKey(chain string) string {
-	return fmt.Sprintf("%s/%s/", chain, constant.KVPrefixProgressCatchup)
+	return fmt.Sprintf("%s/%s/%s/", BlockStates, chain, constant.KVPrefixProgressCatchup)
 }
 
 func catchupKey(chain string, start, end uint64) string {
-	return fmt.Sprintf("%s/%s/%d-%d", chain, constant.KVPrefixProgressCatchup, start, end)
+	return fmt.Sprintf("%s/%s/%s/%d-%d", BlockStates, chain, constant.KVPrefixProgressCatchup, start, end)
 }
 
 type blockStore struct {

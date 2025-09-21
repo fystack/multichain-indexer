@@ -19,19 +19,27 @@ import (
 )
 
 type TronIndexer struct {
-	config   config.ChainConfig
-	failover *rpc.Failover[tron.TronAPI]
+	chainName string
+	config    config.ChainConfig
+	failover  *rpc.Failover[tron.TronAPI]
 }
 
-func NewTronIndexer(cfg config.ChainConfig, f *rpc.Failover[tron.TronAPI]) *TronIndexer {
+func NewTronIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[tron.TronAPI]) *TronIndexer {
 	return &TronIndexer{
-		config:   cfg,
-		failover: f,
+		chainName: chainName,
+		config:    cfg,
+		failover:  f,
 	}
 }
 
-func (t *TronIndexer) GetName() string                  { return strings.ToUpper(t.config.Name) }
+func (t *TronIndexer) GetName() string                  { return strings.ToUpper(t.chainName) }
 func (t *TronIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeTron }
+func (t *TronIndexer) GetNetworkInternalCode() string {
+	return t.config.InternalCode
+}
+func (t *TronIndexer) GetNetworkId() string {
+	return t.config.NetworkId
+}
 
 func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
@@ -115,7 +123,7 @@ func (t *TronIndexer) processBlock(
 		for _, log := range ti.Log {
 			parsed, err := log.ParseTRC20Transfers(
 				ti.ID,
-				t.GetName(),
+				t.GetNetworkId(),
 				uint64(ti.BlockNumber),
 				tron.ConvertTronTimestamp(ti.BlockTimestamp),
 			)
@@ -158,10 +166,10 @@ func (t *TronIndexer) processBlock(
 				if err = json.Unmarshal(contract.Parameter.Value, &transfer); err == nil {
 					tr = &types.Transaction{
 						TxHash:       rawTx.TxID,
-						NetworkId:    t.GetName(),
+						NetworkId:    t.GetNetworkId(),
 						BlockNumber:  blkNum,
-						FromAddress:  tron.TronToHexAddress(transfer.OwnerAddress),
-						ToAddress:    tron.TronToHexAddress(transfer.ToAddress),
+						FromAddress:  tron.HexToTronAddress(transfer.OwnerAddress),
+						ToAddress:    tron.HexToTronAddress(transfer.ToAddress),
 						AssetAddress: "",
 						Amount:       decimal.NewFromInt(transfer.Amount).String(),
 						Type:         constant.TxnTypeTransfer,
@@ -173,10 +181,10 @@ func (t *TronIndexer) processBlock(
 				if err = json.Unmarshal(contract.Parameter.Value, &asset); err == nil {
 					tr = &types.Transaction{
 						TxHash:       rawTx.TxID,
-						NetworkId:    t.GetName(),
+						NetworkId:    t.GetNetworkId(),
 						BlockNumber:  blkNum,
-						FromAddress:  tron.TronToHexAddress(asset.OwnerAddress),
-						ToAddress:    tron.TronToHexAddress(asset.ToAddress),
+						FromAddress:  tron.HexToTronAddress(asset.OwnerAddress),
+						ToAddress:    tron.HexToTronAddress(asset.ToAddress),
 						AssetAddress: asset.AssetName,
 						Amount:       decimal.NewFromInt(asset.Amount).String(),
 						Type:         constant.TxnTypeTRC10Transfer,

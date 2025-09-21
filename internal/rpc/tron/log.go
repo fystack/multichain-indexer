@@ -18,8 +18,8 @@ func (l Log) ParseTRC20Transfers(
 		strings.ToLower(strings.TrimPrefix(l.Topics[0], "0x")) != TRC20_TRANSFER_TOPIC {
 		return nil, nil
 	}
-	from := "0x" + l.Topics[1][len(l.Topics[1])-40:]
-	to := "0x" + l.Topics[2][len(l.Topics[2])-40:]
+	from := "41" + l.Topics[1][len(l.Topics[1])-40:]
+	to := "41" + l.Topics[2][len(l.Topics[2])-40:]
 	amount := new(big.Int)
 	amount.SetString(strings.TrimPrefix(l.Data, "0x"), 16)
 
@@ -27,9 +27,9 @@ func (l Log) ParseTRC20Transfers(
 		TxHash:       txID,
 		NetworkId:    network,
 		BlockNumber:  blockNum,
-		FromAddress:  from,
-		ToAddress:    to,
-		AssetAddress: l.Address,
+		FromAddress:  HexToTronAddress(from),
+		ToAddress:    HexToTronAddress(to),
+		AssetAddress: HexToTronAddress(l.Address),
 		Amount:       amount.String(),
 		Type:         "erc20_transfer",
 		TxFee:        decimal.Zero,

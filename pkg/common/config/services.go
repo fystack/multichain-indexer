@@ -24,8 +24,17 @@ type WorkerModeConfig struct {
 }
 
 type NatsConfig struct {
-	URL           string `yaml:"url"`
-	SubjectPrefix string `yaml:"subject_prefix"`
+	URL           string      `yaml:"url"`
+	SubjectPrefix string      `yaml:"subject_prefix"`
+	Username      string      `yaml:"username"`
+	Password      string      `yaml:"password"`
+	TLS           NatsTLSConfig `yaml:"tls"`
+}
+
+type NatsTLSConfig struct {
+	ClientCert string `yaml:"client_cert"`
+	ClientKey  string `yaml:"client_key"`
+	CACert     string `yaml:"ca_cert"`
 }
 
 type DatabaseConfig struct {
