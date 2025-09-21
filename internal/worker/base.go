@@ -163,9 +163,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 
 	addressType := bw.chain.GetNetworkType()
 	for _, tx := range block.Transactions {
-		if bw.pubkeyStore.Exist(addressType, tx.ToAddress) ||
-			bw.pubkeyStore.Exist(addressType, tx.FromAddress) {
-
+		if bw.pubkeyStore.Exist(addressType, tx.ToAddress) {
 			bw.logger.Info("Emitting matched transaction",
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
