@@ -16,7 +16,7 @@ const (
 )
 
 var (
-	ErrPermament = errors.New("Permanent messaging error")
+	ErrPermament = errors.New("permanent messaging error")
 	MaxMsgSize   = 10 * 1024 // 10KB
 )
 
@@ -58,8 +58,7 @@ func NewNATsMessageQueueManager(queueName string, subjectWildCards []string, nc 
 	}
 	if stream != nil {
 		info, _ := stream.Info(ctx)
-		logger.Info("Stream found", "info", info)
-
+		logger.Info("Stream found", "name", info.Config.Name, "subjects", info.Config.Subjects, "state", info.State.Msgs)
 	}
 
 	_, err = js.CreateOrUpdateStream(context.Background(), jetstream.StreamConfig{
@@ -97,7 +96,7 @@ func (m *NATsMessageQueueManager) NewMessageQueue(consumerName string) MessageQu
 		},
 		MaxDeliver: 3,
 	}
-	logger.Info("Creating consumer for subject", "config", cfg)
+	logger.Info("Creating consumer for subject", "name", cfg.Name, "durable", cfg.Durable, "filterSubjects", cfg.FilterSubjects)
 	consumer, err := m.js.CreateOrUpdateConsumer(context.Background(), m.queueName, cfg)
 	if err != nil {
 		logger.Fatal("Error creating JetStream consumer: ", err)
@@ -151,7 +150,7 @@ func (mq *msgQueue) Enqueue(topic string, message []byte, options *EnqueueOption
 	})
 
 	if err != nil {
-		return fmt.Errorf("Error enqueueing message: %w", err)
+		return fmt.Errorf("error enqueueing message: %w", err)
 	}
 	return nil
 }
@@ -169,7 +168,7 @@ func (mq *msgQueue) Dequeue(topic string, handler func(message []byte) error) er
 				return
 			}
 
-			logger.Error("Error handling message: ", err)
+			logger.Error("error handling message: ", err)
 			if !mq.useBackoffRetry {
 				// msg.Nak() will retry immediately, so don't use it with backoff
 				msg.Nak()
