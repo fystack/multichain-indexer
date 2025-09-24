@@ -3,8 +3,8 @@ package config
 import (
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/rpc"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 )
 
 type Env string

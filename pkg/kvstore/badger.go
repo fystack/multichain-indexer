@@ -4,8 +4,8 @@ import (
 	"fmt"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/hashicorp/consul/api"
 )
 

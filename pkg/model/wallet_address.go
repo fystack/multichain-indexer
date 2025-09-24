@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 )
 
 type WalletAddress struct {

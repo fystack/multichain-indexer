@@ -3,7 +3,7 @@ package utils
 import (
 	"fmt"
 
-	"github.com/fystack/transaction-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 )
 
 func DedupTransfers(in []types.Transaction) []types.Transaction {

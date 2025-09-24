@@ -6,10 +6,10 @@ import (
 	"sync"
 
 	"github.com/bits-and-blooms/bloom/v3"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/model"
-	"github.com/fystack/transaction-indexer/pkg/repository"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/model"
+	"github.com/fystack/multichain-indexer/pkg/repository"
 	"github.com/samber/lo"
 )
 

@@ -3,8 +3,8 @@ package infra
 import (
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )

@@ -3,8 +3,8 @@ package indexer
 import (
 	"context"
 
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 )
 
 type Indexer interface {

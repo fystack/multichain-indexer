@@ -4,7 +4,7 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/fystack/transaction-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/shopspring/decimal"
 )
 
