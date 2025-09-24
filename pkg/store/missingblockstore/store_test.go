@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"

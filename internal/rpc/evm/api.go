@@ -3,7 +3,7 @@ package evm
 import (
 	"context"
 
-	"github.com/fystack/transaction-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/internal/rpc"
 )
 
 type EthereumAPI interface {

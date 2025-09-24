@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
-	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/kvstore"
 	"github.com/goccy/go-yaml"
 	"github.com/hashicorp/consul/api"
 )

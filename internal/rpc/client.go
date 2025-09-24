@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
+	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
 type NetworkClient interface {

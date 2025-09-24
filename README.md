@@ -60,7 +60,7 @@ flowchart TB
 ## 🚀 Quick Start
 
 ```bash
-git clone https://github.com/fystack/transaction-indexer.git
+git clone https://github.com/fystack/multichain-indexer.git
 cd transaction-indexer
 go mod download
 cp configs/config.example.yaml configs/config.yaml

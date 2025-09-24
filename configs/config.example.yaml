@@ -1,5 +1,6 @@
 # Environment: "development", "production"
 env: "development"
+version: "1.0.0"
 
 # Global defaults - applies to all chains unless overridden
 defaults:
@@ -62,6 +63,8 @@ chains:
 
 # Infrastructure services
 services:
+  port: 8080 # Health check and monitoring server port
+
   worker:
     manual:
       enabled: false

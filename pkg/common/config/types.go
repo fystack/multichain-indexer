@@ -3,8 +3,8 @@ package config
 import (
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/rpc"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 )
 
 type Env string
@@ -15,7 +15,8 @@ const (
 )
 
 type Config struct {
-	Environment Env      `yaml:"env"      validate:"required,oneof=dev prod stag"`
+	Version     string   `yaml:"version"`
+	Environment Env      `yaml:"env"      validate:"required,oneof=development production"`
 	Defaults    Defaults `yaml:"defaults" validate:"required"`
 	Chains      Chains   `yaml:"chains"   validate:"required,min=1"`
 	Services    Services `yaml:"services" validate:"required"`

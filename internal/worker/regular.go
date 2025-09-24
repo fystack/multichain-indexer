@@ -5,14 +5,14 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/indexer"
-	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/events"
-	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
-	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
+	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/events"
+	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
 const (

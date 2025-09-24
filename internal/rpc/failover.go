@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/retry"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/retry"
 )
 
 // FailoverConfig config for failover

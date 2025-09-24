@@ -9,10 +9,10 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
-	"github.com/fystack/transaction-indexer/pkg/common/stringutils"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/stringutils"
 	"github.com/redis/go-redis/v9"
 )
 

@@ -7,15 +7,15 @@ import (
 
 	"log/slog"
 
-	"github.com/fystack/transaction-indexer/internal/indexer"
-	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/common/types"
-	"github.com/fystack/transaction-indexer/pkg/events"
-	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/retry"
-	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
-	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
+	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/events"
+	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/retry"
+	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
 // BaseWorker holds the common state and logic shared by all worker types.

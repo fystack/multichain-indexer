@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fystack/transaction-indexer/internal/rpc"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
+	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
 type Client struct {
