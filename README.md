@@ -5,6 +5,24 @@ Production-ready indexer for multiple blockchains with four cooperating workers:
 
 This indexer is designed to be used in a multi-chain environment, where each chain is indexed independently and emits events.
 
+![Fystack Indexer](images/Fystack_indexer.png)
+
+## Supported Chains
+
+**Currently Supported:**
+- Ethereum
+- BSC (Binance Smart Chain)
+- TRON
+- Polygon
+- Arbitrum
+- Optimism
+
+**Roadmap:**
+- Bitcoin
+- Litecoin
+- Dogecoin
+- Solana
+
 ---
 
 ## 📊 Workflow Overview
