@@ -3,7 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: transaction-indexer
+    image: multichain-indexer
+    container_name: ${CONTAINER_NAME:-transaction-indexer}
     restart: unless-stopped
     network_mode: host
     environment:
