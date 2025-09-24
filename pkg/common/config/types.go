@@ -10,9 +10,8 @@ import (
 type Env string
 
 const (
-	DevEnv  Env = "dev"
-	ProdEnv Env = "prod"
-	StgEnv  Env = "stag"
+	DevEnv  Env = "development"
+	ProdEnv Env = "production"
 )
 
 type Config struct {

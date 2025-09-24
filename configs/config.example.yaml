@@ -1,35 +1,35 @@
-# Environment: "dev", "staging", or "prod"
-env: "dev"
+# Environment: "development", "production"
+env: "development"
 
 # Global defaults - applies to all chains unless overridden
 defaults:
-  from_latest: true                 # start indexing from the latest block
-  poll_interval: "5s"               # how often to poll for new blocks
-  reorg_rollback_window: 20         # number of blocks to roll back on reorg
+  from_latest: true # start indexing from the latest block
+  poll_interval: "5s" # how often to poll for new blocks
+  reorg_rollback_window: 20 # number of blocks to roll back on reorg
   client:
-    timeout: "20s"                  # RPC timeout per request
-    max_retries: 3                  # max retries per RPC call
-    retry_delay: "5s"               # delay between retries
+    timeout: "20s" # RPC timeout per request
+    max_retries: 3 # max retries per RPC call
+    retry_delay: "5s" # delay between retries
   throttle:
-    rps: 8                          # requests per second per RPC node
-    burst: 16                       # burst capacity
-    batch_size: 100                  # default batch size when fetching
-    concurrency: 3                   # number of concurrent workers
+    rps: 8 # requests per second per RPC node
+    burst: 16 # burst capacity
+    batch_size: 100 # default batch size when fetching
+    concurrency: 3 # number of concurrent workers
 
 chains:
   tron_mainnet:
     type: "tron"
     start_block: 75144237
-    poll_interval: "8s"             # override default poll interval
+    poll_interval: "8s" # override default poll interval
     nodes:
       - url: "https://api.trongrid.io"
-        auth:                       # API key required for higher rate limits
+        auth: # API key required for higher rate limits
           type: "header"
           key: "TRON-PRO-API-KEY"
-          value: "a8ae1eff-23e5-4c63-912d-9136b1a442ce"
+          value: ""
       - url: "https://tron-rpc.publicnode.com"
     client:
-      max_retries: 5                # override global max retries
+      max_retries: 5 # override global max retries
       retry_delay: "10s"
     throttle:
       rps: 5
@@ -38,11 +38,11 @@ chains:
   ethereum_mainnet:
     type: "evm"
     start_block: 23080871
-    poll_interval: "3s"             # faster polling for Ethereum
+    poll_interval: "3s" # faster polling for Ethereum
     client:
-      timeout: "30s"                # override global timeout
+      timeout: "30s" # override global timeout
     throttle:
-      batch_size: 20                # smaller batch size
+      batch_size: 20 # smaller batch size
     nodes:
       - url: "https://ethereum-rpc.publicnode.com"
       - url: "https://eth.rpc.blxrbdn.com"
@@ -54,7 +54,7 @@ chains:
     internal_code: "BNB_MAINNET"
     type: "evm"
     start_block: 59040717
-    reorg_rollback_window: 30       # custom rollback depth for BNB
+    reorg_rollback_window: 30 # custom rollback depth for BNB
     nodes:
       - url: "https://bsc-rpc.publicnode.com"
       - url: "https://bsc.blockrazor.xyz"
@@ -74,7 +74,6 @@ services:
 
   nats:
     url: "nats://localhost:4222"
-    subject_prefix: "indexer.transaction"
 
   database:
     url: "postgres://postgres:postgres@localhost:5432/postgres"
@@ -95,13 +94,13 @@ services:
       #   password: ""
 
   bloomfilter:
-    type: "redis"                    # redis or in_memory
+    type: "redis" # redis or in_memory
     wallet_address_repo: "wallet_address"
     batch_size: 1000
     redis:
       key_prefix: "bloomfilter"
-      error_rate: 0.01               # expected false positive rate
-      capacity: 1000000              # max number of addresses
-    in_memory:                       # alternative config (if not using redis)
+      error_rate: 0.01 # expected false positive rate
+      capacity: 1000000 # max number of addresses
+    in_memory: # alternative config (if not using redis)
       expected_items: 1000000
       false_positive_rate: 0.01

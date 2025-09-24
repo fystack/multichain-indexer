@@ -7,6 +7,56 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 
 ---
 
+## 📊 Workflow Overview
+
+```mermaid
+flowchart TB
+    subgraph Workers ["Workers"]
+        direction LR
+        R[RegularWorker]
+        C[CatchupWorker]
+        M[ManualWorker]
+        Re[RescannerWorker]
+    end
+
+    BW[BaseWorker]
+
+    subgraph Storage ["Storage & Messaging"]
+        direction LR
+        KV[(KV Store)]
+        NATS[(NATS Events)]
+        FChan[(failedChan)]
+    end
+
+    Redis[(Redis ZSET)]
+
+    %% Workers to BaseWorker
+    R --> BW
+    C --> BW
+    M --> BW
+    Re --> BW
+
+    %% BaseWorker connections
+    BW --> KV
+    BW --> NATS
+    BW --> FChan
+
+    %% Feedback failedChan -> Rescanner
+    FChan -.-> Re
+
+    %% ManualWorker special connection
+    M -.-> Redis
+```
+
+**Logic Flow:**
+
+1. **RegularWorker**: real-time indexing, reorg handling, error reporting
+2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
+3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
+4. **RescannerWorker**: retries failed blocks, updates KV on success
+
+---
+
 ## 🚀 Quick Start
 
 ```bash
@@ -35,40 +85,41 @@ go build -o indexer cmd/indexer/main.go
 
 ### **BaseWorker**
 
-* Shared logic for all worker types
-* Rate limiting, logging, bloom filter, KV store integration, infrastructure management
-* Sends error blocks to `failedChan` and stores in `<chain>/failed_blocks/<block>`
+- Shared logic for all worker types
+- Rate limiting, logging, bloom filter, KV store integration, infrastructure management
+- Sends error blocks to `failedChan` and stores in `<chain>/failed_blocks/<block>`
 
 ---
 
 ### **RegularWorker**
 
-* Continuously processes latest blocks from RPC
-* Saves progress to `<chain>/latest_block`
-* For EVM, handle reorgs with rollback window
-* On block failure → BaseWorker stores it for retry
+- Continuously processes latest blocks from RPC
+- Saves progress to `<chain>/latest_block`
+- For EVM, handle reorgs with rollback window
+- On block failure → BaseWorker stores it for retry
 
 ---
 
 ### **CatchupWorker**
 
-* Processes historical blocks in ranges `[start,end]`
-* Uses KV `<chain>/catchup_progress/<start>-<end>` to track progress
-* Deletes the key when a range is completed
-* Integrates failed blocks from Rescanner
+- Processes historical blocks in ranges `[start,end]`
+- Uses KV `<chain>/catchup_progress/<start>-<end>` to track progress
+- Deletes the key when a range is completed
+- Integrates failed blocks from Rescanner
 
 ---
 
 ### **ManualWorker**
 
-* Handles **explicit missing blocks** (due to RPC errors, reorg skips, or manual intervention).
-* Missing ranges are stored in **Redis ZSET**:
+- Handles **explicit missing blocks** (due to RPC errors, reorg skips, or manual intervention).
+- Missing ranges are stored in **Redis ZSET**:
 
-  * Member format: `"start-end"`
-  * Score = `start` (to sort ranges by block number)
-  * Large ranges split into small ranges (default 5 blocks) for finer retries
-* **Concurrency-safe with Redis locks** (`SETNX + EX` via Lua)
-* Workflow:
+  - Member format: `"start-end"`
+  - Score = `start` (to sort ranges by block number)
+  - Large ranges split into small ranges (default 5 blocks) for finer retries
+
+- **Concurrency-safe with Redis locks** (`SETNX + EX` via Lua)
+- Workflow:
 
   1. Claim unprocessed range (`GetNextRange`)
   2. Process all blocks in `[start,end]`
@@ -80,10 +131,10 @@ go build -o indexer cmd/indexer/main.go
 
 ### **RescannerWorker**
 
-* Re-processes failed blocks from KV `<chain>/failed_blocks/<block>` or `failedChan`
-* Updates KV when retry succeeds
-* Removes blocks after max retry attempts
-* Skips chain head block to reduce reorg risk
+- Re-processes failed blocks from KV `<chain>/failed_blocks/<block>` or `failedChan`
+- Updates KV when retry succeeds
+- Removes blocks after max retry attempts
+- Skips chain head block to reduce reorg risk
 
 ---
 
@@ -101,64 +152,14 @@ go build -o indexer cmd/indexer/main.go
 
 ---
 
-## 📊 Workflow Overview
-
-```mermaid
-flowchart TB
-    subgraph Workers ["Workers"]
-        direction LR
-        R[RegularWorker]
-        C[CatchupWorker] 
-        M[ManualWorker]
-        Re[RescannerWorker]
-    end
-    
-    BW[BaseWorker]
-    
-    subgraph Storage ["Storage & Messaging"]
-        direction LR
-        KV[(KV Store)]
-        NATS[(NATS Events)]
-        FChan[(failedChan)]
-    end
-    
-    Redis[(Redis ZSET)]
-    
-    %% Workers to BaseWorker
-    R --> BW
-    C --> BW
-    M --> BW
-    Re --> BW
-    
-    %% BaseWorker connections
-    BW --> KV
-    BW --> NATS
-    BW --> FChan
-    
-    %% Feedback failedChan -> Rescanner
-    FChan -.-> Re
-    
-    %% ManualWorker special connection
-    M -.-> Redis
-```
-
-**Logic Flow:**
-
-1. **RegularWorker**: real-time indexing, reorg handling, error reporting
-2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
-3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
-4. **RescannerWorker**: retries failed blocks, updates KV on success
-
----
-
 ## ✅ Prerequisites
 
 Start required services before running the indexer (docker-compose provided):
 
-* NATS server (events)
-* Consul (KV) or Badger (embedded)
-* PostgreSQL (wallet address repo)
-* Redis (for Bloom filter or ManualWorker)
+- NATS server (events)
+- Consul (KV) or Badger (embedded)
+- PostgreSQL (wallet address repo)
+- Redis (for Bloom filter or ManualWorker)
 
 ```bash
 docker-compose up -d
@@ -168,11 +169,11 @@ docker-compose up -d
 
 ## 🔧 Configuration
 
-* **Chains**: configurable (`start_block`, `batch_size`, `poll_interval`)
-* **KVStore**: BadgerDB / in-memory / Consul
-* **Bloom Filter**: Redis or in-memory
-* **Event Emitter**: NATS streaming
-* **RPC Providers**: failover + rate-limiting
+- **Chains**: configurable (`start_block`, `batch_size`, `poll_interval`)
+- **KVStore**: BadgerDB / in-memory / Consul
+- **Bloom Filter**: Redis or in-memory
+- **Event Emitter**: NATS streaming
+- **RPC Providers**: failover + rate-limiting
 
 See `configs/config.example.yaml` for details.
 
@@ -180,12 +181,13 @@ See `configs/config.example.yaml` for details.
 
 ## 🏗️ Core Principles
 
-* **Multi-chain support**: independent workers per chain
-* **Auto-catchup**: detect gaps → backfill → cleanup
-* **Failed block recovery**: persisted + retryable
-* **Manual backfill**: Redis-driven, safe for concurrency
-* **State persistence**: KV + BlockStore → restart-safe
+- **Multi-chain support**: independent workers per chain
+- **Auto-catchup**: detect gaps → backfill → cleanup
+- **Failed block recovery**: persisted + retryable
+- **Manual backfill**: Redis-driven, safe for concurrency
+- **State persistence**: KV + BlockStore → restart-safe
 
+---
 
 ## ⚡ Usage Highlights
 
@@ -205,8 +207,10 @@ Example: `ethereum_mainnet`, `tron_mainnet`.
 # Debug mode (extra logs)
 ./indexer index --chains=ethereum_mainnet,tron_mainnet --debug
 
-# NATS event monitoring
-./indexer nats-printer
+# NATS JetStream transaction monitoring (using NATS CLI)
+nats stream add transfer --subjects="transfer.event.*" --storage=file --retention=workqueue
+nats consumer add transfer transaction-consumer --filter="transfer.event.dispatch" --deliver=all --ack=explicit
+nats consumer sub transfer transaction-consumer
 
 # Initialize bloom filter and kvstore
 ./wallet-kv-load run --config configs/config.yaml --batch 10000 --debug
@@ -259,3 +263,63 @@ chains:
         rps: 5
         burst: 8
 ```
+
+## 📡 Consuming Transaction Events
+
+The indexer publishes transaction events to NATS JetStream. Here's how to consume them:
+
+### NATS JetStream Configuration
+
+- **Stream Name**: `transfer`
+- **Subjects**: `transfer.event.*`
+- **Transaction Topic**: `transfer.event.dispatch`
+- **Storage**: FileStorage with WorkQueue retention policy
+
+### Using NATS CLI
+
+```bash
+# Create stream (if not exists)
+nats stream add transfer --subjects="transfer.event.*" --storage=file --retention=workqueue
+
+# Create consumer
+nats consumer add transfer my-consumer --filter="transfer.event.dispatch" --deliver=all --ack=explicit
+
+# Consume transactions
+nats consumer sub transfer my-consumer
+
+# Get stream info
+nats stream info transfer
+```
+
+### Using Go JetStream Client
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "github.com/nats-io/nats.go"
+    "github.com/nats-io/nats.go/jetstream"
+)
+
+func main() {
+    nc, _ := nats.Connect("nats://localhost:4222")
+    defer nc.Close()
+
+    js, _ := jetstream.New(nc)
+
+    // Get consumer
+    consumer, _ := js.Consumer(context.Background(), "transfer", "my-consumer")
+
+    // Consume messages
+    consumer.Consume(func(msg jetstream.Msg) {
+        log.Printf("Transaction: %s", string(msg.Data()))
+        msg.Ack()
+    })
+
+    select {} // Keep running
+}
+```
+
+---
