@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
-	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/redis/go-redis/v9"
 )
 

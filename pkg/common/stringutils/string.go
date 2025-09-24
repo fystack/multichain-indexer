@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/tyler-smith/go-bip39"
 )
 
