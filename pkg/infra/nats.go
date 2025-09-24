@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/constant"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/nats-io/nats.go"
 )
 

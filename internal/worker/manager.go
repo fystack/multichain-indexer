@@ -3,12 +3,12 @@ package worker
 import (
 	"context"
 
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/events"
-	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/ratelimiter"
-	"github.com/fystack/transaction-indexer/pkg/store/blockstore"
-	"github.com/fystack/transaction-indexer/pkg/store/pubkeystore"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/events"
+	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
+	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
 type Manager struct {

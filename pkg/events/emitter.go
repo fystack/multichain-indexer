@@ -3,8 +3,8 @@ package events
 import (
 	"encoding/json"
 
-	"github.com/fystack/transaction-indexer/pkg/common/types"
-	"github.com/fystack/transaction-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 )
 
 const (

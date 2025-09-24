@@ -1,7 +1,7 @@
 package tron
 
 import (
-	"github.com/fystack/transaction-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 )
 
 // IsSuccessful checks if a transaction succeeded

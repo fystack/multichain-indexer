@@ -3,10 +3,10 @@ package pubkeystore
 import (
 	"fmt"
 
-	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
-	"github.com/fystack/transaction-indexer/pkg/common/enum"
-	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/kvstore"
 )
 
 func composeKey(addressType enum.NetworkType, publicKey string) string {

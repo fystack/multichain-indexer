@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )

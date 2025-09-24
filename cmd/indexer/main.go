@@ -14,13 +14,13 @@ import (
 	"github.com/alecthomas/kong"
 	"gorm.io/gorm"
 
-	"github.com/fystack/transaction-indexer/internal/worker"
-	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
-	"github.com/fystack/transaction-indexer/pkg/common/config"
-	"github.com/fystack/transaction-indexer/pkg/common/logger"
-	"github.com/fystack/transaction-indexer/pkg/events"
-	"github.com/fystack/transaction-indexer/pkg/infra"
-	"github.com/fystack/transaction-indexer/pkg/kvstore"
+	"github.com/fystack/multichain-indexer/internal/worker"
+	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/events"
+	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/kvstore"
 )
 
 type CLI struct {
