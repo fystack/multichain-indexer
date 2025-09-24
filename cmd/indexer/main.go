@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -183,6 +186,8 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		managerCfg,
 	)
 
+	healthServer := startHealthServer(cfg.Services.Port, cfg)
+
 	// Start all workers
 	logger.Info("Starting all workers")
 	manager.Start()
@@ -191,8 +196,61 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	waitForShutdown()
 
 	logger.Info("Shutting down indexer...")
+
+	// Shutdown health server
+	if healthServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := healthServer.Shutdown(ctx); err != nil {
+			logger.Error("Health server shutdown failed", "error", err)
+		} else {
+			logger.Info("Health server stopped gracefully")
+		}
+	}
+
 	manager.Stop()
 	logger.Info("✅ Indexer stopped gracefully")
+}
+
+type HealthResponse struct {
+	Status    string    `json:"status"`
+	Timestamp time.Time `json:"timestamp"`
+	Version   string    `json:"version"`
+}
+
+func startHealthServer(port int, cfg *config.Config) *http.Server {
+	mux := http.NewServeMux()
+
+	version := cfg.Version
+	if version == "" {
+		version = "1.0.0" // fallback version
+	}
+
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		response := HealthResponse{
+			Status:    "ok",
+			Timestamp: time.Now().UTC(),
+			Version:   version,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	})
+
+	server := &http.Server{
+		Addr:    fmt.Sprintf(":%d", port),
+		Handler: mux,
+	}
+
+	go func() {
+		logger.Info("Health check server started", "port", port, "endpoint", "/health")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("Health server failed to start", "error", err)
+		}
+	}()
+
+	return server
 }
 
 func waitForShutdown() {
