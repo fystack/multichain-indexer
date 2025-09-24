@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/alecthomas/kong"
+	"gorm.io/gorm"
 
 	"github.com/fystack/transaction-indexer/internal/worker"
 	"github.com/fystack/transaction-indexer/pkg/addressbloomfilter"
@@ -95,10 +96,16 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Fatal("Create redis client failed", "err", err)
 	}
 
-	// start db
-	db, err := infra.NewDBConnection(services.Database.URL, string(cfg.Environment))
-	if err != nil {
-		logger.Fatal("Create db connection failed", "err", err)
+	// start db (optional)
+	var db *gorm.DB
+	if services.Database != nil {
+		db, err = infra.NewDBConnection(services.Database.URL, string(cfg.Environment))
+		if err != nil {
+			logger.Fatal("Create db connection failed", "err", err)
+		}
+		logger.Info("Database connection established")
+	} else {
+		logger.Info("Database connection skipped - not configured")
 	}
 
 	// start kvstore
@@ -123,10 +130,20 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	emitter := events.NewEmitter(transferQueue, services.Nats.SubjectPrefix)
 	defer emitter.Close()
 
-	// start address bloom filter
-	addressBF := addressbloomfilter.NewBloomFilter(services.Bloomfilter, db, redisClient)
-	if err := addressBF.Initialize(ctx); err != nil {
-		logger.Fatal("Address bloom filter init failed", "err", err)
+	// start address bloom filter (Initialize is optional)
+	var addressBF addressbloomfilter.WalletAddressBloomFilter
+	if services.Bloomfilter != nil && db != nil {
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		if err := addressBF.Initialize(ctx); err != nil {
+			logger.Fatal("Address bloom filter init failed", "err", err)
+		}
+		logger.Info("Address bloom filter initialized")
+	} else if services.Bloomfilter != nil {
+		// Create bloom filter instance even without database, but skip initialization
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		logger.Info("Address bloom filter created (initialization skipped - no database)")
+	} else {
+		logger.Info("Address bloom filter skipped - not configured")
 	}
 
 	// If no chains specified, use all configured chains

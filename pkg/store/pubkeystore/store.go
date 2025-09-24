@@ -32,13 +32,13 @@ func NewPublicKeyStore(
 }
 
 func (s *publicKeyStore) Exist(addressType enum.NetworkType, publicKey string) bool {
-	// First check the bloom filter.
 	// If the bloom filter returns false, the key definitely doesn't exist.
-	if !s.bloomFilter.Contains(publicKey, addressType) {
+	if s.bloomFilter != nil && !s.bloomFilter.Contains(publicKey, addressType) {
 		return false
 	}
 
-	// Since bloom filters may have false positives, check the underlying KV store.
+	// Since bloom filters may have false positives, or if no bloom filter is available,
+	// check the underlying KV store.
 	v, err := s.kvstore.GetWithOptions(
 		composeKey(addressType, publicKey),
 		&kvstore.DefaultCacheOptions,
@@ -51,7 +51,10 @@ func (s *publicKeyStore) Exist(addressType enum.NetworkType, publicKey string) b
 }
 
 func (s *publicKeyStore) Save(addressType enum.NetworkType, publicKey string) error {
-	s.bloomFilter.Add(publicKey, addressType)
+	// Only add to bloom filter if it's available
+	if s.bloomFilter != nil {
+		s.bloomFilter.Add(publicKey, addressType)
+	}
 	return s.kvstore.Set(composeKey(addressType, publicKey), "ok")
 }
 

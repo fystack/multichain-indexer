@@ -3,13 +3,13 @@ package config
 import "github.com/fystack/transaction-indexer/pkg/common/enum"
 
 type Services struct {
-	Worker      WorkerConfig      `yaml:"worker"`
-	Nats        NatsConfig        `yaml:"nats"`
-	Database    DatabaseConfig    `yaml:"database"`
-	KVS         KVSConfig         `yaml:"kvstore"`
-	Badger      BadgerConfig      `yaml:"badger"`
-	Redis       RedisConfig       `yaml:"redis"`
-	Bloomfilter BloomfilterConfig `yaml:"bloomfilter"`
+	Worker      WorkerConfig       `yaml:"worker"`
+	Nats        NatsConfig         `yaml:"nats"`
+	Database    *DatabaseConfig    `yaml:"database,omitempty"`
+	KVS         KVSConfig          `yaml:"kvstore"`
+	Badger      BadgerConfig       `yaml:"badger"`
+	Redis       RedisConfig        `yaml:"redis"`
+	Bloomfilter *BloomfilterConfig `yaml:"bloomfilter,omitempty"`
 }
 
 type WorkerConfig struct {
@@ -24,10 +24,10 @@ type WorkerModeConfig struct {
 }
 
 type NatsConfig struct {
-	URL           string      `yaml:"url"`
-	SubjectPrefix string      `yaml:"subject_prefix"`
-	Username      string      `yaml:"username"`
-	Password      string      `yaml:"password"`
+	URL           string        `yaml:"url"`
+	SubjectPrefix string        `yaml:"subject_prefix"`
+	Username      string        `yaml:"username"`
+	Password      string        `yaml:"password"`
 	TLS           NatsTLSConfig `yaml:"tls"`
 }
 
