@@ -7,6 +7,56 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 
 ---
 
+## 📊 Workflow Overview
+
+```mermaid
+flowchart TB
+    subgraph Workers ["Workers"]
+        direction LR
+        R[RegularWorker]
+        C[CatchupWorker]
+        M[ManualWorker]
+        Re[RescannerWorker]
+    end
+
+    BW[BaseWorker]
+
+    subgraph Storage ["Storage & Messaging"]
+        direction LR
+        KV[(KV Store)]
+        NATS[(NATS Events)]
+        FChan[(failedChan)]
+    end
+
+    Redis[(Redis ZSET)]
+
+    %% Workers to BaseWorker
+    R --> BW
+    C --> BW
+    M --> BW
+    Re --> BW
+
+    %% BaseWorker connections
+    BW --> KV
+    BW --> NATS
+    BW --> FChan
+
+    %% Feedback failedChan -> Rescanner
+    FChan -.-> Re
+
+    %% ManualWorker special connection
+    M -.-> Redis
+```
+
+**Logic Flow:**
+
+1. **RegularWorker**: real-time indexing, reorg handling, error reporting
+2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
+3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
+4. **RescannerWorker**: retries failed blocks, updates KV on success
+
+---
+
 ## 🚀 Quick Start
 
 ```bash
@@ -99,56 +149,6 @@ go build -o indexer cmd/indexer/main.go
 | `missing_blocks:<chain>`                 | Redis ZSET of missing ranges        |
 | `processing:<chain>:<start>-<end>`       | Redis lock key for concurrent claim |
 | `processed:<chain>:<start>-<end>`        | Last processed block in range       |
-
----
-
-## 📊 Workflow Overview
-
-```mermaid
-flowchart TB
-    subgraph Workers ["Workers"]
-        direction LR
-        R[RegularWorker]
-        C[CatchupWorker]
-        M[ManualWorker]
-        Re[RescannerWorker]
-    end
-
-    BW[BaseWorker]
-
-    subgraph Storage ["Storage & Messaging"]
-        direction LR
-        KV[(KV Store)]
-        NATS[(NATS Events)]
-        FChan[(failedChan)]
-    end
-
-    Redis[(Redis ZSET)]
-
-    %% Workers to BaseWorker
-    R --> BW
-    C --> BW
-    M --> BW
-    Re --> BW
-
-    %% BaseWorker connections
-    BW --> KV
-    BW --> NATS
-    BW --> FChan
-
-    %% Feedback failedChan -> Rescanner
-    FChan -.-> Re
-
-    %% ManualWorker special connection
-    M -.-> Redis
-```
-
-**Logic Flow:**
-
-1. **RegularWorker**: real-time indexing, reorg handling, error reporting
-2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
-3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
-4. **RescannerWorker**: retries failed blocks, updates KV on success
 
 ---
 
