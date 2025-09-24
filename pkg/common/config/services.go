@@ -3,6 +3,7 @@ package config
 import "github.com/fystack/transaction-indexer/pkg/common/enum"
 
 type Services struct {
+	Port        int                `yaml:"port" validate:"required,min=1,max=65535"`
 	Worker      WorkerConfig       `yaml:"worker"`
 	Nats        NatsConfig         `yaml:"nats"`
 	Database    *DatabaseConfig    `yaml:"database,omitempty"`
