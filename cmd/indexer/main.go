@@ -94,6 +94,7 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		services.Redis.URL,
 		services.Redis.Password,
 		string(cfg.Environment),
+		services.Redis.MTLS,
 	)
 	if err != nil {
 		logger.Fatal("Create redis client failed", "err", err)

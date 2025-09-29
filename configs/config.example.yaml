@@ -77,13 +77,22 @@ services:
 
   nats:
     url: "nats://localhost:4222"
+    subject_prefix: "indexer"  # optional subject prefix
+    username: ""               # optional username
+    password: ""               # optional password
+    # TLS configuration (optional, defaults to ./certs/ if not specified)
+    tls:
+      client_cert: "./certs/client-cert.pem"  # defaults to ./certs/client-cert.pem
+      client_key: "./certs/client-key.pem"    # defaults to ./certs/client-key.pem
+      ca_cert: "./certs/rootCA.pem"           # defaults to ./certs/rootCA.pem
 
   database:
     url: "postgres://postgres:postgres@localhost:5432/postgres"
 
   redis:
-    url: "localhost:6379"
+    url: "localhost:6379"                           # supports redis://host:port or rediss://host:port (TLS)
     password: ""
+    mtls: false                                     # enable mutual TLS with client certificates (production only)
 
   kvstore:
     type: "consul"

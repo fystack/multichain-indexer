@@ -21,4 +21,6 @@ services:
       - ./logs:/app/logs
       # Mount data directory for BadgerDB (if using local storage)
       - ./data:/app/data
+      # Mount certificates directory for TLS/mTLS connections
+      - ./certs:/app/certs:ro
     command: ["index", "--chains=${CHAINS}", "--debug", "--catchup", "--manual"]
