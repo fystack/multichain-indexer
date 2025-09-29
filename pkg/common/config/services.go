@@ -45,6 +45,7 @@ type DatabaseConfig struct {
 type RedisConfig struct {
 	URL      string `yaml:"url"`
 	Password string `yaml:"password"`
+	MTLS     bool   `yaml:"mtls"`
 }
 
 type KVSConfig struct {

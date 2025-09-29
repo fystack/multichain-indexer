@@ -18,7 +18,7 @@ func TestRedisBloomFilter_AddAndContains(t *testing.T) {
 		t.Skip("Skipping Redis integration test in short mode")
 	}
 
-	client, err := infra.NewRedisClient(redisAddr, "", "test")
+	client, err := infra.NewRedisClient(redisAddr, "", "test", false)
 	if err != nil {
 		t.Skipf("Cannot create Redis client: %v", err)
 	}

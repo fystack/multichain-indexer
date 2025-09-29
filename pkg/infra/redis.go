@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
@@ -68,34 +69,70 @@ func getTlsConfig(
 	}, nil
 }
 
-// NewRedisWrapper creates a new instance of RedisWrapper.
-func NewRedisClient(addr string, password string, environment string) (RedisClient, error) {
-	// Compute pool size based on CPU
+// NewRedisClient creates a new instance of RedisWrapper.
+func NewRedisClient(addr string, password string, environment string, mTLS bool) (RedisClient, error) {
 	cpus := runtime.GOMAXPROCS(0)
-	poolSize := cpus * 10 // ~10 connections per CPU
-	minIdle := cpus * 2   // keep a few always idle
+	poolSize := cpus * 10
+	minIdle := cpus * 2
 
-	opts := &redis.Options{
-		Addr:            addr,
-		Password:        password,
-		DB:              0,
-		PoolSize:        poolSize,
-		MinIdleConns:    minIdle,
-		ConnMaxLifetime: 30 * time.Minute, // recycle sockets older than this
-		ConnMaxIdleTime: 5 * time.Minute,  // close sockets idle for longer than this
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     3 * time.Second,
-		WriteTimeout:    3 * time.Second,
-		// retry up to 3 times before giving up
-		MaxRetries:      3,
-		MinRetryBackoff: 100 * time.Millisecond,
-		MaxRetryBackoff: 500 * time.Millisecond,
+	var opts *redis.Options
+	var err error
+
+	// Handle redis:// or rediss:// URIs
+	if strings.HasPrefix(addr, "redis://") || strings.HasPrefix(addr, "rediss://") {
+		opts, err = redis.ParseURL(addr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid Redis URL: %w", err)
+		}
+		// allow password override from config if explicitly set
+		if password != "" {
+			opts.Password = password
+		}
+	} else {
+		// fallback: plain host:port
+		opts = &redis.Options{
+			Addr:     addr,
+			Password: password,
+			DB:       0,
+		}
 	}
 
-	// In production, layer on TLS
-	if environment == constant.EnvProduction {
+	// Apply default tuning (override only if not already set)
+	if opts.PoolSize == 0 {
+		opts.PoolSize = poolSize
+	}
+	if opts.MinIdleConns == 0 {
+		opts.MinIdleConns = minIdle
+	}
+	if opts.ConnMaxLifetime == 0 {
+		opts.ConnMaxLifetime = 30 * time.Minute
+	}
+	if opts.ConnMaxIdleTime == 0 {
+		opts.ConnMaxIdleTime = 5 * time.Minute
+	}
+	if opts.DialTimeout == 0 {
+		opts.DialTimeout = 5 * time.Second
+	}
+	if opts.ReadTimeout == 0 {
+		opts.ReadTimeout = 3 * time.Second
+	}
+	if opts.WriteTimeout == 0 {
+		opts.WriteTimeout = 3 * time.Second
+	}
+	if opts.MaxRetries == 0 {
+		opts.MaxRetries = 3
+	}
+	if opts.MinRetryBackoff == 0 {
+		opts.MinRetryBackoff = 100 * time.Millisecond
+	}
+	if opts.MaxRetryBackoff == 0 {
+		opts.MaxRetryBackoff = 500 * time.Millisecond
+	}
+
+	// Add mTLS if required (for your own deployments, not AWS ElastiCache)
+	if environment == constant.EnvProduction && mTLS {
 		tlsCfg, err := getTlsConfig(
-			"~/.local/share/mkcert/rootCA.pem",
+			"./certs/redis/rootCA.pem",
 			"./certs/redis/redis-client.crt",
 			"./certs/redis/redis-client.key",
 		)

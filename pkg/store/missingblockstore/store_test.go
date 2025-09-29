@@ -23,7 +23,7 @@ type MissingBlocksStoreTestSuite struct {
 }
 
 func (suite *MissingBlocksStoreTestSuite) SetupSuite() {
-	redisClient, err := infra.NewRedisClient("localhost:6379", "", "test")
+	redisClient, err := infra.NewRedisClient("localhost:6379", "", "test", false)
 	if err != nil {
 		suite.T().Skip("Redis not available, skipping integration tests")
 	}
