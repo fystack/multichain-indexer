@@ -1,51 +1,50 @@
-# Multi-stage build for transaction indexer
+# ============================
+# Builder stage
+# ============================
 FROM golang:1.25-alpine AS builder
 
 # Set working directory
 WORKDIR /app
 
-# Install build dependencies
-RUN apk add --no-cache git ca-certificates
+# Install build dependencies (CGO needs gcc, musl-dev)
+RUN apk add --no-cache git ca-certificates build-base
 
-# Copy go mod files
+# Copy go mod files and download dependencies
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
 # Copy source code
 COPY . .
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags='-w -s -extldflags "-static"' \
-    -a -installsuffix cgo \
-    -o indexer cmd/indexer/main.go
+# Build arguments passed automatically by buildx
+ARG TARGETOS
+ARG TARGETARCH
 
-# Runtime stage using distroless
+# Build static binary
+RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+    go build -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o indexer ./cmd/indexer/main.go
+
+
+# ============================
+# Runtime stage (Distroless)
+# ============================
 FROM gcr.io/distroless/static:nonroot
 
-# Use non-root user (65532:65532 is nonroot user in distroless)
+# Non-root user (65532:65532 = nonroot in distroless)
 USER 65532:65532
 
-# Set working directory
 WORKDIR /app
 
-# Copy binary from builder stage
 COPY --from=builder /app/indexer /app/indexer
 
-# Create logs directory (distroless doesn't have mkdir, so we rely on volume mounting)
-# The logs directory will be created by the volume mount
-
-# Expose port for health checks and monitoring
 EXPOSE 8080
 
-# Environment variables for chains (can be overridden)
-ENV CHAINS=tron_testnet
-ENV DEBUG=true
-ENV CATCHUP=true
-ENV MANUAL=true
+ENV CHAINS=tron_testnet \
+    DEBUG=true \
+    CATCHUP=true \
+    MANUAL=true
 
-# Default command
 ENTRYPOINT ["/app/indexer"]
 CMD ["index", "--chains=${CHAINS}", "--debug=${DEBUG}", "--catchup=${CATCHUP}", "--manual=${MANUAL}"]
