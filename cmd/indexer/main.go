@@ -90,6 +90,15 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	services := cfg.Services
 	// start redis
+	logger.Info(
+		"Connecting to redis",
+		"url",
+		services.Redis.URL,
+		"environment",
+		cfg.Environment,
+		"mtls",
+		services.Redis.MTLS,
+	)
 	redisClient, err := infra.NewRedisClient(
 		services.Redis.URL,
 		services.Redis.Password,
@@ -99,6 +108,7 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	if err != nil {
 		logger.Fatal("Create redis client failed", "err", err)
 	}
+	logger.Info("Redis connection established")
 
 	// start db (optional)
 	var db *gorm.DB
@@ -113,17 +123,20 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	}
 
 	// start kvstore
+	logger.Info("Connecting to kvstore", "url", services.KVS.Consul.Address)
 	kvstore, err := kvstore.NewFromConfig(services.KVS)
 	if err != nil {
 		logger.Fatal("Create kvstore failed", "err", err)
 	}
 	defer kvstore.Close()
 
+	logger.Info("Connecting to NATS", "url", services.Nats.URL)
 	natsConn, err := infra.GetNATSConnection(services.Nats, string(cfg.Environment))
 	if err != nil {
 		logger.Fatal("Create NATS connection failed", "err", err)
 	}
 	defer natsConn.Close()
+	logger.Info("NATS connection established")
 
 	transferEventQueueManager := infra.NewNATsMessageQueueManager("transfer", []string{
 		"transfer.event.*",
