@@ -6,45 +6,35 @@ FROM golang:1.25-alpine AS builder
 # Set working directory
 WORKDIR /app
 
-# Install build dependencies (CGO needs gcc, musl-dev)
-RUN apk add --no-cache git ca-certificates build-base
+# Install minimal dependencies
+RUN apk add --no-cache git ca-certificates
 
-# Copy go mod files and download dependencies
+# Copy go mod files and download deps
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
+# Copy full source
 COPY . .
 
-# Build arguments passed automatically by buildx
+# Build static binary (Buildx will inject TARGETOS and TARGETARCH)
 ARG TARGETOS
 ARG TARGETARCH
 
-# Build static binary
-RUN CGO_ENABLED=1 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags='-w -s -extldflags "-static"' \
-    -a -installsuffix cgo \
     -o indexer ./cmd/indexer/main.go
 
 
 # ============================
-# Runtime stage (Distroless)
+# Runtime stage
 # ============================
-FROM gcr.io/distroless/static:nonroot
-
-# Non-root user (65532:65532 = nonroot in distroless)
-USER 65532:65532
+FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /app
-
 COPY --from=builder /app/indexer /app/indexer
+USER 65532:65532
 
 EXPOSE 8080
 
-ENV CHAINS=tron_testnet \
-    DEBUG=true \
-    CATCHUP=true \
-    MANUAL=true
-
 ENTRYPOINT ["/app/indexer"]
-CMD ["index", "--chains=${CHAINS}", "--debug=${DEBUG}", "--catchup=${CATCHUP}", "--manual=${MANUAL}"]
+CMD ["index"]
