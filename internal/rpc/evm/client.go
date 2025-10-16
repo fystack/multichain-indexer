@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
-	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
@@ -112,9 +111,10 @@ func (c *Client) BatchGetBlocksByNumber(
 		return nil, fmt.Errorf("failed to post batch request: %w", err)
 	}
 
+	var batchErrs []string
 	for _, r := range rpcResponses {
 		if r.Error != nil {
-			logger.Error("batch get blocks failed", "error", r.Error)
+			batchErrs = append(batchErrs, r.Error.Error())
 			continue
 		}
 		if len(r.Result) == 0 || string(r.Result) == "null" {
@@ -132,9 +132,14 @@ func (c *Client) BatchGetBlocksByNumber(
 
 		var block Block
 		if err := json.Unmarshal(r.Result, &block); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal block: %w", err)
+			batchErrs = append(batchErrs, fmt.Sprintf("block %d: unmarshal failed: %v", blockNum, err))
+			continue
 		}
 		results[blockNum] = &block
+	}
+
+	if len(batchErrs) > 0 {
+		return results, fmt.Errorf("batch get blocks failed (%d errors): %s", len(batchErrs), batchErrs[0])
 	}
 
 	return results, nil
@@ -172,9 +177,11 @@ func (c *Client) BatchGetTransactionReceipts(
 		return nil, fmt.Errorf("failed to post batch request: %w", err)
 	}
 
+	// Collect all sub-errors
+	var batchErrs []string
 	for _, r := range rpcResponses {
 		if r.Error != nil {
-			slog.Error("batch get transaction receipts failed", "error", r.Error, "provider_url", c.GetURL())
+			batchErrs = append(batchErrs, r.Error.Error())
 			continue
 		}
 
@@ -193,9 +200,22 @@ func (c *Client) BatchGetTransactionReceipts(
 
 		var receipt TxnReceipt
 		if err := json.Unmarshal(r.Result, &receipt); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal receipt: %w", err)
+			batchErrs = append(batchErrs, fmt.Sprintf("%s: unmarshal failed: %v", hash, err))
+			continue
 		}
 		results[hash] = &receipt
+	}
+
+	// Log once if there are errors
+	if len(batchErrs) > 0 {
+		slog.Error("batch get transaction receipts failed",
+			"count", len(batchErrs),
+			"provider_url", c.GetURL(),
+			"errors", strings.Join(batchErrs, " | "),
+		)
+		// Optionally return the combined error
+		return results, fmt.Errorf("batch get receipts failed (%d errors): %s",
+			len(batchErrs), batchErrs[0])
 	}
 
 	return results, nil
