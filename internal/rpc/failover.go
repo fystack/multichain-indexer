@@ -218,9 +218,19 @@ func (f *Failover[T]) ExecuteWithRetryProvider(
 	ctx context.Context,
 	provider *Provider,
 	fn func(T) error,
+	allowFallback bool,
 ) error {
 	return retry.Constant(func() error {
-		return f.executeCore(ctx, provider, fn)
+		err := f.executeCore(ctx, provider, fn)
+		if err != nil && allowFallback {
+			// fallback to best provider
+			alt, altErr := f.GetBestProvider()
+			if altErr == nil && alt.Name != provider.Name {
+				logger.Warn("Fallback to alternative provider", "from", provider.Name, "to", alt.Name, "error", err.Error())
+				return f.executeCore(ctx, alt, fn)
+			}
+		}
+		return err
 	}, retry.DefaultInterval, retry.DefaultMaxAttempts)
 }
 
@@ -267,7 +277,9 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 	}
 
 	switch {
-	case strings.Contains(msg, "rate limit"), strings.Contains(msg, "429"):
+	case strings.Contains(msg, "rate limit"),
+		strings.Contains(msg, "429"),
+		strings.Contains(msg, "too many requests"):
 		issue.Reason = "rate_limit"
 		issue.Cooldown = 5 * time.Minute
 		issue.MarkUnhealthy = true
@@ -284,9 +296,17 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 
 	case strings.Contains(msg, "eof"),
 		strings.Contains(msg, "connection reset"),
-		strings.Contains(msg, "connection refused"):
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "broken pipe"):
 		issue.Reason = "connection_error"
 		issue.Cooldown = 2 * time.Minute
+		issue.MarkUnhealthy = true
+
+	case strings.Contains(msg, "-32007"),
+		strings.Contains(msg, "batch limit exceeded"),
+		strings.Contains(msg, "internal error -32005"):
+		issue.Reason = "batch_limit"
+		issue.Cooldown = 1 * time.Minute
 		issue.MarkUnhealthy = true
 
 	case elapsed > 3*time.Second:

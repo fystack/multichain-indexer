@@ -174,7 +174,7 @@ func (c *Client) BatchGetTransactionReceipts(
 
 	for _, r := range rpcResponses {
 		if r.Error != nil {
-			slog.Error("batch get transaction receipts failed", "error", r.Error)
+			slog.Error("batch get transaction receipts failed", "error", r.Error, "provider_url", c.GetURL())
 			continue
 		}
 

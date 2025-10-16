@@ -29,16 +29,16 @@ func ParseHexBigInt(h string) (*big.Int, error) {
 
 // ChunkBySize splits slice into chunks with maximum size 'chunkSize'
 func ChunkBySize[T any](slice []T, chunkSize int) [][]T {
-	if chunkSize <= 0 || len(slice) == 0 {
+	if len(slice) == 0 {
+		return [][]T{}
+	}
+	if chunkSize <= 0 {
 		return [][]T{slice}
 	}
 
 	chunks := make([][]T, 0, (len(slice)+chunkSize-1)/chunkSize)
 	for i := 0; i < len(slice); i += chunkSize {
-		end := i + chunkSize
-		if end > len(slice) {
-			end = len(slice)
-		}
+		end := min(i+chunkSize, len(slice))
 		chunks = append(chunks, slice[i:end])
 	}
 	return chunks
