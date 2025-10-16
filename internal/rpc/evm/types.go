@@ -70,7 +70,9 @@ func (l Log) parseERC20Transfers(
 	}
 
 	from := "0x" + l.Topics[1][len(l.Topics[1])-40:]
+	from = ToChecksumAddress(from)
 	to := "0x" + l.Topics[2][len(l.Topics[2])-40:]
+	to = ToChecksumAddress(to)
 	amount, err := utils.ParseHexBigInt(l.Data)
 	if err != nil {
 		return nil, err
@@ -82,7 +84,7 @@ func (l Log) parseERC20Transfers(
 		BlockNumber:  blockNumber,
 		FromAddress:  from,
 		ToAddress:    to,
-		AssetAddress: l.Address,
+		AssetAddress: ToChecksumAddress(l.Address),
 		Amount:       amount.String(),
 		Type:         "erc20_transfer",
 		TxFee:        decimal.Zero,
