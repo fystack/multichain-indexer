@@ -24,18 +24,23 @@ func (t *Txn) NeedReceipt() bool {
 	return true
 }
 
+const WEI_PER_ETH = 1e18
+
 // calcFee computes the transaction fee from receipt if available, otherwise fallback to Txn Gas*GasPrice.
+// Returns the fee in ETH (divided by 1e18 from Wei).
 func (tx Txn) calcFee(receipt *TxnReceipt) decimal.Decimal {
 	if receipt != nil {
 		if gasUsed, err1 := utils.ParseHexBigInt(receipt.GasUsed); err1 == nil {
 			if gasPrice, err2 := utils.ParseHexBigInt(receipt.EffectiveGasPrice); err2 == nil {
-				return decimal.NewFromBigInt(new(big.Int).Mul(gasUsed, gasPrice), 0)
+				weiAmount := new(big.Int).Mul(gasUsed, gasPrice)
+				return decimal.NewFromBigInt(weiAmount, 0).Div(decimal.NewFromInt(WEI_PER_ETH))
 			}
 		}
 	}
 	if gas, err1 := utils.ParseHexBigInt(tx.Gas); err1 == nil {
 		if gasPrice, err2 := utils.ParseHexBigInt(tx.GasPrice); err2 == nil {
-			return decimal.NewFromBigInt(new(big.Int).Mul(gas, gasPrice), 0)
+			weiAmount := new(big.Int).Mul(gas, gasPrice)
+			return decimal.NewFromBigInt(weiAmount, 0).Div(decimal.NewFromInt(WEI_PER_ETH))
 		}
 	}
 	return decimal.Zero
@@ -54,11 +59,7 @@ func (tx Txn) parseERC20Input(
 	sig := tx.Input[:10]
 	switch sig {
 	case ERC20_TRANSFER_SIG:
-		if len(tx.Input) < 138 {
-			return nil
-		}
-		to := "0x" + tx.Input[10:74][24:]
-		amount, err := utils.ParseHexBigInt("0x" + tx.Input[74:138])
+		to, amount, err := DecodeERC20TransferInput(tx.Input)
 		if err != nil {
 			return nil
 		}
@@ -66,9 +67,9 @@ func (tx Txn) parseERC20Input(
 			TxHash:       tx.Hash,
 			NetworkId:    network,
 			BlockNumber:  blockNumber,
-			FromAddress:  tx.From,
+			FromAddress:  ToChecksumAddress(tx.From),
 			ToAddress:    to,
-			AssetAddress: tx.To,
+			AssetAddress: ToChecksumAddress(tx.To),
 			Amount:       amount.String(),
 			Type:         constant.TxnTypeERC20Transfer,
 			TxFee:        fee,
@@ -76,12 +77,7 @@ func (tx Txn) parseERC20Input(
 		}
 
 	case ERC20_TRANSFER_FROM_SIG:
-		if len(tx.Input) < 202 {
-			return nil
-		}
-		from := "0x" + tx.Input[10:74][24:]
-		to := "0x" + tx.Input[74:138][24:]
-		amount, err := utils.ParseHexBigInt("0x" + tx.Input[138:202])
+		from, to, amount, err := DecodeERC20TransferFromInput(tx.Input)
 		if err != nil {
 			return nil
 		}
@@ -91,7 +87,7 @@ func (tx Txn) parseERC20Input(
 			BlockNumber:  blockNumber,
 			FromAddress:  from,
 			ToAddress:    to,
-			AssetAddress: tx.To,
+			AssetAddress: ToChecksumAddress(tx.To),
 			Amount:       amount.String(),
 			Type:         constant.TxnTypeERC20Transfer,
 			TxFee:        decimal.Zero,
@@ -132,8 +128,8 @@ func (tx Txn) ExtractTransfers(
 			TxHash:      tx.Hash,
 			NetworkId:   network,
 			BlockNumber: blockNumber,
-			FromAddress: tx.From,
-			ToAddress:   tx.To,
+			FromAddress: ToChecksumAddress(tx.From),
+			ToAddress:   ToChecksumAddress(tx.To),
 			Amount:      val.String(),
 			Type:        constant.TxnTypeTransfer,
 			TxFee:       fee,
