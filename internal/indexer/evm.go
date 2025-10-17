@@ -162,7 +162,8 @@ func (e *EVMIndexer) getRawBlocksParallel(
 			continue
 		}
 
-		provider := providers[i]
+		providerIdx := i % len(providers)
+		provider := providers[providerIdx]
 		g.Go(func() error {
 			// Further split each provider's chunk into smaller batches
 			batches := utils.ChunkBySize(chunk, (len(chunk)+e.maxBatchSize-1)/e.maxBatchSize)
@@ -179,6 +180,7 @@ func (e *EVMIndexer) getRawBlocksParallel(
 						subBlocks, err = c.BatchGetBlocksByNumber(ctx, batch, true)
 						return err
 					},
+					true,
 				)
 
 				if err != nil {
@@ -420,9 +422,8 @@ func (e *EVMIndexer) fetchReceiptsParallel(
 		if len(chunk) == 0 {
 			continue
 		}
-
-		provider := providers[i]
-		providerIdx := i
+		providerIdx := i % len(providers)
+		provider := providers[providerIdx]
 
 		g.Go(func() error {
 			batches := utils.ChunkBySize(
@@ -441,6 +442,7 @@ func (e *EVMIndexer) fetchReceiptsParallel(
 						subReceipts, err = c.BatchGetTransactionReceipts(ctx, batch)
 						return err
 					},
+					true,
 				)
 
 				if err != nil {
