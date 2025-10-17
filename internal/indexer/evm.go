@@ -149,13 +149,8 @@ func (e *EVMIndexer) getRawBlocksParallel(
 		return nil, fmt.Errorf("no available providers")
 	}
 
-	// First split by providers - calculate chunk size to distribute evenly
-	chunkSize := (len(blockNums) + len(providers) - 1) / len(providers)
-	if chunkSize < 1 {
-		chunkSize = 1
-	}
-
-	providerChunks := utils.ChunkBySize(blockNums, chunkSize)
+	// First split by providers
+	providerChunks := utils.ChunkBySize(blockNums, len(providers))
 	var (
 		mu     sync.Mutex
 		blocks = make(map[uint64]*evm.Block)
@@ -413,12 +408,7 @@ func (e *EVMIndexer) fetchReceiptsParallel(
 		return nil, fmt.Errorf("no available providers")
 	}
 
-	// Calculate chunk size to distribute evenly across providers
-	chunkSize := (len(txHashes) + len(providers) - 1) / len(providers)
-	if chunkSize < 1 {
-		chunkSize = 1
-	}
-	providerChunks := utils.ChunkBySize(txHashes, chunkSize)
+	providerChunks := utils.ChunkBySize(txHashes, len(providers))
 	var (
 		mu       sync.Mutex
 		receipts = make(map[string]*evm.TxnReceipt)
