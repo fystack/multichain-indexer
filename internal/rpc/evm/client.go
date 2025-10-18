@@ -145,6 +145,50 @@ func (c *Client) BatchGetBlocksByNumber(
 	return results, nil
 }
 
+// FilterLogs queries event logs matching the filter criteria
+func (c *Client) FilterLogs(ctx context.Context, query FilterQuery) ([]Log, error) {
+	params := map[string]any{
+		"fromBlock": query.FromBlock,
+		"toBlock":   query.ToBlock,
+	}
+
+	if len(query.Addresses) > 0 {
+		params["address"] = query.Addresses
+	}
+
+	if len(query.Topics) > 0 {
+		params["topics"] = query.Topics
+	}
+
+	var logs []Log
+	req := &rpc.RPCRequest{
+		ID:      c.NextRequestIDs(1)[0],
+		JSONRPC: "2.0",
+		Method:  "eth_getLogs",
+		Params:  []any{params},
+	}
+
+	responses, err := c.DoBatch(ctx, []*rpc.RPCRequest{req})
+	if err != nil {
+		return nil, fmt.Errorf("failed to filter logs: %w", err)
+	}
+
+	if len(responses) == 0 {
+		return logs, nil
+	}
+
+	resp := responses[0]
+	if resp.Error != nil {
+		return nil, fmt.Errorf("rpc error: %s", resp.Error.Error())
+	}
+
+	if err := json.Unmarshal(resp.Result, &logs); err != nil {
+		return nil, fmt.Errorf("unmarshal logs failed: %w", err)
+	}
+
+	return logs, nil
+}
+
 // BatchGetTransactionReceipts gets multiple transaction receipts for gas fee calculation
 func (c *Client) BatchGetTransactionReceipts(
 	ctx context.Context,

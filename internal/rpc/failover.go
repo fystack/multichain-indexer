@@ -245,9 +245,16 @@ func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 		}
 
 		if f.logThrottler.ShouldLog(fmt.Sprintf("unavailable_%s", cur.Name)) {
+			cur.mu.RLock()
+			curURL := cur.URL
+			blacklistedUntil := cur.BlacklistedUntil
+			cur.mu.RUnlock()
+
 			logger.Warn("Current provider not available, finding alternative",
 				"provider", cur.Name,
+				"url", curURL,
 				"state", cur.State,
+				"blacklisted_until", blacklistedUntil.Format(time.RFC3339),
 				"consecutive_errors", cur.ConsecutiveErrors)
 		}
 	}
@@ -394,9 +401,19 @@ func (f *Failover[T]) executeCore(ctx context.Context, provider *Provider, fn fu
 func (f *Failover[T]) handleUnhealthyProvider(provider *Provider, issue ProviderIssue) {
 	logKey := fmt.Sprintf("switch_%s", provider.Name)
 	if f.logThrottler.ShouldLog(logKey) {
+		provider.mu.RLock()
+		providerURL := provider.URL
+		consecutiveErrors := provider.ConsecutiveErrors
+		state := provider.State
+		provider.mu.RUnlock()
+
 		logger.Warn("Switching provider due to error",
 			"provider", provider.Name,
+			"url", providerURL,
+			"state", state,
 			"error_type", issue.Reason,
+			"error_detail", issue.Detail,
+			"consecutive_errors", consecutiveErrors+1,
 			"blacklist_duration", issue.Cooldown,
 		)
 	}
@@ -407,10 +424,18 @@ func (f *Failover[T]) handleUnhealthyProvider(provider *Provider, issue Provider
 
 // handleProviderFailure handles non-blacklist failures
 func (f *Failover[T]) handleProviderFailure(provider *Provider, err error) {
+	provider.mu.RLock()
+	providerURL := provider.URL
+	state := provider.State
+	consecutiveErrors := provider.ConsecutiveErrors
+	provider.mu.RUnlock()
+
 	logger.Debug("Provider failed but not switching",
 		"provider", provider.Name,
+		"url", providerURL,
+		"state", state,
 		"error", err.Error(),
-		"consecutive_errors", provider.ConsecutiveErrors,
+		"consecutive_errors", consecutiveErrors,
 	)
 	provider.Fail(&f.config)
 }
@@ -467,9 +492,27 @@ func (f *Failover[T]) attemptProviderSwitch(current *Provider) *Provider {
 
 	logKey := fmt.Sprintf("blacklist_%s", current.Name)
 	if f.logThrottler.ShouldLog(logKey) {
+		current.mu.RLock()
+		blacklistedUntil := current.BlacklistedUntil
+		consecutiveErrors := current.ConsecutiveErrors
+		state := current.State
+		currentURL := current.URL
+		current.mu.RUnlock()
+
+		alt.mu.RLock()
+		altURL := alt.URL
+		altState := alt.State
+		alt.mu.RUnlock()
+
 		logger.Warn("Provider already blacklisted, switching immediately",
-			"from", current.Name,
-			"to", alt.Name)
+			"from_provider", current.Name,
+			"from_url", currentURL,
+			"from_state", state,
+			"blacklisted_until", blacklistedUntil.Format(time.RFC3339),
+			"consecutive_errors", consecutiveErrors,
+			"to_provider", alt.Name,
+			"to_url", altURL,
+			"to_state", altState)
 	}
 
 	return alt
@@ -482,9 +525,25 @@ func (f *Failover[T]) attemptFallback(current *Provider, err error) *Provider {
 		return nil
 	}
 
+	current.mu.RLock()
+	currentURL := current.URL
+	currentState := current.State
+	consecutiveErrors := current.ConsecutiveErrors
+	current.mu.RUnlock()
+
+	alt.mu.RLock()
+	altURL := alt.URL
+	altState := alt.State
+	alt.mu.RUnlock()
+
 	logger.Warn("Fallback to alternative provider",
-		"from", current.Name,
-		"to", alt.Name,
+		"from_provider", current.Name,
+		"from_url", currentURL,
+		"from_state", currentState,
+		"consecutive_errors", consecutiveErrors,
+		"to_provider", alt.Name,
+		"to_url", altURL,
+		"to_state", altState,
 		"error", err.Error())
 
 	return alt
