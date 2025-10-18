@@ -36,8 +36,26 @@ func GetOrCreateRateLimiter(url string, rps int, burst int) *RateLimiter {
 }
 
 // GetOrCreateSharedPooledRateLimiter returns a PooledRateLimiter that uses shared rate limiters
+// The scope parameter allows different worker modes to have separate rate limiters
 func GetOrCreateSharedPooledRateLimiter(url string, rps int, burst int) *PooledRateLimiter {
 	sharedLimiter := GetOrCreateRateLimiter(url, rps, burst)
+
+	// Create a wrapper that always returns the same shared limiter
+	return &PooledRateLimiter{
+		limiters: map[string]*RateLimiter{
+			url: sharedLimiter, // Use URL as key, but always return the same shared limiter
+		},
+		rate:  time.Duration(1000/rps) * time.Millisecond,
+		burst: burst,
+	}
+}
+
+// GetOrCreateScopedPooledRateLimiter returns a PooledRateLimiter with a scope (e.g., worker mode)
+// This allows different worker modes to have separate rate limiters for the same chain
+func GetOrCreateScopedPooledRateLimiter(url string, scope string, rps int, burst int) *PooledRateLimiter {
+	// Create a scoped key to separate rate limiters by scope
+	scopedURL := fmt.Sprintf("%s:%s", url, scope)
+	sharedLimiter := GetOrCreateRateLimiter(scopedURL, rps, burst)
 
 	// Create a wrapper that always returns the same shared limiter
 	return &PooledRateLimiter{

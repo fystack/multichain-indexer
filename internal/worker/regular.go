@@ -77,13 +77,17 @@ func (rw *RegularWorker) Stop() {
 }
 
 func (rw *RegularWorker) processRegularBlocks() error {
+	rw.logger.Info("Starting tick", "currentBlock", rw.currentBlock)
+
 	latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
 	if err != nil {
 		return fmt.Errorf("get latest block: %w", err)
 	}
 
+	rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
+
 	if rw.currentBlock > latest {
-		rw.logger.Debug("Waiting for new blocks...")
+		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)
 		time.Sleep(rw.config.PollInterval)
 		return nil
 	}
