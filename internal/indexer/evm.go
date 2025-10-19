@@ -330,23 +330,22 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 
 	// Add ERC20 transfer tx hashes to the map
 	if len(erc20TxHashes) > 0 {
+		// Use a set to track already added hashes for efficient deduplication
+		addedHashes := make(map[string]bool)
+		for _, hashes := range txHashMap {
+			for _, hash := range hashes {
+				addedHashes[hash] = true
+			}
+		}
+
 		for blockNum, block := range blocks {
 			if block == nil {
 				continue
 			}
 			for _, tx := range block.Transactions {
-				if erc20TxHashes[tx.Hash] {
-					// Check if not already added
-					alreadyAdded := false
-					for _, existingHash := range txHashMap[blockNum] {
-						if existingHash == tx.Hash {
-							alreadyAdded = true
-							break
-						}
-					}
-					if !alreadyAdded {
-						txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
-					}
+				if erc20TxHashes[tx.Hash] && !addedHashes[tx.Hash] {
+					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+					addedHashes[tx.Hash] = true
 				}
 			}
 		}
@@ -486,15 +485,19 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 				continue
 			}
 
+			// If no pubkeyStore, fetch all receipts (backward compatibility)
+			if e.pubkeyStore == nil {
+				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				continue
+			}
+
 			// OPTIMIZATION: Only fetch receipts for native transfers TO monitored addresses
-			// Native transfer = tx.To is not empty and tx.Data is empty (no contract call)
+			// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
 			isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
 
-			if e.pubkeyStore != nil && isNativeTransfer && tx.To != "" {
-				if e.pubkeyStore.Exist(enum.NetworkTypeEVM, tx.To) {
-					nativeTransfers++
-					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
-				}
+			if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, tx.To) {
+				nativeTransfers++
+				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
 			}
 		}
 	}
@@ -693,7 +696,8 @@ func (e *EVMIndexer) fallbackIndividual(
 	ctx context.Context,
 	blockNums []uint64,
 ) ([]BlockResult, error) {
-	results := make([]BlockResult, 0, len(blockNums))
+	// Use the same optimized flow as normal processing
+	blocks := make(map[uint64]*evm.Block)
 
 	for _, num := range blockNums {
 		var eb *evm.Block
@@ -706,44 +710,15 @@ func (e *EVMIndexer) fallbackIndividual(
 		})
 
 		if err != nil {
-			results = append(results, BlockResult{
-				Number: num,
-				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
-			})
+			logger.Warn("fallback individual block fetch failed", "block", num, "error", err)
 			continue
 		}
 
-		// Fetch receipts for this block
-		var needReceiptTxs []string
-		for _, tx := range eb.Transactions {
-			if tx.NeedReceipt() {
-				needReceiptTxs = append(needReceiptTxs, tx.Hash)
-			}
-		}
-
-		receipts := make(map[string]*evm.TxnReceipt)
-		if len(needReceiptTxs) > 0 {
-			_ = e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
-				r, err := c.BatchGetTransactionReceipts(ctx, needReceiptTxs)
-				if err == nil && r != nil {
-					receipts = r
-				}
-				return nil
-			})
-		}
-
-		block, err := e.convertBlock(eb, receipts)
-		if err != nil {
-			results = append(results, BlockResult{
-				Number: num,
-				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
-			})
-		} else {
-			results = append(results, BlockResult{Number: num, Block: block})
-		}
+		blocks[num] = eb
 	}
 
-	return results, nil
+	// Reuse the optimized processBlocksAndReceipts flow with selective receipt fetching
+	return e.processBlocksAndReceipts(ctx, blockNums, blocks, false)
 }
 
 // fallbackBatchToIndividual fetches blocks individually when batch operations fail

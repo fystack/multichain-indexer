@@ -116,7 +116,7 @@ func (bw *BaseWorker) run(job func() error) {
 // handleBlockResult processes a block result and persists/forwards errors if needed.
 func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 	if result.Error != nil {
-		_ = bw.blockStore.SaveFailedBlock(bw.chain.GetName(), result.Number)
+		_ = bw.blockStore.SaveFailedBlock(bw.chain.GetNetworkInternalCode(), result.Number)
 
 		// Non-blocking push to failedChan
 		select {
@@ -169,6 +169,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"to", tx.ToAddress,
 				"chain", bw.chain.GetName(),
 				"addressType", addressType,
+				"txhash", tx.Hash,
 			)
 			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
 		}
