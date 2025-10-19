@@ -195,11 +195,26 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 	if chainLatest > kvLatest {
 		start := kvLatest + 1
 		end := chainLatest
-		_ = rw.blockStore.SaveCatchupProgress(rw.chain.GetNetworkInternalCode(), start, end, start-1)
 
-		rw.logger.Info("Queued catchup range",
+		// Split the range into manageable chunks
+		ranges := splitCatchupRange(blockstore.CatchupRange{
+			Start: start, End: end, Current: start - 1,
+		}, MAX_RANGE_SIZE)
+
+		// Save each split range
+		for _, r := range ranges {
+			_ = rw.blockStore.SaveCatchupProgress(
+				rw.chain.GetNetworkInternalCode(),
+				r.Start,
+				r.End,
+				r.Current,
+			)
+		}
+
+		rw.logger.Info("Queued catchup ranges",
 			"chain", rw.chain.GetName(),
-			"start", start, "end", end,
+			"gap", fmt.Sprintf("%d-%d", start, end),
+			"ranges_created", len(ranges),
 		)
 	}
 
