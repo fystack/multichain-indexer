@@ -69,7 +69,7 @@ func (rw *RegularWorker) Start() {
 func (rw *RegularWorker) Stop() {
 	// Save current block state before stopping
 	if rw.currentBlock > 0 {
-		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetName(), rw.currentBlock)
+		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), rw.currentBlock)
 	}
 	rw.clearBlockHashes()
 	// Call base worker stop to cancel context and clean up
@@ -148,7 +148,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 
 	if lastSuccess >= rw.currentBlock {
 		rw.currentBlock = lastSuccess + 1
-		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetName(), lastSuccess)
+		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
 
 		// Add block hash to array
 		if len(results) > 0 && results[len(results)-1].Block != nil {
@@ -170,7 +170,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 
 func (rw *RegularWorker) determineStartingBlock() uint64 {
 	chainLatest, err1 := rw.chain.GetLatestBlockNumber(rw.ctx)
-	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetName())
+	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
 
 	if err1 != nil && err2 != nil {
 		rw.logger.Warn("Cannot get latest block from chain or KV, using config.StartBlock",
@@ -195,7 +195,7 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 	if chainLatest > kvLatest {
 		start := kvLatest + 1
 		end := chainLatest
-		_ = rw.blockStore.SaveCatchupProgress(rw.chain.GetName(), start, end, start-1)
+		_ = rw.blockStore.SaveCatchupProgress(rw.chain.GetNetworkInternalCode(), start, end, start-1)
 
 		rw.logger.Info("Queued catchup range",
 			"chain", rw.chain.GetName(),
@@ -230,7 +230,7 @@ func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, e
 		// Clear all block hashes on reorg
 		rw.clearBlockHashes()
 
-		if err := rw.blockStore.SaveLatestBlock(rw.chain.GetName(), reorgStart-1); err != nil {
+		if err := rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), reorgStart-1); err != nil {
 			return true, fmt.Errorf("save latest block: %w", err)
 		}
 		rw.currentBlock = reorgStart

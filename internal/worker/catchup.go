@@ -75,7 +75,7 @@ func (cw *CatchupWorker) Start() {
 func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	var ranges []blockstore.CatchupRange
 
-	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetName()); err == nil {
+	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode()); err == nil {
 		cw.logger.Info("Loading existing catchup progress",
 			"chain", cw.chain.GetName(),
 			"progress_ranges", len(progress),
@@ -93,7 +93,7 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	}
 
 	if len(ranges) == 0 {
-		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetName()); err1 == nil {
+		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
 			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
 				start, end := latest+1, head
 				cw.logger.Info("Creating new catchup range",
@@ -111,7 +111,7 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 
 				for _, nr := range newRanges {
 					_ = cw.blockStore.SaveCatchupProgress(
-						cw.chain.GetName(),
+						cw.chain.GetNetworkInternalCode(),
 						nr.Start,
 						nr.End,
 						nr.Current,
@@ -318,7 +318,7 @@ func (cw *CatchupWorker) saveProgress(r blockstore.CatchupRange, current uint64)
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 		"current", current,
 	)
-	_ = cw.blockStore.SaveCatchupProgress(cw.chain.GetName(), r.Start, r.End, current)
+	_ = cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current)
 }
 
 func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
@@ -330,7 +330,7 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 	)
 
-	_ = cw.blockStore.DeleteCatchupRange(cw.chain.GetName(), r.Start, r.End)
+	_ = cw.blockStore.DeleteCatchupRange(cw.chain.GetNetworkInternalCode(), r.Start, r.End)
 
 	// Remove from local ranges
 	for i, existing := range cw.blockRanges {
@@ -358,7 +358,7 @@ func (cw *CatchupWorker) Close() error {
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"current", current,
 		)
-		if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetName(), r.Start, r.End, current); err != nil {
+		if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current); err != nil {
 			cw.logger.Error("Failed to save progress on close",
 				"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 				"error", err,

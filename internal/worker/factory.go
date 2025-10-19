@@ -111,10 +111,9 @@ func BuildWorkers(
 func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
 	failover := rpc.NewFailover[evm.EthereumAPI](nil)
 
-	// Create scoped rate limiter for this worker mode
-	// This allows regular and catchup workers to have separate rate limits
-	rl := ratelimiter.GetOrCreateScopedPooledRateLimiter(
-		chainName, string(mode), chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	// Shared rate limiter for all workers of this chain (global across regular, catchup, etc.)
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
 	)
 
 	for i, node := range chainCfg.Nodes {
@@ -146,10 +145,9 @@ func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerM
 func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode) indexer.Indexer {
 	failover := rpc.NewFailover[tron.TronAPI](nil)
 
-	// Create scoped rate limiter for this worker mode
-	// This allows regular and catchup workers to have separate rate limits
-	rl := ratelimiter.GetOrCreateScopedPooledRateLimiter(
-		chainName, string(mode), chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	// Shared rate limiter for all workers of this chain (global across regular, catchup, etc.)
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
 	)
 
 	for i, node := range chainCfg.Nodes {
@@ -203,6 +201,17 @@ func CreateManagerWithWorkers(
 			continue
 		}
 
+		// Build indexer once - shared across all worker modes with global rate limiter
+		var idxr indexer.Indexer
+		switch chainCfg.Type {
+		case enum.NetworkTypeEVM:
+			idxr = buildEVMIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeTron:
+			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular)
+		default:
+			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
+		}
+
 		// Worker deps
 		deps := WorkerDeps{
 			Ctx:        ctx,
@@ -214,23 +223,9 @@ func CreateManagerWithWorkers(
 			FailedChan: failedChan,
 		}
 
-		// Helper: build indexer for a specific mode
-		buildIndexerForMode := func(mode WorkerMode) indexer.Indexer {
-			switch chainCfg.Type {
-			case enum.NetworkTypeEVM:
-				return buildEVMIndexer(chainName, chainCfg, mode, pubkeyStore)
-			case enum.NetworkTypeTron:
-				return buildTronIndexer(chainName, chainCfg, mode)
-			default:
-				logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
-				return nil
-			}
-		}
-
-		// Helper: add workers if enabled (each mode gets its own indexer with scoped rate limiter)
+		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter)
 		addIfEnabled := func(mode WorkerMode, enabled bool) {
 			if enabled {
-				idxr := buildIndexerForMode(mode)
 				ws := BuildWorkers(idxr, chainCfg, mode, deps)
 				manager.AddWorkers(ws...)
 				logger.Info("Worker enabled", "chain", chainName, "mode", mode)
