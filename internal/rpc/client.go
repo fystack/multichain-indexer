@@ -144,8 +144,12 @@ func (c *BaseClient) doRaw(
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return data, fmt.Errorf("HTTP %s: %s",
-			resp.Status, string(data))
+		bodyStr := strings.TrimSpace(string(data))
+		if bodyStr == "" {
+			bodyStr = "(empty response body)"
+		}
+		// Return full error message without truncation
+		return data, fmt.Errorf("HTTP %s: %s", resp.Status, bodyStr)
 	}
 
 	if len(data) == 0 {
