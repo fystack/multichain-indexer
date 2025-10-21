@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -75,16 +74,13 @@ func (cw *CatchupWorker) Start() {
 func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	var ranges []blockstore.CatchupRange
 
-	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetName()); err == nil {
+	// Load existing catchup ranges from database (they're already split when saved)
+	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode()); err == nil {
 		cw.logger.Info("Loading existing catchup progress",
 			"chain", cw.chain.GetName(),
 			"progress_ranges", len(progress),
 		)
-		for _, p := range progress {
-			// Split large ranges into smaller chunks
-			subRanges := cw.splitLargeRange(p)
-			ranges = append(ranges, subRanges...)
-		}
+		ranges = progress
 	} else {
 		cw.logger.Warn("Failed to load catchup progress, will create new range",
 			"chain", cw.chain.GetName(),
@@ -92,8 +88,9 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 		)
 	}
 
+	// Only create a new range if no existing ranges found
 	if len(ranges) == 0 {
-		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetName()); err1 == nil {
+		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
 			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
 				start, end := latest+1, head
 				cw.logger.Info("Creating new catchup range",
@@ -109,53 +106,42 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 					Start: start, End: end, Current: start - 1,
 				})
 
+				// Save each split range to database
 				for _, nr := range newRanges {
-					_ = cw.blockStore.SaveCatchupProgress(
-						cw.chain.GetName(),
+					err := cw.blockStore.SaveCatchupProgress(
+						cw.chain.GetNetworkInternalCode(),
 						nr.Start,
 						nr.End,
 						nr.Current,
 					)
+					if err != nil {
+						cw.logger.Error("Failed to save catchup progress",
+							"chain", cw.chain.GetName(),
+							"range", fmt.Sprintf("%d-%d", nr.Start, nr.End),
+							"error", err,
+						)
+					}
 				}
 				ranges = append(ranges, newRanges...)
 			}
 		}
 	}
 
-	return mergeRanges(ranges)
+	return ranges
 }
 
 // Split large ranges into smaller, more manageable chunks
 func (cw *CatchupWorker) splitLargeRange(r blockstore.CatchupRange) []blockstore.CatchupRange {
-	rangeSize := r.End - r.Start + 1
-	if rangeSize <= MAX_RANGE_SIZE {
-		return []blockstore.CatchupRange{r}
+	subRanges := splitCatchupRange(r, MAX_RANGE_SIZE)
+
+	if len(subRanges) > 1 {
+		cw.logger.Info("Split large catchup range",
+			"chain", cw.chain.GetName(),
+			"original_range", fmt.Sprintf("%d-%d", r.Start, r.End),
+			"original_size", r.End-r.Start+1,
+			"sub_ranges", len(subRanges),
+		)
 	}
-
-	var subRanges []blockstore.CatchupRange
-	current := r.Start
-
-	for current <= r.End {
-		chunkEnd := min(current+MAX_RANGE_SIZE-1, r.End)
-		chunkCurrent := current - 1
-		if current <= r.Current {
-			chunkCurrent = min(r.Current, chunkEnd)
-		}
-
-		subRanges = append(subRanges, blockstore.CatchupRange{
-			Start:   current,
-			End:     chunkEnd,
-			Current: chunkCurrent,
-		})
-		current = chunkEnd + 1
-	}
-
-	cw.logger.Info("Split large catchup range",
-		"chain", cw.chain.GetName(),
-		"original_range", fmt.Sprintf("%d-%d", r.Start, r.End),
-		"original_size", rangeSize,
-		"sub_ranges", len(subRanges),
-	)
 
 	return subRanges
 }
@@ -318,7 +304,7 @@ func (cw *CatchupWorker) saveProgress(r blockstore.CatchupRange, current uint64)
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 		"current", current,
 	)
-	_ = cw.blockStore.SaveCatchupProgress(cw.chain.GetName(), r.Start, r.End, current)
+	_ = cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current)
 }
 
 func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
@@ -330,7 +316,7 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 	)
 
-	_ = cw.blockStore.DeleteCatchupRange(cw.chain.GetName(), r.Start, r.End)
+	_ = cw.blockStore.DeleteCatchupRange(cw.chain.GetNetworkInternalCode(), r.Start, r.End)
 
 	// Remove from local ranges
 	for i, existing := range cw.blockRanges {
@@ -358,7 +344,7 @@ func (cw *CatchupWorker) Close() error {
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"current", current,
 		)
-		if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetName(), r.Start, r.End, current); err != nil {
+		if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current); err != nil {
 			cw.logger.Error("Failed to save progress on close",
 				"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 				"error", err,
@@ -367,23 +353,4 @@ func (cw *CatchupWorker) Close() error {
 	}
 
 	return nil
-}
-
-func mergeRanges(ranges []blockstore.CatchupRange) []blockstore.CatchupRange {
-	if len(ranges) == 0 {
-		return ranges
-	}
-	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Start < ranges[j].Start })
-	merged := []blockstore.CatchupRange{ranges[0]}
-	for _, r := range ranges[1:] {
-		last := &merged[len(merged)-1]
-		if r.Start <= last.End+1 {
-			if r.End > last.End {
-				last.End = r.End
-			}
-		} else {
-			merged = append(merged, r)
-		}
-	}
-	return merged
 }

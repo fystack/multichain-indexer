@@ -22,11 +22,17 @@ type EVMIndexer struct {
 	chainName           string
 	config              config.ChainConfig
 	failover            *rpc.Failover[evm.EthereumAPI]
-	maxBatchSize        int // Maximum batch size to prevent RPC timeouts
-	maxReceiptBatchSize int // Specific limit for receipt batches (usually smaller)
+	maxBatchSize        int         // Maximum batch size to prevent RPC timeouts
+	maxReceiptBatchSize int         // Specific limit for receipt batches (usually smaller)
+	pubkeyStore         PubkeyStore // For selective receipt fetching
 }
 
-func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI]) *EVMIndexer {
+// PubkeyStore interface for checking if an address is monitored
+type PubkeyStore interface {
+	Exist(addressType enum.NetworkType, address string) bool
+}
+
+func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI], pubkeyStore PubkeyStore) *EVMIndexer {
 	maxBatchSize := 20 // Default max batch size for blocks
 	if config.Throttle.BatchSize > 0 && config.Throttle.BatchSize < maxBatchSize {
 		maxBatchSize = config.Throttle.BatchSize
@@ -44,6 +50,7 @@ func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Fa
 		failover:            failover,
 		maxBatchSize:        maxBatchSize,
 		maxReceiptBatchSize: maxReceiptBatchSize,
+		pubkeyStore:         pubkeyStore,
 	}
 }
 
@@ -265,25 +272,101 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	blocks map[uint64]*evm.Block,
 	isParallel bool,
 ) ([]BlockResult, error) {
-	// Handle missing blocks by fetching them individually
+	startTime := time.Now()
+
+	var (
+		erc20TxHashes map[string]bool
+		missingBlocks map[uint64]*evm.Block
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+
 	missingNums := e.findMissingBlocks(blockNums, blocks)
 	if len(missingNums) > 0 {
-		missingBlocks, err := e.fetchMissingBlocksRaw(ctx, missingNums)
-		if err != nil {
-			logger.Warn("failed to fetch missing blocks", "error", err, "count", len(missingNums))
-		} else {
-			maps.Copy(blocks, missingBlocks)
+		g.Go(func() error {
+			var err error
+			missingBlocks, err = e.fetchMissingBlocksRaw(gctx, missingNums)
+			if err != nil {
+				logger.Warn("failed to fetch missing blocks", "error", err, "count", len(missingNums))
+				// Don't fail the entire operation, just log
+				return nil
+			}
+			return nil
+		})
+	}
+
+	if len(blockNums) > 0 && e.pubkeyStore != nil {
+		g.Go(func() error {
+			fromBlock := blockNums[0]
+			toBlock := blockNums[len(blockNums)-1]
+
+			erc20Start := time.Now()
+			matchedTxHashes, err := e.queryERC20TransfersToMonitoredAddresses(gctx, fromBlock, toBlock)
+			if err != nil {
+				logger.Warn("failed to query ERC20 transfers", "error", err)
+				// Don't fail the entire operation, just log
+				return nil
+			}
+			erc20TxHashes = matchedTxHashes
+			logger.Info("[ERC20 QUERY COMPLETE]",
+				"elapsed_ms", time.Since(erc20Start).Milliseconds(),
+				"matched_txs", len(erc20TxHashes),
+			)
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		logger.Warn("parallel operations failed", "error", err)
+	}
+
+	if missingBlocks != nil && len(missingBlocks) > 0 {
+		maps.Copy(blocks, missingBlocks)
+		logger.Info("[MISSING BLOCKS FETCHED]", "count", len(missingBlocks))
+	}
+
+	// Extract transaction hashes for native transfers to monitored addresses
+	txHashMap := e.extractReceiptTxHashes(blocks)
+
+	// Add ERC20 transfer tx hashes to the map
+	if len(erc20TxHashes) > 0 {
+		// Use a set to track already added hashes for efficient deduplication
+		addedHashes := make(map[string]bool)
+		for _, hashes := range txHashMap {
+			for _, hash := range hashes {
+				addedHashes[hash] = true
+			}
+		}
+
+		for blockNum, block := range blocks {
+			if block == nil {
+				continue
+			}
+			for _, tx := range block.Transactions {
+				if erc20TxHashes[tx.Hash] && !addedHashes[tx.Hash] {
+					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+					addedHashes[tx.Hash] = true
+				}
+			}
 		}
 	}
 
-	// Extract transaction hashes that need receipts
-	txHashMap := e.extractReceiptTxHashes(blocks)
-
 	// Fetch all receipts at once
+	receiptsStart := time.Now()
 	allReceipts, err := e.fetchAllReceipts(ctx, txHashMap, isParallel)
 	if err != nil {
 		logger.Warn("failed to fetch receipts", "error", err)
 	}
+	logger.Debug("[RECEIPTS FETCHED]",
+		"elapsed_ms", time.Since(receiptsStart).Milliseconds(),
+		"count", len(allReceipts),
+	)
+
+	totalElapsed := time.Since(startTime)
+	logger.Debug("[PROCESS BLOCKS COMPLETE]",
+		"total_elapsed_ms", totalElapsed.Milliseconds(),
+		"blocks", len(blockNums),
+	)
 
 	// Build final results
 	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts), nil
@@ -317,18 +400,115 @@ func (e *EVMIndexer) fetchMissingBlocksRaw(
 	return results, nil
 }
 
+// queryERC20TransfersToMonitoredAddresses queries Transfer events and returns tx hashes for matched addresses
+func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context, fromBlock, toBlock uint64) (map[string]bool, error) {
+	if e.pubkeyStore == nil {
+		return nil, nil
+	}
+
+	// Transfer(address,address,uint256) event signature
+	// Keccak256 hash: 0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef
+	transferSignature := "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+	query := evm.FilterQuery{
+		FromBlock: fmt.Sprintf("0x%x", fromBlock),
+		ToBlock:   fmt.Sprintf("0x%x", toBlock),
+		Topics:    [][]string{{transferSignature}}, // Filter by Transfer event signature
+	}
+
+	var logs []evm.Log
+	err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+		var err error
+		logs, err = c.FilterLogs(ctx, query)
+		return err
+	})
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to query Transfer logs: %w", err)
+	}
+
+	// Map of tx hashes that have transfers to monitored addresses
+	matchedTxHashes := make(map[string]bool)
+
+	for _, log := range logs {
+		if len(log.Topics) < 3 {
+			logger.Warn("Transfer log has less than 3 topics",
+				"topics", log.Topics,
+				"tx_hash", log.TransactionHash,
+			)
+			continue
+		}
+
+		// Topics[0] = Transfer signature
+		// Topics[1] = from address (indexed)
+		// Topics[2] = to address (indexed)
+		// Data = amount (not indexed)
+
+		// Extract 'to' address from topics[2]
+		// Topics are 32 bytes, address is last 20 bytes
+		toAddressTopic := log.Topics[2]
+		if len(toAddressTopic) < 64 { // hex string without 0x prefix should be 64 chars
+			continue
+		}
+
+		// Get last 40 hex chars (20 bytes) and add 0x prefix
+		toAddress := "0x" + toAddressTopic[len(toAddressTopic)-40:]
+
+		// Check if this address is monitored
+		if e.pubkeyStore.Exist(enum.NetworkTypeEVM, toAddress) {
+			matchedTxHashes[log.TransactionHash] = true
+		}
+	}
+
+	logger.Debug("[ERC20 TRANSFERS]",
+		"from_block", fromBlock,
+		"to_block", toBlock,
+		"total_transfer_events", len(logs),
+		"matched_tx_hashes", len(matchedTxHashes),
+	)
+
+	return matchedTxHashes, nil
+}
+
 func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[uint64][]string {
 	txHashMap := make(map[uint64][]string)
+	totalTxs := 0
+	nativeTransfers := 0
+
 	for blockNum, block := range blocks {
 		if block == nil {
 			continue
 		}
 		for _, tx := range block.Transactions {
-			if tx.NeedReceipt() {
+			totalTxs++
+			if !tx.NeedReceipt() {
+				continue
+			}
+
+			// If no pubkeyStore, fetch all receipts (backward compatibility)
+			if e.pubkeyStore == nil {
+				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				continue
+			}
+
+			// OPTIMIZATION: Only fetch receipts for native transfers TO monitored addresses
+			// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
+			isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
+
+			if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, tx.To) {
+				nativeTransfers++
 				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
 			}
 		}
 	}
+
+	if e.pubkeyStore != nil && totalTxs > 0 {
+		logger.Debug("[SELECTIVE RECEIPTS - NATIVE]",
+			"total_txs", totalTxs,
+			"native_transfers_matched", nativeTransfers,
+		)
+	}
+
 	return txHashMap
 }
 
@@ -364,7 +544,6 @@ func (e *EVMIndexer) fetchReceiptsSequential(
 
 	for batchIdx, batch := range batches {
 		var receipts map[string]*evm.TxnReceipt
-
 		logger.Debug(
 			"fetching receipt batch",
 			"batch",
@@ -517,7 +696,8 @@ func (e *EVMIndexer) fallbackIndividual(
 	ctx context.Context,
 	blockNums []uint64,
 ) ([]BlockResult, error) {
-	results := make([]BlockResult, 0, len(blockNums))
+	// Use the same optimized flow as normal processing
+	blocks := make(map[uint64]*evm.Block)
 
 	for _, num := range blockNums {
 		var eb *evm.Block
@@ -530,44 +710,15 @@ func (e *EVMIndexer) fallbackIndividual(
 		})
 
 		if err != nil {
-			results = append(results, BlockResult{
-				Number: num,
-				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
-			})
+			logger.Warn("fallback individual block fetch failed", "block", num, "error", err)
 			continue
 		}
 
-		// Fetch receipts for this block
-		var needReceiptTxs []string
-		for _, tx := range eb.Transactions {
-			if tx.NeedReceipt() {
-				needReceiptTxs = append(needReceiptTxs, tx.Hash)
-			}
-		}
-
-		receipts := make(map[string]*evm.TxnReceipt)
-		if len(needReceiptTxs) > 0 {
-			_ = e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
-				r, err := c.BatchGetTransactionReceipts(ctx, needReceiptTxs)
-				if err == nil && r != nil {
-					receipts = r
-				}
-				return nil
-			})
-		}
-
-		block, err := e.convertBlock(eb, receipts)
-		if err != nil {
-			results = append(results, BlockResult{
-				Number: num,
-				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
-			})
-		} else {
-			results = append(results, BlockResult{Number: num, Block: block})
-		}
+		blocks[num] = eb
 	}
 
-	return results, nil
+	// Reuse the optimized processBlocksAndReceipts flow with selective receipt fetching
+	return e.processBlocksAndReceipts(ctx, blockNums, blocks, false)
 }
 
 // fallbackBatchToIndividual fetches blocks individually when batch operations fail
