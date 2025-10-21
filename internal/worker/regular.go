@@ -115,6 +115,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	}
 
 	lastSuccess := rw.currentBlock - 1
+	var lastSuccessHash string
 	startTime := time.Now()
 
 	for i, res := range results {
@@ -143,6 +144,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		}
 		if rw.handleBlockResult(res) {
 			lastSuccess = res.Number
+			lastSuccessHash = res.Block.Hash
 		}
 	}
 
@@ -150,9 +152,8 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		rw.currentBlock = lastSuccess + 1
 		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
 
-		// Add block hash to array
-		if len(results) > 0 && results[len(results)-1].Block != nil {
-			rw.addBlockHash(lastSuccess, results[len(results)-1].Block.Hash)
+		if lastSuccessHash != "" {
+			rw.addBlockHash(lastSuccess, lastSuccessHash)
 		}
 	}
 
@@ -291,4 +292,42 @@ func (rw *RegularWorker) clearBlockHashes() {
 
 func checkContinuity(prev, curr indexer.BlockResult) bool {
 	return prev.Block.Hash == curr.Block.ParentHash
+}
+
+// splitCatchupRange splits a large catchup range into smaller, manageable chunks
+func splitCatchupRange(r blockstore.CatchupRange, maxSize uint64) []blockstore.CatchupRange {
+	if r.End <= r.Start {
+		return []blockstore.CatchupRange{r}
+	}
+
+	totalBlocks := r.End - r.Start + 1
+	if totalBlocks <= maxSize {
+		return []blockstore.CatchupRange{r}
+	}
+
+	var ranges []blockstore.CatchupRange
+	current := r.Start
+
+	for current <= r.End {
+		end := min(current+maxSize-1, r.End)
+
+		// Create a new range with the same Current position as the original
+		// but adjusted to be within the new range bounds
+		newCurrent := r.Current
+		if newCurrent < current {
+			newCurrent = current - 1
+		} else if newCurrent > end {
+			newCurrent = end
+		}
+
+		ranges = append(ranges, blockstore.CatchupRange{
+			Start:   current,
+			End:     end,
+			Current: newCurrent,
+		})
+
+		current = end + 1
+	}
+
+	return ranges
 }
