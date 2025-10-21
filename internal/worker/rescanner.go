@@ -116,7 +116,7 @@ func (rw *RescannerWorker) addFailedBlock(block uint64, errMsg string) {
 }
 
 func (rw *RescannerWorker) syncFromKV() error {
-	blocks, err := rw.blockStore.GetFailedBlocks(rw.chain.GetName())
+	blocks, err := rw.blockStore.GetFailedBlocks(rw.chain.GetNetworkInternalCode())
 	if err != nil {
 		return err
 	}
@@ -243,14 +243,14 @@ func (rw *RescannerWorker) flush() {
 
 func (rw *RescannerWorker) flushUnsafe() {
 	if len(rw.pendingSaves) > 0 {
-		_ = rw.blockStore.SaveFailedBlocks(rw.chain.GetName(), rw.pendingSaves)
+		_ = rw.blockStore.SaveFailedBlocks(rw.chain.GetNetworkInternalCode(), rw.pendingSaves)
 		rw.logger.Debug("Batch saved failed blocks",
 			"chain", rw.chain.GetName(),
 			"count", len(rw.pendingSaves))
 		rw.pendingSaves = rw.pendingSaves[:0]
 	}
 	if len(rw.pendingRemoves) > 0 {
-		_ = rw.blockStore.RemoveFailedBlocks(rw.chain.GetName(), rw.pendingRemoves)
+		_ = rw.blockStore.RemoveFailedBlocks(rw.chain.GetNetworkInternalCode(), rw.pendingRemoves)
 		rw.logger.Debug("Batch removed failed blocks",
 			"chain", rw.chain.GetName(),
 			"count", len(rw.pendingRemoves))

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 )
 
@@ -184,6 +185,11 @@ func (bs *blockStore) SaveCatchupProgress(chain string, start, end, current uint
 		return errors.New("invalid catchup range")
 	}
 	key := catchupKey(chain, start, end)
+	logger.Debug("Saving catchup progress to store",
+		"chain", chain,
+		"range", fmt.Sprintf("%d-%d", start, end),
+		"current", current,
+	)
 	return bs.store.Set(key, fmt.Sprintf("%d", current))
 }
 
@@ -206,7 +212,16 @@ func (bs *blockStore) GetCatchupProgress(chain string) ([]CatchupRange, error) {
 		}
 		cur, _ := strconv.ParseUint(string(kv.Value), 10, 64)
 		ranges = append(ranges, CatchupRange{Start: s, End: e, Current: cur})
+		logger.Debug("Found catchup range in store",
+			"chain", chain,
+			"range", fmt.Sprintf("%d-%d", s, e),
+			"current", cur,
+		)
 	}
+	logger.Info("Loaded catchup progress from store",
+		"chain", chain,
+		"ranges_count", len(ranges),
+	)
 	return ranges, nil
 }
 
@@ -216,7 +231,16 @@ func (bs *blockStore) DeleteCatchupRange(chain string, start, end uint64) error 
 		return nil
 	}
 	key := catchupKey(chain, start, end)
-	return bs.store.Delete(key)
+	err := bs.store.Delete(key)
+	if err != nil {
+		logger.Error("Failed to delete catchup range from store",
+			"chain", chain,
+			"range", fmt.Sprintf("%d-%d", start, end),
+			"key", key,
+			"error", err,
+		)
+	}
+	return err
 }
 
 func (bs *blockStore) Close() error {

@@ -1,8 +1,6 @@
 package evm
 
 import (
-	"strings"
-
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
@@ -50,16 +48,6 @@ type (
 		LogIndex        string   `json:"logIndex"`
 	}
 )
-
-func (b *Block) CollectTxNeedingReceipts() []string {
-	all := []string{}
-	for _, tx := range b.Transactions {
-		if len(strings.TrimSpace(tx.Input)) > 2 {
-			all = append(all, tx.Hash)
-		}
-	}
-	return all
-}
 
 func (l Log) parseERC20Transfers(
 	txHash, network string,

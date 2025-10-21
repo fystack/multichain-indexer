@@ -69,7 +69,7 @@ func (rw *RegularWorker) Start() {
 func (rw *RegularWorker) Stop() {
 	// Save current block state before stopping
 	if rw.currentBlock > 0 {
-		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetName(), rw.currentBlock)
+		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), rw.currentBlock)
 	}
 	rw.clearBlockHashes()
 	// Call base worker stop to cancel context and clean up
@@ -77,13 +77,17 @@ func (rw *RegularWorker) Stop() {
 }
 
 func (rw *RegularWorker) processRegularBlocks() error {
+	rw.logger.Info("Starting tick", "currentBlock", rw.currentBlock)
+
 	latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
 	if err != nil {
 		return fmt.Errorf("get latest block: %w", err)
 	}
 
+	rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
+
 	if rw.currentBlock > latest {
-		rw.logger.Debug("Waiting for new blocks...")
+		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)
 		time.Sleep(rw.config.PollInterval)
 		return nil
 	}
@@ -111,6 +115,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	}
 
 	lastSuccess := rw.currentBlock - 1
+	var lastSuccessHash string
 	startTime := time.Now()
 
 	for i, res := range results {
@@ -139,16 +144,16 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		}
 		if rw.handleBlockResult(res) {
 			lastSuccess = res.Number
+			lastSuccessHash = res.Block.Hash
 		}
 	}
 
 	if lastSuccess >= rw.currentBlock {
 		rw.currentBlock = lastSuccess + 1
-		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetName(), lastSuccess)
+		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
 
-		// Add block hash to array
-		if len(results) > 0 && results[len(results)-1].Block != nil {
-			rw.addBlockHash(lastSuccess, results[len(results)-1].Block.Hash)
+		if lastSuccessHash != "" {
+			rw.addBlockHash(lastSuccess, lastSuccessHash)
 		}
 	}
 
@@ -166,7 +171,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 
 func (rw *RegularWorker) determineStartingBlock() uint64 {
 	chainLatest, err1 := rw.chain.GetLatestBlockNumber(rw.ctx)
-	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetName())
+	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
 
 	if err1 != nil && err2 != nil {
 		rw.logger.Warn("Cannot get latest block from chain or KV, using config.StartBlock",
@@ -191,11 +196,26 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 	if chainLatest > kvLatest {
 		start := kvLatest + 1
 		end := chainLatest
-		_ = rw.blockStore.SaveCatchupProgress(rw.chain.GetName(), start, end, start-1)
 
-		rw.logger.Info("Queued catchup range",
+		// Split the range into manageable chunks
+		ranges := splitCatchupRange(blockstore.CatchupRange{
+			Start: start, End: end, Current: start - 1,
+		}, MAX_RANGE_SIZE)
+
+		// Save each split range
+		for _, r := range ranges {
+			_ = rw.blockStore.SaveCatchupProgress(
+				rw.chain.GetNetworkInternalCode(),
+				r.Start,
+				r.End,
+				r.Current,
+			)
+		}
+
+		rw.logger.Info("Queued catchup ranges",
 			"chain", rw.chain.GetName(),
-			"start", start, "end", end,
+			"gap", fmt.Sprintf("%d-%d", start, end),
+			"ranges_created", len(ranges),
 		)
 	}
 
@@ -226,7 +246,7 @@ func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, e
 		// Clear all block hashes on reorg
 		rw.clearBlockHashes()
 
-		if err := rw.blockStore.SaveLatestBlock(rw.chain.GetName(), reorgStart-1); err != nil {
+		if err := rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), reorgStart-1); err != nil {
 			return true, fmt.Errorf("save latest block: %w", err)
 		}
 		rw.currentBlock = reorgStart
@@ -272,4 +292,42 @@ func (rw *RegularWorker) clearBlockHashes() {
 
 func checkContinuity(prev, curr indexer.BlockResult) bool {
 	return prev.Block.Hash == curr.Block.ParentHash
+}
+
+// splitCatchupRange splits a large catchup range into smaller, manageable chunks
+func splitCatchupRange(r blockstore.CatchupRange, maxSize uint64) []blockstore.CatchupRange {
+	if r.End <= r.Start {
+		return []blockstore.CatchupRange{r}
+	}
+
+	totalBlocks := r.End - r.Start + 1
+	if totalBlocks <= maxSize {
+		return []blockstore.CatchupRange{r}
+	}
+
+	var ranges []blockstore.CatchupRange
+	current := r.Start
+
+	for current <= r.End {
+		end := min(current+maxSize-1, r.End)
+
+		// Create a new range with the same Current position as the original
+		// but adjusted to be within the new range bounds
+		newCurrent := r.Current
+		if newCurrent < current {
+			newCurrent = current - 1
+		} else if newCurrent > end {
+			newCurrent = end
+		}
+
+		ranges = append(ranges, blockstore.CatchupRange{
+			Start:   current,
+			End:     end,
+			Current: newCurrent,
+		})
+
+		current = end + 1
+	}
+
+	return ranges
 }
