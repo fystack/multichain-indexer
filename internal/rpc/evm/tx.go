@@ -13,15 +13,15 @@ import (
 func (t *Txn) NeedReceipt() bool {
 	inputLen := len(strings.TrimSpace(t.Input))
 	if inputLen <= 2 {
-		return false
+		return true
 	}
 	if inputLen >= 10 {
 		sig := t.Input[:10]
 		if sig == ERC20_TRANSFER_SIG || sig == ERC20_TRANSFER_FROM_SIG {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 const WEI_PER_ETH = 1e18
@@ -33,7 +33,8 @@ func (tx Txn) calcFee(receipt *TxnReceipt) decimal.Decimal {
 		if gasUsed, err1 := utils.ParseHexBigInt(receipt.GasUsed); err1 == nil {
 			if gasPrice, err2 := utils.ParseHexBigInt(receipt.EffectiveGasPrice); err2 == nil {
 				weiAmount := new(big.Int).Mul(gasUsed, gasPrice)
-				return decimal.NewFromBigInt(weiAmount, 0).Div(decimal.NewFromInt(WEI_PER_ETH))
+				result := decimal.NewFromBigInt(weiAmount, 0).Div(decimal.NewFromInt(WEI_PER_ETH))
+				return result
 			}
 		}
 	}
@@ -52,6 +53,9 @@ func (tx Txn) parseERC20Input(
 	network string,
 	blockNumber, ts uint64,
 ) *types.Transaction {
+	// 10 = 2+8
+	//"0x" prefix = 2 characters,
+	// selector = 8 characters.
 	if len(tx.Input) < 10 {
 		return nil
 	}
@@ -90,7 +94,7 @@ func (tx Txn) parseERC20Input(
 			AssetAddress: ToChecksumAddress(tx.To),
 			Amount:       amount.String(),
 			Type:         constant.TxnTypeERC20Transfer,
-			TxFee:        decimal.Zero,
+			TxFee:        fee,
 			Timestamp:    ts,
 		}
 	}
@@ -98,6 +102,7 @@ func (tx Txn) parseERC20Input(
 }
 
 func (tx Txn) parseERC20Logs(
+	fee decimal.Decimal,
 	network string,
 	txHash string,
 	logs []Log,
@@ -105,7 +110,7 @@ func (tx Txn) parseERC20Logs(
 ) []types.Transaction {
 	var transfers []types.Transaction
 	for _, log := range logs {
-		parsed, err := log.parseERC20Transfers(txHash, network, blockNumber, ts)
+		parsed, err := log.parseERC20Transfers(fee, txHash, network, blockNumber, ts)
 		if err != nil {
 			continue
 		}
@@ -123,7 +128,7 @@ func (tx Txn) ExtractTransfers(
 	fee := tx.calcFee(receipt)
 
 	// native transfer
-	if val, _ := utils.ParseHexBigInt(tx.Value); val.Sign() > 0 && tx.To != "" {
+	if val, _ := utils.ParseHexBigInt(tx.Value); val.Sign() > 0 && tx.To != "" && strings.TrimPrefix(tx.Input, "0x") == "" {
 		out = append(out, types.Transaction{
 			TxHash:      tx.Hash,
 			NetworkId:   network,
@@ -138,7 +143,7 @@ func (tx Txn) ExtractTransfers(
 	}
 	// ERC20
 	if receipt != nil {
-		out = append(out, tx.parseERC20Logs(network, tx.Hash, receipt.Logs, blockNumber, ts)...)
+		out = append(out, tx.parseERC20Logs(fee, network, tx.Hash, receipt.Logs, blockNumber, ts)...)
 	} else if erc20 := tx.parseERC20Input(fee, network, blockNumber, ts); erc20 != nil {
 		out = append(out, *erc20)
 	}
