@@ -327,7 +327,6 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 
 	// Extract transaction hashes for native transfers to monitored addresses
 	txHashMap := e.extractReceiptTxHashes(blocks)
-
 	// Add ERC20 transfer tx hashes to the map
 	if len(erc20TxHashes) > 0 {
 		// Use a set to track already added hashes for efficient deduplication
@@ -455,8 +454,9 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 		toAddress := "0x" + toAddressTopic[len(toAddressTopic)-40:]
 
 		// Check if this address is monitored
-		if e.pubkeyStore.Exist(enum.NetworkTypeEVM, toAddress) {
+		if e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(toAddress)) {
 			matchedTxHashes[log.TransactionHash] = true
+			logger.Info("EXISTING TRANSFER", "tx_hash", log.TransactionHash, "to_address", toAddress)
 		}
 	}
 
@@ -495,7 +495,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 			// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
 			isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
 
-			if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, tx.To) {
+			if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To)) {
 				nativeTransfers++
 				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
 			}
@@ -671,14 +671,14 @@ func (e *EVMIndexer) buildBlockResults(
 		}
 
 		// Build receipts map for this block
-		blockReceipts := make(map[string]*evm.TxnReceipt)
+		txReceipts := make(map[string]*evm.TxnReceipt)
 		for _, txHash := range txHashMap[num] {
 			if receipt := allReceipts[txHash]; receipt != nil {
-				blockReceipts[txHash] = receipt
+				txReceipts[txHash] = receipt
 			}
 		}
 
-		typesBlock, err := e.convertBlock(block, blockReceipts)
+		typesBlock, err := e.convertBlock(block, txReceipts)
 		if err != nil {
 			results = append(results, BlockResult{
 				Number: num,
@@ -771,10 +771,19 @@ func (e *EVMIndexer) convertBlock(
 ) (*types.Block, error) {
 	num, _ := utils.ParseHexUint64(eb.Number)
 	ts, _ := utils.ParseHexUint64(eb.Timestamp)
-
 	var allTransfers []types.Transaction
 	for _, tx := range eb.Transactions {
 		receipt := receipts[tx.Hash]
+		if receipt == nil {
+			continue
+		}
+
+		if !receipt.IsSuccessful() {
+			logger.Debug("[RECEIPTS] skipping failed tx", "tx", tx.Hash, "status", receipt.Status, "block", num)
+			continue
+		}
+
+		logger.Info("[RECEIPTS]", "tx", tx.Hash, "receipt", receipt)
 		transfers := tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)
 		allTransfers = append(allTransfers, transfers...)
 	}
