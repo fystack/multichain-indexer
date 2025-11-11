@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
@@ -36,6 +37,7 @@ type (
 		TransactionHash   string `json:"transactionHash"`
 		GasUsed           string `json:"gasUsed"`
 		EffectiveGasPrice string `json:"effectiveGasPrice"`
+		Status            string `json:"status"`
 		Logs              []Log  `json:"logs"`
 	}
 
@@ -50,6 +52,7 @@ type (
 )
 
 func (l Log) parseERC20Transfers(
+	fee decimal.Decimal,
 	txHash, network string,
 	blockNumber, ts uint64,
 ) ([]types.Transaction, error) {
@@ -75,8 +78,28 @@ func (l Log) parseERC20Transfers(
 		AssetAddress: ToChecksumAddress(l.Address),
 		Amount:       amount.String(),
 		Type:         "erc20_transfer",
-		TxFee:        decimal.Zero,
+		TxFee:        fee,
 		Timestamp:    ts,
 	}
 	return []types.Transaction{transfer}, nil
+}
+
+func (r *TxnReceipt) IsSuccessful() bool {
+	if r == nil {
+		return false
+	}
+	// eth_getTransactionReceipt didn’t always return a status—that field was added post-Byzantium and
+	//   some RPC providers (or archive data) still omit it. If we treated an empty string as failure, we’d
+	//   end up discarding perfectly good transfers from providers that don’t send the flag. The guard at
+	//   internal/rpc/evm/types.go:89 assumes “missing means the node didn’t supply it, not that the tx
+	//   failed,” so we keep the previous behavior unless the receipt explicitly says 0x0.
+	logger.Info("receipt status", "status", r.Status)
+	if r.Status == "" {
+		return true
+	}
+	status, err := utils.ParseHexUint64(r.Status)
+	if err != nil {
+		return true
+	}
+	return status != 0
 }
