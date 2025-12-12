@@ -40,7 +40,7 @@ func NewCardanoClient(
 
 // GetBlockHeaderByNumber fetches only block header by height
 func (c *CardanoClient) GetBlockHeaderByNumber(ctx context.Context, blockNumber uint64) (*BlockResponse, error) {
-	endpoint := fmt.Sprintf("/blocks/height/%d", blockNumber)
+	endpoint := fmt.Sprintf("/blocks/%d", blockNumber)
 	data, err := c.Do(ctx, "GET", endpoint, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block header %d: %w", blockNumber, err)
@@ -71,15 +71,9 @@ func (c *CardanoClient) GetLatestBlockNumber(ctx context.Context) (uint64, error
 
 // GetBlockByNumber fetches a block by its height
 func (c *CardanoClient) GetBlockByNumber(ctx context.Context, blockNumber uint64) (*Block, error) {
-	endpoint := fmt.Sprintf("/blocks/height/%d", blockNumber)
-	data, err := c.Do(ctx, "GET", endpoint, nil, nil)
+	br, err := c.GetBlockHeaderByNumber(ctx, blockNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get block %d: %w", blockNumber, err)
-	}
-
-	var blockResp BlockResponse
-	if err := json.Unmarshal(data, &blockResp); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal block response: %w", err)
 	}
 
 	// Fetch transactions for this block
@@ -89,43 +83,26 @@ func (c *CardanoClient) GetBlockByNumber(ctx context.Context, blockNumber uint64
 		txHashes = []string{}
 	}
 
-	// Convert transactions
-	txs := make([]Transaction, 0, len(txHashes))
-	for _, txHash := range txHashes {
-		tx, err := c.GetTransaction(ctx, txHash)
-		if err != nil {
-			logger.Warn("failed to fetch transaction", "tx_hash", txHash, "error", err)
-			continue
-		}
-		if tx != nil {
-			txs = append(txs, *tx)
-		}
-	}
+	// Fetch transaction details (parallel-safe)
+	txs, _ := c.FetchTransactionsParallel(ctx, txHashes, 4)
 
 	return &Block{
-		Hash:       blockResp.Hash,
-		Height:     blockResp.Height,
-		Slot:       blockResp.Slot,
-		Time:       blockResp.Time,
-		ParentHash: blockResp.ParentHash,
+		Hash:       br.Hash,
+		Height:     br.Height,
+		Slot:       br.Slot,
+		Time:       br.Time,
+		ParentHash: br.ParentHash,
 		Txs:        txs,
 	}, nil
 }
 
 // GetBlockHash fetches the hash of a block by its height
 func (c *CardanoClient) GetBlockHash(ctx context.Context, blockNumber uint64) (string, error) {
-	endpoint := fmt.Sprintf("/blocks/height/%d", blockNumber)
-	data, err := c.Do(ctx, "GET", endpoint, nil, nil)
+	br, err := c.GetBlockHeaderByNumber(ctx, blockNumber)
 	if err != nil {
 		return "", fmt.Errorf("failed to get block hash: %w", err)
 	}
-
-	var block BlockResponse
-	if err := json.Unmarshal(data, &block); err != nil {
-		return "", fmt.Errorf("failed to unmarshal block response: %w", err)
-	}
-
-	return block.Hash, nil
+	return br.Hash, nil
 }
 
 // GetBlockByHash fetches a block by its hash
@@ -173,7 +150,7 @@ func (c *CardanoClient) GetBlockByHash(ctx context.Context, blockHash string) (*
 
 // GetTransactionsByBlock fetches all transaction hashes in a block
 func (c *CardanoClient) GetTransactionsByBlock(ctx context.Context, blockNumber uint64) ([]string, error) {
-	// Safer: resolve block hash by height, then query txs by hash
+	// Resolve block hash from height then request txs by hash
 	hash, err := c.GetBlockHash(ctx, blockNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve block hash: %w", err)

@@ -72,8 +72,7 @@ chains:
         auth:
           type: "header"
           key: "project_id"
-          value: "${BLOCKFROST_API_KEY}" # Get from https://blockfrost.io/
-      - url: "https://cardano-mainnet.blockfrost.io/api/v0" # Fallback provider
+          value: "BLOCKFROST_API_KEY" # Get from https://blockfrost.io/
     client:
       timeout: "30s"
       max_retries: 3
