@@ -5,12 +5,14 @@ import (
 	"sync"
 	"testing"
 
+	"log/slog"
+
+	"github.com/Woft257/multichain-indexer/internal/indexer"
 	"github.com/Woft257/multichain-indexer/internal/rpc/cardano"
 	"github.com/Woft257/multichain-indexer/pkg/common/enum"
-	"github.com/Woft257/multichain-indexer/pkg/common/logger"
 	"github.com/Woft257/multichain-indexer/pkg/common/types"
 	"github.com/Woft257/multichain-indexer/pkg/common/utils"
-	"github.com/shopspring/decimal"
+	"github.com/Woft257/multichain-indexer/pkg/events"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,10 +28,12 @@ func newMockPubkeyStore() *mockPubkeyStore {
 	}
 }
 
-func (m *mockPubkeyStore) Add(address string) {
+// Save adds an address to the mock store.
+func (m *mockPubkeyStore) Save(_ enum.NetworkType, address string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.watchedAddrs[address] = true
+	return nil
 }
 
 func (m *mockPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
@@ -38,6 +42,7 @@ func (m *mockPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 	_, ok := m.watchedAddrs[address]
 	return ok
 }
+func (m *mockPubkeyStore) Close() error { return nil } // Add Close to satisfy the interface
 
 // mockEmitter is a simple mock for events.Emitter
 type mockEmitter struct {
@@ -91,18 +96,17 @@ func TestBaseWorker_EmitBlock_Cardano(t *testing.T) {
 	// 1. Setup
 	pubkeyStore := newMockPubkeyStore()
 	emitter := &mockEmitter{}
-	logger.Init(true) // Init logger for testing
 
 	bw := &BaseWorker{
 		ctx:         context.Background(),
-		logger:      logger.Default(),
+		logger:      slog.Default(),
 		pubkeyStore: pubkeyStore,
 		emitter:     emitter,
 		chain:       &mockIndexer{networkType: enum.NetworkTypeCardano},
 	}
 
 	watchedAddr := "addr1q9p7z2f3y89h6y8a2nh7w7j7d8c9q0g6h5j4k3l2m1n0p8q7r6s5t4"
-	pubkeyStore.Add(watchedAddr)
+	pubkeyStore.Save(enum.NetworkTypeCardano, watchedAddr)
 
 	// 2. Create Cardano test data
 	richTx := &cardano.RichTransaction{
@@ -166,18 +170,17 @@ func TestBaseWorker_EmitBlock_Legacy(t *testing.T) {
 	// 1. Setup
 	pubkeyStore := newMockPubkeyStore()
 	emitter := &mockEmitter{}
-	logger.Init(true)
 
 	bw := &BaseWorker{
 		ctx:         context.Background(),
-		logger:      logger.Default(),
+		logger:      slog.Default(),
 		pubkeyStore: pubkeyStore,
 		emitter:     emitter,
 		chain:       &mockIndexer{networkType: enum.NetworkTypeEVM},
 	}
 
 	watchedAddr := "0x1234567890123456789012345678901234567890"
-	pubkeyStore.Add(watchedAddr)
+	pubkeyStore.Save(enum.NetworkTypeEVM, watchedAddr)
 
 	// 2. Create EVM test data
 	block := &types.Block{

@@ -18,6 +18,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/retry"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
+	"github.com/shopspring/decimal"
 )
 
 // BaseWorker holds the common state and logic shared by all worker types.
