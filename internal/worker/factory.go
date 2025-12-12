@@ -6,6 +6,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/internal/rpc/cardano"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
@@ -175,6 +176,40 @@ func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode Worker
 	return indexer.NewTronIndexer(chainName, chainCfg, failover)
 }
 
+// buildCardanoIndexer constructs a Cardano indexer with failover and providers.
+func buildCardanoIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode) indexer.Indexer {
+	failover := rpc.NewFailover[cardano.CardanoAPI](nil)
+
+	// Shared rate limiter for all workers of this chain (global across regular, catchup, etc.)
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := cardano.NewCardanoClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "rest",
+			Client:     client,
+			State:      rpc.StateHealthy, // Initialize as healthy
+		})
+	}
+
+	return indexer.NewCardanoIndexer(chainName, chainCfg, failover)
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -208,6 +243,8 @@ func CreateManagerWithWorkers(
 			idxr = buildEVMIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTron:
 			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular)
+		case enum.NetworkTypeCardano:
+			idxr = buildCardanoIndexer(chainName, chainCfg, ModeRegular)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
