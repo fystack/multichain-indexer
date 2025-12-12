@@ -81,6 +81,7 @@ chains:
     throttle:
       rps: 10 # Blockfrost free tier allows 10 req/s
       burst: 20
+      concurrency: 3
 
 # Infrastructure services
 services:

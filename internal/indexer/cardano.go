@@ -53,19 +53,45 @@ func (c *CardanoIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, erro
 	return latest, err
 }
 
-// GetBlock fetches a single block
+// GetBlock fetches a single block (header + txs fetched in parallel with quota)
 func (c *CardanoIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*types.Block, error) {
-	var block *cardano.Block
+	var (
+		header   *cardano.BlockResponse
+		txHashes []string
+		txs      []cardano.Transaction
+	)
+
 	err := c.failover.ExecuteWithRetry(ctx, func(api cardano.CardanoAPI) error {
-		b, err := api.GetBlockByNumber(ctx, blockNumber)
-		block = b
+		var err error
+		header, err = api.GetBlockHeaderByNumber(ctx, blockNumber)
+		if err != nil {
+			return err
+		}
+		txHashes, err = api.GetTransactionsByBlock(ctx, blockNumber)
+		if err != nil {
+			return err
+		}
+		concurrency := c.config.Throttle.Concurrency
+		if concurrency <= 0 {
+			concurrency = 4
+		}
+		txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	if block == nil {
-		return nil, fmt.Errorf("block not found")
+
+	block := &cardano.Block{
+		Hash:       header.Hash,
+		Height:     header.Height,
+		Slot:       header.Slot,
+		Time:       header.Time,
+		ParentHash: header.ParentHash,
+	}
+	// attach txs
+	for i := range txs {
+		block.Txs = append(block.Txs, txs[i])
 	}
 
 	return c.convertBlock(block), nil
@@ -111,10 +137,26 @@ func (c *CardanoIndexer) fetchBlocks(
 
 	// For Cardano, we fetch blocks sequentially as the API doesn't support batch operations
 	for _, blockNum := range blockNums {
-		var block *cardano.Block
+		var (
+			header   *cardano.BlockResponse
+			txHashes []string
+			txs      []cardano.Transaction
+		)
 		err := c.failover.ExecuteWithRetry(ctx, func(api cardano.CardanoAPI) error {
-			b, err := api.GetBlockByNumber(ctx, blockNum)
-			block = b
+			var err error
+			header, err = api.GetBlockHeaderByNumber(ctx, blockNum)
+			if err != nil {
+				return err
+			}
+			txHashes, err = api.GetTransactionsByBlock(ctx, blockNum)
+			if err != nil {
+				return err
+			}
+			concurrency := c.config.Throttle.Concurrency
+			if concurrency <= 0 {
+				concurrency = 4
+			}
+			txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
 			return err
 		})
 
@@ -130,15 +172,15 @@ func (c *CardanoIndexer) fetchBlocks(
 			continue
 		}
 
-		if block == nil {
-			results = append(results, BlockResult{
-				Number: blockNum,
-				Error: &Error{
-					ErrorType: ErrorTypeBlockNil,
-					Message:   "block is nil",
-				},
-			})
-			continue
+		block := &cardano.Block{
+			Hash:       header.Hash,
+			Height:     header.Height,
+			Slot:       header.Slot,
+			Time:       header.Time,
+			ParentHash: header.ParentHash,
+		}
+		for i := range txs {
+			block.Txs = append(block.Txs, txs[i])
 		}
 
 		typesBlock := c.convertBlock(block)
@@ -157,30 +199,40 @@ func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
 
 	// Process each transaction in the block
 	for _, tx := range block.Txs {
-		// Create transactions for each output (UTXO model)
+		// Sender: first input address (representative for multi-input)
+		fromAddress := ""
+		if len(tx.Inputs) > 0 {
+			fromAddress = tx.Inputs[0].Address
+		}
+
+		feeAssigned := false
 		for _, output := range tx.Outputs {
-			// Try to find the corresponding input to get the sender
-			fromAddress := ""
-			if len(tx.Inputs) > 0 {
-				fromAddress = tx.Inputs[0].Address
+			for _, amt := range output.Amounts {
+				// Only emit assets with non-zero quantity
+				if amt.Quantity == "0" || amt.Quantity == "" {
+					continue
+				}
+				tr := types.Transaction{
+					TxHash:      tx.Hash,
+					NetworkId:   c.GetNetworkId(),
+					BlockNumber: block.Height,
+					FromAddress: fromAddress,
+					ToAddress:   output.Address,
+					Amount:      amt.Quantity,
+					Type:        "transfer",
+					Timestamp:   block.Time,
+				}
+				// ADA (lovelace) has empty AssetAddress, tokens keep unit as identifier
+				if amt.Unit != "lovelace" {
+					tr.AssetAddress = amt.Unit
+				}
+				// Assign fee to the first emitted transfer of this tx
+				if !feeAssigned {
+					tr.TxFee = decimal.NewFromInt(int64(tx.Fee))
+					feeAssigned = true
+				}
+				transactions = append(transactions, tr)
 			}
-
-			txFee := decimal.NewFromInt(int64(tx.Fee))
-
-			transaction := types.Transaction{
-				TxHash:       tx.Hash,
-				NetworkId:    c.GetNetworkId(),
-				BlockNumber:  block.Height,
-				FromAddress:  fromAddress,
-				ToAddress:    output.Address,
-				AssetAddress: "", // Cardano native asset, empty for ADA
-				Amount:       fmt.Sprintf("%d", output.Amount),
-				Type:         "transfer",
-				TxFee:        txFee,
-				Timestamp:    block.Time,
-			}
-
-			transactions = append(transactions, transaction)
 		}
 	}
 

@@ -169,7 +169,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"to", tx.ToAddress,
 				"chain", bw.chain.GetName(),
 				"addressType", addressType,
-				"txhash", tx.Hash,
+				"txhash", tx.TxHash,
 				"tx", tx,
 			)
 			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
