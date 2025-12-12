@@ -12,6 +12,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
 )
 
@@ -193,46 +194,55 @@ func (c *CardanoIndexer) fetchBlocks(
 	return results, nil
 }
 
-// convertBlock converts a Cardano block to the common Block type
+// convertBlock converts a Cardano block to the common Block type, embedding
+// rich transaction data for special handling in the BaseWorker.
 func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
-	transactions := make([]types.Transaction, 0)
+	transactions := make([]types.Transaction, 0, len(block.Txs))
 
-	// Process each transaction in the block
 	for _, tx := range block.Txs {
-		// Sender: first input address (representative for multi-input)
-		fromAddress := ""
-		if len(tx.Inputs) > 0 {
-			fromAddress = tx.Inputs[0].Address
+		// Create the rich transaction structure
+		richTx := &cardano.RichTransaction{
+			Hash:        tx.Hash,
+			BlockHeight: block.Height,
+			BlockHash:   block.Hash,
+			Fee:         decimal.NewFromInt(int64(tx.Fee)).String(),
+			Chain:       c.chainName,
+			Outputs:     make([]cardano.RichOutput, 0, len(tx.Outputs)),
 		}
 
-		feeAssigned := false
-		for _, output := range tx.Outputs {
-			for _, amt := range output.Amounts {
-				// Only emit assets with non-zero quantity
-				if amt.Quantity == "0" || amt.Quantity == "" {
-					continue
+		for _, out := range tx.Outputs {
+			assets := make([]cardano.RichAsset, 0, len(out.Amounts))
+			for _, amt := range out.Amounts {
+				if amt.Quantity != "" && amt.Quantity != "0" {
+					assets = append(assets, cardano.RichAsset{
+						Unit:     amt.Unit,
+						Quantity: amt.Quantity,
+					})
 				}
-				tr := types.Transaction{
-					TxHash:      tx.Hash,
-					NetworkId:   c.GetNetworkId(),
-					BlockNumber: block.Height,
-					FromAddress: fromAddress,
-					ToAddress:   output.Address,
-					Amount:      amt.Quantity,
-					Type:        "transfer",
-					Timestamp:   block.Time,
-				}
-				// ADA (lovelace) has empty AssetAddress, tokens keep unit as identifier
-				if amt.Unit != "lovelace" {
-					tr.AssetAddress = amt.Unit
-				}
-				// Assign fee to the first emitted transfer of this tx
-				if !feeAssigned {
-					tr.TxFee = decimal.NewFromInt(int64(tx.Fee))
-					feeAssigned = true
-				}
-				transactions = append(transactions, tr)
 			}
+
+			if len(assets) > 0 {
+				richTx.Outputs = append(richTx.Outputs, cardano.RichOutput{
+					Address: out.Address,
+					Assets:  assets,
+				})
+			}
+		}
+
+		// If the transaction has outputs, wrap the rich data into a generic
+		// types.Transaction for the worker.
+		if len(richTx.Outputs) > 0 {
+			payload, _ := utils.Encode(richTx)
+			// The generic transaction's fields are used for logging and basic info,
+			// while the rich data is in the payload.
+			genericTx := types.Transaction{
+				TxHash:      tx.Hash,
+				BlockNumber: block.Height,
+				Timestamp:   block.Time,
+				// We use the payload to carry the rich data.
+				Payload: payload,
+			}
+			transactions = append(transactions, genericTx)
 		}
 	}
 
