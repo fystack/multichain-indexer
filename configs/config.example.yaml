@@ -65,7 +65,7 @@ chains:
     internal_code: "CARDANO_MAINNET"
     network_id: "cardano"
     type: "cardano"
-    start_block: 10000000 # Cardano mainnet block height
+    start_block: 12768402 # Cardano mainnet block height
     poll_interval: "10s" # Cardano block time is ~20 seconds
     nodes:
       - url: "https://cardano-mainnet.blockfrost.io/api/v0"
@@ -80,7 +80,6 @@ chains:
     throttle:
       rps: 10 # Blockfrost free tier allows 10 req/s
       burst: 20
-      concurrency: 3
 
 # Infrastructure services
 services:
