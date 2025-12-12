@@ -8,9 +8,11 @@ import (
 	"log/slog"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/rpc/cardano"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/retry"
@@ -162,17 +164,59 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 	}
 
 	addressType := bw.chain.GetNetworkType()
+
 	for _, tx := range block.Transactions {
-		if bw.pubkeyStore.Exist(addressType, tx.ToAddress) {
-			bw.logger.Info("Emitting matched transaction",
-				"from", tx.FromAddress,
-				"to", tx.ToAddress,
-				"chain", bw.chain.GetName(),
-				"addressType", addressType,
-				"txhash", tx.TxHash,
-				"tx", tx,
-			)
-			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
+		// Check for Cardano's rich transaction payload
+		if len(tx.Payload) > 0 {
+			var richTx cardano.RichTransaction
+			if err := utils.Decode(tx.Payload, &richTx); err != nil {
+				bw.logger.Error("Failed to decode rich transaction payload", "error", err, "tx_hash", tx.TxHash)
+				continue
+			}
+
+			// Process multi-output transaction
+			for _, output := range richTx.Outputs {
+				if bw.pubkeyStore.Exist(addressType, output.Address) {
+					bw.logger.Info("Emitting matched Cardano transaction output",
+						"chain", bw.chain.GetName(),
+						"address", output.Address,
+						"tx_hash", richTx.Hash,
+						"assets_count", len(output.Assets),
+					)
+
+					// Flatten the multi-asset output into multiple single-asset events.
+					for _, asset := range output.Assets {
+						fee, _ := decimal.NewFromString(richTx.Fee)
+						eventTx := types.Transaction{
+							TxHash:      richTx.Hash,
+							BlockNumber: richTx.BlockHeight,
+							ToAddress:   output.Address,
+							Amount:      asset.Quantity,
+							Type:        "transfer",
+							TxFee:       fee,
+							Timestamp:   block.Timestamp,
+						}
+						// For lovelace, AssetAddress is empty. For tokens, it's the unit.
+						if asset.Unit != "lovelace" {
+							eventTx.AssetAddress = asset.Unit
+						}
+						_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &eventTx)
+					}
+				}
+			}
+		} else {
+			// Legacy logic for EVM/Tron
+			if bw.pubkeyStore.Exist(addressType, tx.ToAddress) {
+				bw.logger.Info("Emitting matched transaction",
+					"from", tx.FromAddress,
+					"to", tx.ToAddress,
+					"chain", bw.chain.GetName(),
+					"addressType", addressType,
+					"txhash", tx.TxHash,
+					"tx", tx,
+				)
+				_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
+			}
 		}
 	}
 }
