@@ -16,6 +16,7 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 - Polygon
 - Arbitrum
 - Optimism
+- Cardano
 
 **Roadmap:**
 - Bitcoin
@@ -221,6 +222,12 @@ Example: `ethereum_mainnet`, `tron_mainnet`.
 
 # Add manual worker to process missing blocks from Redis
 ./indexer index --chains=ethereum_mainnet,tron_mainnet --manual
+
+# Index Cardano mainnet
+./indexer index --chains=cardano_mainnet
+
+# Index multiple chains including Cardano
+./indexer index --chains=ethereum_mainnet,cardano_mainnet,tron_mainnet --catchup
 
 # Debug mode (extra logs)
 ./indexer index --chains=ethereum_mainnet,tron_mainnet --debug

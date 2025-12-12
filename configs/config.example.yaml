@@ -61,6 +61,27 @@ chains:
       - url: "https://bsc.blockrazor.xyz"
       - url: "https://bnb.rpc.subquery.network/public"
 
+  cardano_mainnet:
+    internal_code: "CARDANO_MAINNET"
+    network_id: "cardano"
+    type: "cardano"
+    start_block: 10000000 # Cardano mainnet block height
+    poll_interval: "10s" # Cardano block time is ~20 seconds
+    nodes:
+      - url: "https://cardano-mainnet.blockfrost.io/api/v0"
+        auth:
+          type: "header"
+          key: "project_id"
+          value: "BLOCKFROST_API_KEY" # Get from https://blockfrost.io/
+    client:
+      timeout: "30s"
+      max_retries: 3
+      retry_delay: "5s"
+    throttle:
+      rps: 10 # Blockfrost free tier allows 10 req/s
+      burst: 20
+      concurrency: 3
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
