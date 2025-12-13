@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	TransferEventTopicQueue = "transfer.event.dispatch"
+	TransferEventTopicQueue         = "transfer.event.dispatch"
+	MultiAssetTransferEventTopicQueue = "transfer.multi_asset_event.dispatch"
 )
 
 var (
