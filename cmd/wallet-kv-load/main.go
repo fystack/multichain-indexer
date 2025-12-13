@@ -73,6 +73,7 @@ func (c *RunCmd) Run() error {
 	candidateTypes := []enum.NetworkType{
 		enum.NetworkTypeTron,
 		enum.NetworkTypeEVM,
+		enum.NetworkTypeBtc,
 	}
 
 	for _, t := range candidateTypes {

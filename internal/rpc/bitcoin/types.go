@@ -63,3 +63,16 @@ type BlockchainInfo struct {
 	Headers       uint64 `json:"headers"`
 	BestBlockHash string `json:"bestblockhash"`
 }
+
+// MempoolEntry represents a mempool transaction entry
+type MempoolEntry struct {
+	VSize          int     `json:"vsize"`          // Virtual size
+	Weight         int     `json:"weight"`         // Transaction weight
+	Time           uint64  `json:"time"`           // Unix time when tx entered mempool
+	Height         uint64  `json:"height"`         // Block height when tx entered mempool
+	Fee            float64 `json:"fee"`            // Transaction fee in BTC
+	ModifiedFee    float64 `json:"modifiedfee"`    // Transaction fee with descendants
+	Depends        []string `json:"depends"`        // Unconfirmed parent transactions
+	SpentBy        []string `json:"spentby"`        // Unconfirmed child transactions
+	BIP125Replace  bool    `json:"bip125-replaceable"` // Whether tx signals RBF
+}

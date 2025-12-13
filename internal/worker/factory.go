@@ -103,6 +103,19 @@ func BuildWorkers(
 				deps.FailedChan,
 			),
 		}
+	case ModeMempool:
+		return []Worker{
+			NewMempoolWorker(
+				deps.Ctx,
+				idxr,
+				cfg,
+				deps.KVStore,
+				deps.BlockStore,
+				deps.Emitter,
+				deps.Pubkey,
+				deps.FailedChan,
+			),
+		}
 	default:
 		return nil
 	}
@@ -283,6 +296,11 @@ func CreateManagerWithWorkers(
 		)
 		addIfEnabled(ModeCatchup, managerCfg.EnableCatchup || cfg.Services.Worker.Catchup.Enabled)
 		addIfEnabled(ModeManual, managerCfg.EnableManual || cfg.Services.Worker.Manual.Enabled)
+
+		// Mempool worker is Bitcoin-specific (0-conf transaction tracking)
+		if chainCfg.Type == enum.NetworkTypeBtc {
+			addIfEnabled(ModeMempool, cfg.Services.Worker.Mempool.Enabled)
+		}
 	}
 
 	return manager

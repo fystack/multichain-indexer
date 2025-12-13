@@ -18,4 +18,9 @@ type BitcoinAPI interface {
 
 	// Network info
 	GetBlockchainInfo(ctx context.Context) (*BlockchainInfo, error)
+
+	// Mempool operations
+	GetRawMempool(ctx context.Context, verbose bool) (interface{}, error)
+	GetRawTransaction(ctx context.Context, txid string, verbose bool) (*Transaction, error)
+	GetMempoolEntry(ctx context.Context, txid string) (*MempoolEntry, error)
 }

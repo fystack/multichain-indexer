@@ -18,6 +18,7 @@ type WorkerConfig struct {
 	Rescanner WorkerModeConfig `yaml:"rescanner"`
 	Manual    WorkerModeConfig `yaml:"manual"`
 	Catchup   WorkerModeConfig `yaml:"catchup"`
+	Mempool   WorkerModeConfig `yaml:"mempool"`
 }
 
 type WorkerModeConfig struct {
