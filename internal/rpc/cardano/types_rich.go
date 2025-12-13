@@ -19,6 +19,7 @@ type RichTransaction struct {
 	Hash        string       `json:"hash"`
 	BlockHeight uint64       `json:"block_height"`
 	BlockHash   string       `json:"block_hash"`
+	FromAddress string       `json:"from_address"` // Representative from address (first input)
 	Outputs     []RichOutput `json:"outputs"`
 	Fee         string       `json:"fee"`
 	Chain       string       `json:"chain"`

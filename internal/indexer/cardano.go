@@ -200,11 +200,18 @@ func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
 	transactions := make([]types.Transaction, 0, len(block.Txs))
 
 	for _, tx := range block.Txs {
+		// Determine the representative from address (first input)
+		fromAddr := ""
+		if len(tx.Inputs) > 0 && tx.Inputs[0].Address != "" {
+			fromAddr = tx.Inputs[0].Address
+		}
+
 		// Create the rich transaction structure
 		richTx := &cardano.RichTransaction{
 			Hash:        tx.Hash,
 			BlockHeight: block.Height,
 			BlockHash:   block.Hash,
+			FromAddress: fromAddr,
 			Fee:         decimal.NewFromInt(int64(tx.Fee)).String(),
 			Chain:       c.chainName,
 			Outputs:     make([]cardano.RichOutput, 0, len(tx.Outputs)),

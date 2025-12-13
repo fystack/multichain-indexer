@@ -185,24 +185,27 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 						"assets_count", len(output.Assets),
 					)
 
-					// Flatten the multi-asset output into multiple single-asset events.
-					for _, asset := range output.Assets {
-						fee, _ := decimal.NewFromString(richTx.Fee)
-						eventTx := types.Transaction{
-							TxHash:      richTx.Hash,
-							BlockNumber: richTx.BlockHeight,
-							ToAddress:   output.Address,
-							Amount:      asset.Quantity,
-							Type:        "transfer",
-							TxFee:       fee,
-							Timestamp:   block.Timestamp,
+					// Create a single, optimized event for the multi-asset transaction output.
+					assetTransfers := make([]events.AssetTransfer, len(output.Assets))
+					for i, asset := range output.Assets {
+						assetTransfers[i] = events.AssetTransfer{
+							Unit:     asset.Unit,
+							Quantity: asset.Quantity,
 						}
-						// For lovelace, AssetAddress is empty. For tokens, it's the unit.
-						if asset.Unit != "lovelace" {
-							eventTx.AssetAddress = asset.Unit
-						}
-						_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &eventTx)
 					}
+
+					event := events.MultiAssetTransactionEvent{
+						Chain:       richTx.Chain,
+						TxHash:      richTx.Hash,
+						BlockHeight: richTx.BlockHeight,
+						FromAddress: richTx.FromAddress,
+						ToAddress:   output.Address,
+						Assets:      assetTransfers,
+						Fee:         richTx.Fee,
+						Timestamp:   block.Timestamp,
+					}
+
+					_ = bw.emitter.EmitMultiAssetTransaction(event)
 				}
 			}
 		} else {
