@@ -280,7 +280,8 @@ func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, e
 }
 
 func (rw *RegularWorker) isReorgCheckRequired() bool {
-	return rw.chain.GetNetworkType() == enum.NetworkTypeEVM
+	networkType := rw.chain.GetNetworkType()
+	return networkType == enum.NetworkTypeEVM || networkType == enum.NetworkTypeBtc
 }
 
 // addBlockHash adds a block hash to the array, maintaining max size

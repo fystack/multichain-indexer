@@ -173,10 +173,17 @@ func (b *BitcoinIndexer) GetBlocksByNumbers(
 func (b *BitcoinIndexer) convertBlock(btcBlock *bitcoin.Block) (*types.Block, error) {
 	var allTransfers []types.Transaction
 
+	// Calculate latest block height from confirmations
+	// If this block has N confirmations, latest block is at (height + N - 1)
+	latestBlock := btcBlock.Height
+	if btcBlock.Confirmations > 0 {
+		latestBlock = btcBlock.Height + btcBlock.Confirmations - 1
+	}
+
 	for _, tx := range btcBlock.Tx {
 		// Extract transfers for monitored addresses
 		// This handles both incoming (TO) and outgoing (FROM) transfers
-		transfers := b.extractTransfers(&tx, btcBlock.Height, btcBlock.Time)
+		transfers := b.extractTransfers(&tx, btcBlock.Height, btcBlock.Time, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 	}
 
@@ -193,7 +200,7 @@ func (b *BitcoinIndexer) convertBlock(btcBlock *bitcoin.Block) (*types.Block, er
 // This handles both incoming (TO monitored addresses) and outgoing (FROM monitored addresses) transfers
 func (b *BitcoinIndexer) extractTransfers(
 	tx *bitcoin.Transaction,
-	blockNumber, ts uint64,
+	blockNumber, ts, latestBlock uint64,
 ) []types.Transaction {
 	var transfers []types.Transaction
 
@@ -262,17 +269,29 @@ func (b *BitcoinIndexer) extractTransfers(
 		// Convert BTC to satoshis for precision (multiply by 1e8)
 		amountSat := int64(vout.Value * 1e8)
 
+		// Calculate confirmations: 0 if in mempool, otherwise (latestBlock - blockNumber + 1)
+		var confirmations uint64
+		if blockNumber == 0 {
+			confirmations = 0 // Mempool transaction
+		} else if latestBlock >= blockNumber {
+			confirmations = latestBlock - blockNumber + 1
+		} else {
+			confirmations = 0 // Should not happen, but handle edge case
+		}
+
 		transfer := types.Transaction{
-			TxHash:       tx.TxID,
-			NetworkId:    b.config.NetworkId,
-			BlockNumber:  blockNumber,
-			FromAddress:  fromAddr,
-			ToAddress:    toAddr,
-			AssetAddress: "", // Empty for native BTC
-			Amount:       strconv.FormatInt(amountSat, 10),
-			Type:         constant.TxnTypeTransfer,
-			TxFee:        fee,
-			Timestamp:    ts,
+			TxHash:        tx.TxID,
+			NetworkId:     b.config.NetworkId,
+			BlockNumber:   blockNumber,
+			FromAddress:   fromAddr,
+			ToAddress:     toAddr,
+			AssetAddress:  "", // Empty for native BTC
+			Amount:        strconv.FormatInt(amountSat, 10),
+			Type:          constant.TxnTypeTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
+			Confirmations: confirmations,
+			Status:        types.CalculateStatus(confirmations),
 		}
 
 		transfers = append(transfers, transfer)
@@ -300,17 +319,29 @@ func (b *BitcoinIndexer) extractTransfers(
 			// This is a true outgoing transfer
 			amountSat := int64(vout.Value * 1e8)
 
+			// Calculate confirmations
+			var confirmations uint64
+			if blockNumber == 0 {
+				confirmations = 0
+			} else if latestBlock >= blockNumber {
+				confirmations = latestBlock - blockNumber + 1
+			} else {
+				confirmations = 0
+			}
+
 			transfer := types.Transaction{
-				TxHash:       tx.TxID,
-				NetworkId:    b.config.NetworkId,
-				BlockNumber:  blockNumber,
-				FromAddress:  fromAddr,
-				ToAddress:    toAddr,
-				AssetAddress: "",
-				Amount:       strconv.FormatInt(amountSat, 10),
-				Type:         constant.TxnTypeTransfer,
-				TxFee:        decimal.Zero, // Fee already assigned to incoming transfer
-				Timestamp:    ts,
+				TxHash:        tx.TxID,
+				NetworkId:     b.config.NetworkId,
+				BlockNumber:   blockNumber,
+				FromAddress:   fromAddr,
+				ToAddress:     toAddr,
+				AssetAddress:  "",
+				Amount:        strconv.FormatInt(amountSat, 10),
+				Type:          constant.TxnTypeTransfer,
+				TxFee:         decimal.Zero, // Fee already assigned to incoming transfer
+				Timestamp:     ts,
+				Confirmations: confirmations,
+				Status:        types.CalculateStatus(confirmations),
 			}
 
 			transfers = append(transfers, transfer)
@@ -340,4 +371,55 @@ func (b *BitcoinIndexer) GetConfirmedHeight(ctx context.Context) (uint64, error)
 	}
 
 	return latest - b.confirmations, nil
+}
+
+// GetMempoolTransactions fetches and processes transactions from the mempool
+// Returns transactions involving monitored addresses with 0 confirmations
+func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Transaction, error) {
+	// Get Bitcoin client from failover
+	provider, err := b.failover.GetBestProvider()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bitcoin provider: %w", err)
+	}
+
+	btcClient, ok := provider.Client.(*bitcoin.BitcoinClient)
+	if !ok {
+		return nil, fmt.Errorf("invalid client type")
+	}
+
+	// Get latest block height for context
+	latestBlock, err := b.GetLatestBlockNumber(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get latest block: %w", err)
+	}
+
+	// Get mempool transaction IDs
+	result, err := btcClient.GetRawMempool(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get mempool: %w", err)
+	}
+
+	txids, ok := result.([]string)
+	if !ok {
+		return nil, fmt.Errorf("unexpected mempool format")
+	}
+
+	// Process each transaction
+	var allTransfers []types.Transaction
+	currentTime := uint64(time.Now().Unix())
+
+	for _, txid := range txids {
+		// Fetch full transaction details
+		tx, err := btcClient.GetRawTransaction(ctx, txid, true)
+		if err != nil {
+			// Skip transactions we can't fetch (might be confirmed already)
+			continue
+		}
+
+		// Extract transfers (blockNumber=0 for mempool, confirmations will be 0)
+		transfers := b.extractTransfers(tx, 0, currentTime, latestBlock)
+		allTransfers = append(allTransfers, transfers...)
+	}
+
+	return allTransfers, nil
 }

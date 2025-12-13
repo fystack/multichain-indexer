@@ -2,7 +2,7 @@ INDEXER_BINARY := indexer
 KV_MIGRATE_BINARY := kv-migrate
 WALLET_KV_LOAD_BINARY := wallet-kv-load
 
-.PHONY: build build-all clean run stop run-ethereum-mainnet run-tron-mainnet wallet-kv-load
+.PHONY: build build-all clean run stop run-ethereum-mainnet run-tron-mainnet run-bitcoin-testnet run-bitcoin-mainnet wallet-kv-load
 
 build:
 	go build -o $(INDEXER_BINARY) ./cmd/indexer
@@ -26,6 +26,12 @@ run-ethereum-mainnet: build
 
 run-tron-mainnet: build
 	./$(INDEXER_BINARY) index --chain=tron-mainnet --catchup
+
+run-bitcoin-testnet: build
+	./$(INDEXER_BINARY) index --chain=bitcoin_testnet --catchup
+
+run-bitcoin-mainnet: build
+	./$(INDEXER_BINARY) index --chain=bitcoin_mainnet --catchup
 
 wallet-kv-load: build-wallet-kv-load
 	./$(WALLET_KV_LOAD_BINARY)

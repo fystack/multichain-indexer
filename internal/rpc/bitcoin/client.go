@@ -114,3 +114,71 @@ func (c *BitcoinClient) GetBlockchainInfo(ctx context.Context) (*BlockchainInfo,
 	}
 	return &result, nil
 }
+
+// GetRawMempool returns all transaction IDs in the mempool
+// If verbose is false, returns []string of txids
+// If verbose is true, returns map[string]MempoolEntry with details
+func (c *BitcoinClient) GetRawMempool(ctx context.Context, verbose bool) (interface{}, error) {
+	resp, err := c.CallRPC(ctx, "getrawmempool", []interface{}{verbose})
+	if err != nil {
+		return nil, fmt.Errorf("getrawmempool failed: %w", err)
+	}
+
+	if !verbose {
+		// Parse as string array
+		var txids []string
+		if err := json.Unmarshal(resp.Result, &txids); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal mempool txids: %w", err)
+		}
+		return txids, nil
+	}
+
+	// Parse as map of entries
+	var entries map[string]MempoolEntry
+	if err := json.Unmarshal(resp.Result, &entries); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal mempool entries: %w", err)
+	}
+	return entries, nil
+}
+
+// GetRawTransaction returns a transaction by txid
+// If verbose is false, returns raw hex string
+// If verbose is true, returns Transaction struct
+func (c *BitcoinClient) GetRawTransaction(ctx context.Context, txid string, verbose bool) (*Transaction, error) {
+	verbosity := 0
+	if verbose {
+		verbosity = 2 // Verbosity 2 includes prevout data for fee calculation
+	}
+
+	resp, err := c.CallRPC(ctx, "getrawtransaction", []interface{}{txid, verbosity})
+	if err != nil {
+		return nil, fmt.Errorf("getrawtransaction failed for %s: %w", txid, err)
+	}
+
+	if !verbose {
+		// Raw hex string - not useful for our purposes
+		return nil, fmt.Errorf("raw hex transaction not supported, use verbose=true")
+	}
+
+	var tx Transaction
+	if err := json.Unmarshal(resp.Result, &tx); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal transaction %s: %w", txid, err)
+	}
+
+	return &tx, nil
+}
+
+// GetMempoolEntry returns mempool entry for a specific transaction
+func (c *BitcoinClient) GetMempoolEntry(ctx context.Context, txid string) (*MempoolEntry, error) {
+	resp, err := c.CallRPC(ctx, "getmempoolentry", []interface{}{txid})
+	if err != nil {
+		return nil, fmt.Errorf("getmempoolentry failed for %s: %w", txid, err)
+	}
+
+	var entry MempoolEntry
+	if err := json.Unmarshal(resp.Result, &entry); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal mempool entry %s: %w", txid, err)
+	}
+
+	return &entry, nil
+}
