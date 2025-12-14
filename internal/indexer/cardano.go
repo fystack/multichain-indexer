@@ -207,10 +207,13 @@ func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
 		if tx.ValidContract != nil && !*tx.ValidContract {
 			continue
 		}
-		// Representative from address: first input if available
+		// Find a representative from address from non-reference, non-collateral inputs
 		fromAddr := ""
-		if len(tx.Inputs) > 0 && tx.Inputs[0].Address != "" {
-			fromAddr = tx.Inputs[0].Address
+		for _, inp := range tx.Inputs {
+			if !inp.Reference && !inp.Collateral && inp.Address != "" {
+				fromAddr = inp.Address
+				break
+			}
 		}
 
 		// Convert fee (lovelace -> ADA) and assign to the first transfer produced by this tx
@@ -218,6 +221,10 @@ func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
 		feeAssigned := false
 
 		for _, out := range tx.Outputs {
+			// Skip collateral outputs as they are not considered transfers to the recipient
+			if out.Collateral {
+				continue
+			}
 			for _, amt := range out.Amounts {
 				if amt.Quantity == "" || amt.Quantity == "0" {
 					continue

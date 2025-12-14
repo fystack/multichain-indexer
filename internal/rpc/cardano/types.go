@@ -23,17 +23,20 @@ type Transaction struct {
 
 // Input represents a transaction input
 type Input struct {
-	Address string   `json:"address"`
-	Amounts []Amount `json:"amounts"`
-	TxHash  string   `json:"tx_hash"`
-	Index   uint32   `json:"output_index"`
+	Address    string   `json:"address"`
+	Amounts    []Amount `json:"amounts"`
+	TxHash     string   `json:"tx_hash"`
+	Index      uint32   `json:"output_index"`
+	Collateral bool     `json:"collateral"`
+	Reference  bool     `json:"reference"`
 }
 
 // Output represents a transaction output
 type Output struct {
-	Address string   `json:"address"`
-	Amounts []Amount `json:"amounts"`
-	Index   uint32   `json:"output_index"`
+	Address    string   `json:"address"`
+	Amounts    []Amount `json:"amounts"`
+	Index      uint32   `json:"output_index"`
+	Collateral bool     `json:"collateral"`
 }
 
 // BlockResponse is the response from block query
@@ -65,6 +68,8 @@ type UTxO struct {
 	Amount      []Amount `json:"amount"`
 	TxHash      string   `json:"tx_hash"`
 	OutputIndex uint32   `json:"output_index"`
+	Collateral  bool     `json:"collateral"`
+	Reference   bool     `json:"reference"`
 }
 
 type TxUTxOsResponse struct {

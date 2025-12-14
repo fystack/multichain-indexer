@@ -200,10 +200,12 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 	inputs := make([]Input, 0, len(utxos.Inputs))
 	for _, inp := range utxos.Inputs {
 		inputs = append(inputs, Input{
-			Address: inp.Address,
-			Amounts: inp.Amount,
-			TxHash:  inp.TxHash,
-			Index:   inp.OutputIndex,
+			Address:    inp.Address,
+			Amounts:    inp.Amount,
+			TxHash:     inp.TxHash,
+			Index:      inp.OutputIndex,
+			Collateral: inp.Collateral,
+			Reference:  inp.Reference,
 		})
 	}
 
@@ -211,9 +213,10 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 	outputs := make([]Output, 0, len(utxos.Outputs))
 	for _, out := range utxos.Outputs {
 		outputs = append(outputs, Output{
-			Address: out.Address,
-			Amounts: out.Amount,
-			Index:   out.OutputIndex,
+			Address:    out.Address,
+			Amounts:    out.Amount,
+			Index:      out.OutputIndex,
+			Collateral: out.Collateral,
 		})
 	}
 
