@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -260,6 +261,16 @@ func (c *CardanoClient) FetchTransactionsParallel(
 			defer func() { <-sem }()
 			tx, err := c.GetTransaction(gctx, h)
 			if err != nil {
+				// Detect rate-limit style errors (Blockfrost cancels context on quota)
+				msg := strings.ToLower(err.Error())
+				if strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") ||
+					(strings.Contains(msg, "http request failed") && strings.Contains(msg, "context canceled")) {
+					return err
+				}
+				// If group context is already canceled due to prior error, suppress noise
+				if gctx.Err() != nil {
+					return nil
+				}
 				logger.Warn("parallel tx fetch failed", "tx_hash", h, "error", err)
 				return nil // continue other txs
 			}
@@ -272,9 +283,18 @@ func (c *CardanoClient) FetchTransactionsParallel(
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+	if err != nil {
+		// Propagate rate-limit style errors upward to trigger failover.
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") ||
+			(strings.Contains(msg, "http request failed") && strings.Contains(msg, "context canceled")) {
+			return nil, err
+		}
+		// Otherwise, keep partial results and continue.
 		logger.Warn("fetch transactions parallel completed with error", "error", err)
 	}
 	return results, nil
 }
+
 
