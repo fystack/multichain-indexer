@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +14,8 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 	"golang.org/x/sync/errgroup"
 )
+
+const DefaultTxFetchConcurrency = 4
 
 type CardanoClient struct {
 	*rpc.BaseClient
@@ -84,7 +87,7 @@ func (c *CardanoClient) GetBlockByNumber(ctx context.Context, blockNumber uint64
 	}
 
 	// Fetch transaction details (parallel-safe)
-	txs, _ := c.FetchTransactionsParallel(ctx, txHashes, 4)
+	txs, _ := c.FetchTransactionsParallel(ctx, txHashes, DefaultTxFetchConcurrency)
 
 	return &Block{
 		Hash:       br.Hash,
@@ -198,10 +201,12 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 	inputs := make([]Input, 0, len(utxos.Inputs))
 	for _, inp := range utxos.Inputs {
 		inputs = append(inputs, Input{
-			Address: inp.Address,
-			Amounts: inp.Amount,
-			TxHash:  inp.TxHash,
-			Index:   inp.OutputIndex,
+			Address:    inp.Address,
+			Amounts:    inp.Amount,
+			TxHash:     inp.TxHash,
+			Index:      inp.OutputIndex,
+			Collateral: inp.Collateral,
+			Reference:  inp.Reference,
 		})
 	}
 
@@ -209,21 +214,23 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 	outputs := make([]Output, 0, len(utxos.Outputs))
 	for _, out := range utxos.Outputs {
 		outputs = append(outputs, Output{
-			Address: out.Address,
-			Amounts: out.Amount,
-			Index:   out.OutputIndex,
+			Address:    out.Address,
+			Amounts:    out.Amount,
+			Index:      out.OutputIndex,
+			Collateral: out.Collateral,
 		})
 	}
 
 	fees, _ := strconv.ParseUint(txResp.Fees, 10, 64)
 
 	return &Transaction{
-		Hash:     txResp.Hash,
-		Slot:     txResp.Slot,
-		BlockNum: txResp.Height,
-		Inputs:   inputs,
-		Outputs:  outputs,
-		Fee:      fees,
+		Hash:          txResp.Hash,
+		Slot:          txResp.Slot,
+		BlockNum:      txResp.Height,
+		Inputs:        inputs,
+		Outputs:       outputs,
+		Fee:           fees,
+		ValidContract: txResp.ValidContract,
 	}, nil
 }
 
@@ -234,7 +241,7 @@ func (c *CardanoClient) FetchTransactionsParallel(
 	concurrency int,
 ) ([]Transaction, error) {
 	if concurrency <= 0 {
-		concurrency = 4
+		concurrency = DefaultTxFetchConcurrency
 	}
 	if len(txHashes) == 0 {
 		return nil, nil
@@ -254,6 +261,16 @@ func (c *CardanoClient) FetchTransactionsParallel(
 			defer func() { <-sem }()
 			tx, err := c.GetTransaction(gctx, h)
 			if err != nil {
+				// Detect rate-limit style errors (Blockfrost cancels context on quota)
+				msg := strings.ToLower(err.Error())
+				if strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") ||
+					(strings.Contains(msg, "http request failed") && strings.Contains(msg, "context canceled")) {
+					return err
+				}
+				// If group context is already canceled due to prior error, suppress noise
+				if gctx.Err() != nil {
+					return nil
+				}
 				logger.Warn("parallel tx fetch failed", "tx_hash", h, "error", err)
 				return nil // continue other txs
 			}
@@ -266,9 +283,18 @@ func (c *CardanoClient) FetchTransactionsParallel(
 		})
 	}
 
-	if err := g.Wait(); err != nil {
+	err := g.Wait()
+	if err != nil {
+		// Propagate rate-limit style errors upward to trigger failover.
+		msg := strings.ToLower(err.Error())
+		if strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") ||
+			(strings.Contains(msg, "http request failed") && strings.Contains(msg, "context canceled")) {
+			return nil, err
+		}
+		// Otherwise, keep partial results and continue.
 		logger.Warn("fetch transactions parallel completed with error", "error", err)
 	}
 	return results, nil
 }
+
 

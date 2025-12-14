@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"sync"
+
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/cardano"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
-	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
 )
+
 
 type CardanoIndexer struct {
 	chainName string
@@ -74,7 +77,11 @@ func (c *CardanoIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*typ
 		}
 		concurrency := c.config.Throttle.Concurrency
 		if concurrency <= 0 {
-			concurrency = 4
+			concurrency = cardano.DefaultTxFetchConcurrency
+		}
+		// Clamp concurrency to the number of transactions to avoid creating useless goroutines
+		if numTxs := len(txHashes); numTxs > 0 && numTxs < concurrency {
+			concurrency = numTxs
 		}
 		txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
 		return err
@@ -134,122 +141,123 @@ func (c *CardanoIndexer) fetchBlocks(
 		return nil, nil
 	}
 
-	results := make([]BlockResult, 0, len(blockNums))
+	workers := len(blockNums)
+	if c.config.Throttle.Concurrency > 0 && c.config.Throttle.Concurrency < workers {
+		workers = c.config.Throttle.Concurrency
+	} else if c.config.Throttle.Concurrency <= 0 && workers > cardano.DefaultTxFetchConcurrency {
+		workers = cardano.DefaultTxFetchConcurrency
+	}
 
-	// For Cardano, we fetch blocks sequentially as the API doesn't support batch operations
-	for _, blockNum := range blockNums {
-		var (
-			header   *cardano.BlockResponse
-			txHashes []string
-			txs      []cardano.Transaction
-		)
-		err := c.failover.ExecuteWithRetry(ctx, func(api cardano.CardanoAPI) error {
-			var err error
-			header, err = api.GetBlockHeaderByNumber(ctx, blockNum)
-			if err != nil {
-				return err
+	type job struct {
+		num   uint64
+		index int
+	}
+
+	jobs := make(chan job, len(blockNums))
+	results := make([]BlockResult, len(blockNums))
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				// Early exit if context is canceled
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				block, err := c.GetBlock(ctx, j.num)
+				if err != nil {
+					logger.Warn("failed to fetch block", "block", j.num, "error", err)
+					results[j.index] = BlockResult{
+						Number: j.num,
+						Error:  &Error{ErrorType: ErrorTypeBlockNotFound, Message: err.Error()},
+					}
+				} else {
+					results[j.index] = BlockResult{Number: j.num, Block: block}
+				}
 			}
-			txHashes, err = api.GetTransactionsByBlock(ctx, blockNum)
-			if err != nil {
-				return err
+		}()
+	}
+
+	// Feed jobs to workers and close channel when done
+	go func() {
+		defer close(jobs)
+		for i, num := range blockNums {
+			select {
+			case jobs <- job{num: num, index: i}:
+			case <-ctx.Done():
+				return
 			}
-			concurrency := c.config.Throttle.Concurrency
-			if concurrency <= 0 {
-				concurrency = 4
-			}
-			txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
-			return err
-		})
-
-		if err != nil {
-			logger.Warn("failed to fetch block", "block", blockNum, "error", err)
-			results = append(results, BlockResult{
-				Number: blockNum,
-				Error: &Error{
-					ErrorType: ErrorTypeBlockNotFound,
-					Message:   err.Error(),
-				},
-			})
-			continue
 		}
+	}()
 
-		block := &cardano.Block{
-			Hash:       header.Hash,
-			Height:     header.Height,
-			Slot:       header.Slot,
-			Time:       header.Time,
-			ParentHash: header.ParentHash,
-		}
-		for i := range txs {
-			block.Txs = append(block.Txs, txs[i])
-		}
+	wg.Wait()
 
-		typesBlock := c.convertBlock(block)
-		results = append(results, BlockResult{
-			Number: blockNum,
-			Block:  typesBlock,
-		})
+	// Check if the context was canceled during the operation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	return results, nil
 }
 
-// convertBlock converts a Cardano block to the common Block type, embedding
-// rich transaction data for special handling in the BaseWorker.
+// convertBlock converts a Cardano block to the common Block type
 func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
-	transactions := make([]types.Transaction, 0, len(block.Txs))
+	// Pre-allocate slice with a reasonable capacity to reduce re-allocations
+	estimatedSize := len(block.Txs) * 2
+	transactions := make([]types.Transaction, 0, estimatedSize)
 
 	for _, tx := range block.Txs {
-		// Determine the representative from address (first input)
+		// Skip failed transactions (e.g., script validation failed)
+		// valid when: no script (nil) OR smart contract executed successfully (true)
+		if tx.ValidContract != nil && !*tx.ValidContract {
+			continue
+		}
+		// Find a representative from address from non-reference, non-collateral inputs
 		fromAddr := ""
-		if len(tx.Inputs) > 0 && tx.Inputs[0].Address != "" {
-			fromAddr = tx.Inputs[0].Address
+		for _, inp := range tx.Inputs {
+			if !inp.Reference && !inp.Collateral && inp.Address != "" {
+				fromAddr = inp.Address
+				break
+			}
 		}
 
-		// Create the rich transaction structure
-		richTx := &cardano.RichTransaction{
-			Hash:        tx.Hash,
-			BlockHeight: block.Height,
-			BlockHash:   block.Hash,
-			FromAddress: fromAddr,
-			Fee:         decimal.NewFromInt(int64(tx.Fee)).String(),
-			Chain:       c.chainName,
-			Outputs:     make([]cardano.RichOutput, 0, len(tx.Outputs)),
-		}
+		// Convert fee (lovelace -> ADA) and assign to the first transfer produced by this tx
+		feeAda := decimal.NewFromInt(int64(tx.Fee)).Div(decimal.NewFromInt(1_000_000))
+		feeAssigned := false
 
 		for _, out := range tx.Outputs {
-			assets := make([]cardano.RichAsset, 0, len(out.Amounts))
+			// Skip collateral outputs as they are not considered transfers to the recipient
+			if out.Collateral {
+				continue
+			}
 			for _, amt := range out.Amounts {
-				if amt.Quantity != "" && amt.Quantity != "0" {
-					assets = append(assets, cardano.RichAsset{
-						Unit:     amt.Unit,
-						Quantity: amt.Quantity,
-					})
+				if amt.Quantity == "" || amt.Quantity == "0" {
+					continue
 				}
+				tr := types.Transaction{
+					TxHash:      tx.Hash,
+					NetworkId:   c.GetNetworkId(),
+					BlockNumber: block.Height,
+					FromAddress: fromAddr,
+					ToAddress:   out.Address,
+					Amount:      amt.Quantity,
+					Type:        constant.TxnTypeTransfer,
+					Timestamp:   block.Time,
+				}
+				if amt.Unit != "lovelace" {
+					tr.AssetAddress = amt.Unit
+				}
+				if !feeAssigned {
+					tr.TxFee = feeAda
+					feeAssigned = true
+				}
+				transactions = append(transactions, tr)
 			}
-
-			if len(assets) > 0 {
-				richTx.Outputs = append(richTx.Outputs, cardano.RichOutput{
-					Address: out.Address,
-					Assets:  assets,
-				})
-			}
-		}
-
-		// If the transaction has outputs, wrap the rich data into a generic
-		// types.Transaction for the worker.
-		if len(richTx.Outputs) > 0 {
-			payload, _ := utils.Encode(richTx)
-			// The generic transaction's fields are used for logging and basic info,
-			// while the rich data is in the payload.
-			genericTx := types.Transaction{
-				TxHash:      tx.Hash,
-				BlockNumber: block.Height,
-				Timestamp:   block.Time,
-				// We use the payload to carry the rich data.
-				Payload: payload,
-			}
-			transactions = append(transactions, genericTx)
 		}
 	}
 

@@ -8,11 +8,9 @@ import (
 	"log/slog"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
-	"github.com/fystack/multichain-indexer/internal/rpc/cardano"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
-	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/retry"
@@ -167,60 +165,16 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 	addressType := bw.chain.GetNetworkType()
 
 	for _, tx := range block.Transactions {
-		// Check for Cardano's rich transaction payload
-		if len(tx.Payload) > 0 {
-			var richTx cardano.RichTransaction
-			if err := utils.Decode(tx.Payload, &richTx); err != nil {
-				bw.logger.Error("Failed to decode rich transaction payload", "error", err, "tx_hash", tx.TxHash)
-				continue
-			}
-
-			// Process multi-output transaction
-			for _, output := range richTx.Outputs {
-				if bw.pubkeyStore.Exist(addressType, output.Address) {
-					bw.logger.Info("Emitting matched Cardano transaction output",
-						"chain", bw.chain.GetName(),
-						"address", output.Address,
-						"tx_hash", richTx.Hash,
-						"assets_count", len(output.Assets),
-					)
-
-					// Create a single, optimized event for the multi-asset transaction output.
-					assetTransfers := make([]events.AssetTransfer, len(output.Assets))
-					for i, asset := range output.Assets {
-						assetTransfers[i] = events.AssetTransfer{
-							Unit:     asset.Unit,
-							Quantity: asset.Quantity,
-						}
-					}
-
-					event := events.MultiAssetTransactionEvent{
-						Chain:       richTx.Chain,
-						TxHash:      richTx.Hash,
-						BlockHeight: richTx.BlockHeight,
-						FromAddress: richTx.FromAddress,
-						ToAddress:   output.Address,
-						Assets:      assetTransfers,
-						Fee:         richTx.Fee,
-						Timestamp:   block.Timestamp,
-					}
-
-					_ = bw.emitter.EmitMultiAssetTransaction(event)
-				}
-			}
-		} else {
-			// Legacy logic for EVM/Tron
-			if bw.pubkeyStore.Exist(addressType, tx.ToAddress) {
-				bw.logger.Info("Emitting matched transaction",
-					"from", tx.FromAddress,
-					"to", tx.ToAddress,
-					"chain", bw.chain.GetName(),
-					"addressType", addressType,
-					"txhash", tx.TxHash,
-					"tx", tx,
-				)
-				_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
-			}
+		if bw.pubkeyStore.Exist(addressType, tx.ToAddress) {
+			bw.logger.Info("Emitting matched transaction",
+				"from", tx.FromAddress,
+				"to", tx.ToAddress,
+				"chain", bw.chain.GetName(),
+				"addressType", addressType,
+				"txhash", tx.TxHash,
+				"tx", tx,
+			)
+			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
 		}
 	}
 }

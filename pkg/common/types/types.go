@@ -29,7 +29,6 @@ type Transaction struct {
 	Type         string          `json:"type"`
 	TxFee        decimal.Decimal `json:"txFee"`
 	Timestamp    uint64          `json:"timestamp"`
-	Payload      []byte          `json:"-"` // Raw payload for chain-specific data, e.g., RichTransaction for Cardano
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
@@ -73,10 +72,6 @@ func (t Transaction) Hash() string {
 	builder.WriteString(t.ToAddress)
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
-	if len(t.Payload) > 0 {
-		builder.WriteByte('|')
-		builder.Write(t.Payload)
-	}
 	hash := sha256.Sum256([]byte(builder.String()))
 	return fmt.Sprintf("%x", hash)
 }
