@@ -16,8 +16,6 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const defaultCardanoTxFetchConcurrency = 4
-
 
 type CardanoIndexer struct {
 	chainName string
@@ -77,7 +75,7 @@ func (c *CardanoIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*typ
 		}
 		concurrency := c.config.Throttle.Concurrency
 		if concurrency <= 0 {
-			concurrency = 4
+			concurrency = cardano.DefaultTxFetchConcurrency
 		}
 		txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
 		return err
@@ -158,7 +156,7 @@ func (c *CardanoIndexer) fetchBlocks(
 			}
 			concurrency := c.config.Throttle.Concurrency
 			if concurrency <= 0 {
-				concurrency = 4
+				concurrency = cardano.DefaultTxFetchConcurrency
 			}
 			txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
 			return err
