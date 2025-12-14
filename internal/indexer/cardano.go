@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"sync"
+
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/cardano"
@@ -77,6 +79,10 @@ func (c *CardanoIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*typ
 		if concurrency <= 0 {
 			concurrency = cardano.DefaultTxFetchConcurrency
 		}
+		// Clamp concurrency to the number of transactions to avoid creating useless goroutines
+		if numTxs := len(txHashes); numTxs > 0 && numTxs < concurrency {
+			concurrency = numTxs
+		}
 		txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
 		return err
 	})
@@ -135,61 +141,65 @@ func (c *CardanoIndexer) fetchBlocks(
 		return nil, nil
 	}
 
-	results := make([]BlockResult, 0, len(blockNums))
+	workers := len(blockNums)
+	if c.config.Throttle.Concurrency > 0 && c.config.Throttle.Concurrency < workers {
+		workers = c.config.Throttle.Concurrency
+	} else if c.config.Throttle.Concurrency <= 0 && workers > cardano.DefaultTxFetchConcurrency {
+		workers = cardano.DefaultTxFetchConcurrency
+	}
 
-	// For Cardano, we fetch blocks sequentially as the API doesn't support batch operations
-	for _, blockNum := range blockNums {
-		var (
-			header   *cardano.BlockResponse
-			txHashes []string
-			txs      []cardano.Transaction
-		)
-		err := c.failover.ExecuteWithRetry(ctx, func(api cardano.CardanoAPI) error {
-			var err error
-			header, err = api.GetBlockHeaderByNumber(ctx, blockNum)
-			if err != nil {
-				return err
+	type job struct {
+		num   uint64
+		index int
+	}
+
+	jobs := make(chan job, len(blockNums))
+	results := make([]BlockResult, len(blockNums))
+
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := range jobs {
+				// Early exit if context is canceled
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+
+				block, err := c.GetBlock(ctx, j.num)
+				if err != nil {
+					logger.Warn("failed to fetch block", "block", j.num, "error", err)
+					results[j.index] = BlockResult{
+						Number: j.num,
+						Error:  &Error{ErrorType: ErrorTypeBlockNotFound, Message: err.Error()},
+					}
+				} else {
+					results[j.index] = BlockResult{Number: j.num, Block: block}
+				}
 			}
-			txHashes, err = api.GetTransactionsByBlock(ctx, blockNum)
-			if err != nil {
-				return err
+		}()
+	}
+
+	// Feed jobs to workers and close channel when done
+	go func() {
+		defer close(jobs)
+		for i, num := range blockNums {
+			select {
+			case jobs <- job{num: num, index: i}:
+			case <-ctx.Done():
+				return
 			}
-			concurrency := c.config.Throttle.Concurrency
-			if concurrency <= 0 {
-				concurrency = cardano.DefaultTxFetchConcurrency
-			}
-			txs, err = api.FetchTransactionsParallel(ctx, txHashes, concurrency)
-			return err
-		})
-
-		if err != nil {
-			logger.Warn("failed to fetch block", "block", blockNum, "error", err)
-			results = append(results, BlockResult{
-				Number: blockNum,
-				Error: &Error{
-					ErrorType: ErrorTypeBlockNotFound,
-					Message:   err.Error(),
-				},
-			})
-			continue
 		}
+	}()
 
-		block := &cardano.Block{
-			Hash:       header.Hash,
-			Height:     header.Height,
-			Slot:       header.Slot,
-			Time:       header.Time,
-			ParentHash: header.ParentHash,
-		}
-		for i := range txs {
-			block.Txs = append(block.Txs, txs[i])
-		}
+	wg.Wait()
 
-		typesBlock := c.convertBlock(block)
-		results = append(results, BlockResult{
-			Number: blockNum,
-			Block:  typesBlock,
-		})
+	// Check if the context was canceled during the operation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	return results, nil
@@ -197,7 +207,9 @@ func (c *CardanoIndexer) fetchBlocks(
 
 // convertBlock converts a Cardano block to the common Block type
 func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
-	transactions := make([]types.Transaction, 0)
+	// Pre-allocate slice with a reasonable capacity to reduce re-allocations
+	estimatedSize := len(block.Txs) * 2
+	transactions := make([]types.Transaction, 0, estimatedSize)
 
 	for _, tx := range block.Txs {
 		// Skip failed transactions (e.g., script validation failed)
