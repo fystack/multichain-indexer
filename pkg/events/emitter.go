@@ -8,8 +8,7 @@ import (
 )
 
 const (
-	TransferEventTopic         = "transfer:event"
-	MultiAssetTransferEventTopic = "transfer:multi_asset_event"
+	TransferEventTopic = "transfer:event"
 )
 
 type IndexerEvent struct {
@@ -22,7 +21,6 @@ type IndexerEvent struct {
 type Emitter interface {
 	EmitBlock(chain string, block *types.Block) error
 	EmitTransaction(chain string, tx *types.Transaction) error
-	EmitMultiAssetTransaction(event MultiAssetTransactionEvent) error
 	EmitError(chain string, err error) error
 	Emit(event IndexerEvent) error
 	Close()
@@ -52,16 +50,6 @@ func (e *emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	}
 	return e.queue.Enqueue(infra.TransferEventTopicQueue, txBytes, &infra.EnqueueOptions{
 		IdempotententKey: tx.Hash(),
-	})
-}
-
-func (e *emitter) EmitMultiAssetTransaction(event MultiAssetTransactionEvent) error {
-	eventBytes, err := json.Marshal(event)
-	if err != nil {
-		return err
-	}
-	return e.queue.Enqueue(infra.MultiAssetTransferEventTopicQueue, eventBytes, &infra.EnqueueOptions{
-		IdempotententKey: event.TxHash, // Use TxHash for idempotency
 	})
 }
 

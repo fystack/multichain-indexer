@@ -9,12 +9,15 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/cardano"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
-	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
 )
+
+const defaultCardanoTxFetchConcurrency = 4
+
 
 type CardanoIndexer struct {
 	chainName string
@@ -194,62 +197,50 @@ func (c *CardanoIndexer) fetchBlocks(
 	return results, nil
 }
 
-// convertBlock converts a Cardano block to the common Block type, embedding
-// rich transaction data for special handling in the BaseWorker.
+// convertBlock converts a Cardano block to the common Block type
 func (c *CardanoIndexer) convertBlock(block *cardano.Block) *types.Block {
-	transactions := make([]types.Transaction, 0, len(block.Txs))
+	transactions := make([]types.Transaction, 0)
 
 	for _, tx := range block.Txs {
-		// Determine the representative from address (first input)
+		// Skip failed transactions (e.g., script validation failed)
+		// valid when: no script (nil) OR smart contract executed successfully (true)
+		if tx.ValidContract != nil && !*tx.ValidContract {
+			continue
+		}
+		// Representative from address: first input if available
 		fromAddr := ""
 		if len(tx.Inputs) > 0 && tx.Inputs[0].Address != "" {
 			fromAddr = tx.Inputs[0].Address
 		}
 
-		// Create the rich transaction structure
-		richTx := &cardano.RichTransaction{
-			Hash:        tx.Hash,
-			BlockHeight: block.Height,
-			BlockHash:   block.Hash,
-			FromAddress: fromAddr,
-			Fee:         decimal.NewFromInt(int64(tx.Fee)).String(),
-			Chain:       c.chainName,
-			Outputs:     make([]cardano.RichOutput, 0, len(tx.Outputs)),
-		}
+		// Convert fee (lovelace -> ADA) and assign to the first transfer produced by this tx
+		feeAda := decimal.NewFromInt(int64(tx.Fee)).Div(decimal.NewFromInt(1_000_000))
+		feeAssigned := false
 
 		for _, out := range tx.Outputs {
-			assets := make([]cardano.RichAsset, 0, len(out.Amounts))
 			for _, amt := range out.Amounts {
-				if amt.Quantity != "" && amt.Quantity != "0" {
-					assets = append(assets, cardano.RichAsset{
-						Unit:     amt.Unit,
-						Quantity: amt.Quantity,
-					})
+				if amt.Quantity == "" || amt.Quantity == "0" {
+					continue
 				}
+				tr := types.Transaction{
+					TxHash:      tx.Hash,
+					NetworkId:   c.GetNetworkId(),
+					BlockNumber: block.Height,
+					FromAddress: fromAddr,
+					ToAddress:   out.Address,
+					Amount:      amt.Quantity,
+					Type:        constant.TxnTypeTransfer,
+					Timestamp:   block.Time,
+				}
+				if amt.Unit != "lovelace" {
+					tr.AssetAddress = amt.Unit
+				}
+				if !feeAssigned {
+					tr.TxFee = feeAda
+					feeAssigned = true
+				}
+				transactions = append(transactions, tr)
 			}
-
-			if len(assets) > 0 {
-				richTx.Outputs = append(richTx.Outputs, cardano.RichOutput{
-					Address: out.Address,
-					Assets:  assets,
-				})
-			}
-		}
-
-		// If the transaction has outputs, wrap the rich data into a generic
-		// types.Transaction for the worker.
-		if len(richTx.Outputs) > 0 {
-			payload, _ := utils.Encode(richTx)
-			// The generic transaction's fields are used for logging and basic info,
-			// while the rich data is in the payload.
-			genericTx := types.Transaction{
-				TxHash:      tx.Hash,
-				BlockNumber: block.Height,
-				Timestamp:   block.Time,
-				// We use the payload to carry the rich data.
-				Payload: payload,
-			}
-			transactions = append(transactions, genericTx)
 		}
 	}
 

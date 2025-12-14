@@ -14,6 +14,8 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const defaultCardanoTxFetchConcurrency = 4
+
 type CardanoClient struct {
 	*rpc.BaseClient
 }
@@ -84,7 +86,7 @@ func (c *CardanoClient) GetBlockByNumber(ctx context.Context, blockNumber uint64
 	}
 
 	// Fetch transaction details (parallel-safe)
-	txs, _ := c.FetchTransactionsParallel(ctx, txHashes, 4)
+	txs, _ := c.FetchTransactionsParallel(ctx, txHashes, defaultCardanoTxFetchConcurrency)
 
 	return &Block{
 		Hash:       br.Hash,
@@ -218,12 +220,13 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 	fees, _ := strconv.ParseUint(txResp.Fees, 10, 64)
 
 	return &Transaction{
-		Hash:     txResp.Hash,
-		Slot:     txResp.Slot,
-		BlockNum: txResp.Height,
-		Inputs:   inputs,
-		Outputs:  outputs,
-		Fee:      fees,
+		Hash:          txResp.Hash,
+		Slot:          txResp.Slot,
+		BlockNum:      txResp.Height,
+		Inputs:        inputs,
+		Outputs:       outputs,
+		Fee:           fees,
+		ValidContract: txResp.ValidContract,
 	}, nil
 }
 
@@ -234,7 +237,7 @@ func (c *CardanoClient) FetchTransactionsParallel(
 	concurrency int,
 ) ([]Transaction, error) {
 	if concurrency <= 0 {
-		concurrency = 4
+		concurrency = defaultCardanoTxFetchConcurrency
 	}
 	if len(txHashes) == 0 {
 		return nil, nil

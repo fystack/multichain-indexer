@@ -12,12 +12,13 @@ type Block struct {
 
 // Transaction represents a Cardano transaction
 type Transaction struct {
-	Hash     string `json:"hash"`
-	Slot     uint64 `json:"slot"`
-	BlockNum uint64 `json:"block_height"`
-	Inputs   []Input
-	Outputs  []Output
-	Fee      uint64 `json:"fees"`
+	Hash          string `json:"hash"`
+	Slot          uint64 `json:"slot"`
+	BlockNum      uint64 `json:"block_height"`
+	Inputs        []Input
+	Outputs       []Output
+	Fee           uint64 `json:"fees"`
+	ValidContract *bool  `json:"valid_contract"`
 }
 
 // Input represents a transaction input
@@ -46,11 +47,12 @@ type BlockResponse struct {
 
 // TransactionResponse is the response from transaction query
 type TransactionResponse struct {
-	Hash   string `json:"hash"`
-	Fees   string `json:"fees"`
-	Height uint64 `json:"block_height"`
-	Time   uint64 `json:"block_time"`
-	Slot   uint64 `json:"slot"`
+	Hash          string `json:"hash"`
+	Fees          string `json:"fees"`
+	Height        uint64 `json:"block_height"`
+	Time          uint64 `json:"block_time"`
+	Slot          uint64 `json:"slot"`
+	ValidContract *bool  `json:"valid_contract"`
 }
 
 type Amount struct {
