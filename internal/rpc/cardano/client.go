@@ -52,6 +52,7 @@ func (c *CardanoClient) GetBlockHeaderByNumber(ctx context.Context, blockNumber 
 	if err := json.Unmarshal(data, &br); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal block header: %w", err)
 	}
+
 	return &br, nil
 }
 
@@ -128,18 +129,9 @@ func (c *CardanoClient) GetBlockByHash(ctx context.Context, blockHash string) (*
 		txHashes = []string{}
 	}
 
-	// Convert transactions
-	txs := make([]Transaction, 0, len(txHashes))
-	for _, txHash := range txHashes {
-		tx, err := c.GetTransaction(ctx, txHash)
-		if err != nil {
-			logger.Warn("failed to fetch transaction", "tx_hash", txHash, "error", err)
-			continue
-		}
-		if tx != nil {
-			txs = append(txs, *tx)
-		}
-	}
+	// Use parallel fetch with concurrency=1 to respect rate limits
+	// This is more efficient than sequential fetching and respects throttle settings
+	txs, _ := c.FetchTransactionsParallel(ctx, txHashes, 1)
 
 	return &Block{
 		Hash:       blockResp.Hash,
@@ -151,17 +143,31 @@ func (c *CardanoClient) GetBlockByHash(ctx context.Context, blockHash string) (*
 	}, nil
 }
 
-// GetTransactionsByBlock fetches all transaction hashes in a block
+// GetTransactionsByBlock fetches all transaction hashes in a block by block number
+// Makes 2 API calls: GetBlockHash (to resolve hash) + GetTransactionsByBlockHash
 func (c *CardanoClient) GetTransactionsByBlock(ctx context.Context, blockNumber uint64) ([]string, error) {
-	// Resolve block hash from height then request txs by hash
 	hash, err := c.GetBlockHash(ctx, blockNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve block hash: %w", err)
 	}
-	endpoint := fmt.Sprintf("/blocks/%s/txs", hash)
+
+	// Delay between API calls to prevent burst rate limiting
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	return c.GetTransactionsByBlockHash(ctx, hash)
+}
+
+// GetTransactionsByBlockHash fetches all transaction hashes in a block by block hash
+// Makes 1 API call: GET /blocks/{hash}/txs
+func (c *CardanoClient) GetTransactionsByBlockHash(ctx context.Context, blockHash string) ([]string, error) {
+	endpoint := fmt.Sprintf("/blocks/%s/txs", blockHash)
 	data, err := c.Do(ctx, "GET", endpoint, nil, nil)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get transactions for block %d: %w", blockNumber, err)
+		return nil, fmt.Errorf("failed to get transactions for block hash %s: %w", blockHash, err)
 	}
 
 	var txHashes []string
@@ -173,6 +179,7 @@ func (c *CardanoClient) GetTransactionsByBlock(ctx context.Context, blockNumber 
 }
 
 // GetTransaction fetches a transaction by its hash
+// Makes 2 API calls: GET /txs/{hash} + GET /txs/{hash}/utxos
 func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Transaction, error) {
 	endpoint := fmt.Sprintf("/txs/%s", txHash)
 	data, err := c.Do(ctx, "GET", endpoint, nil, nil)
@@ -183,6 +190,13 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 	var txResp TransactionResponse
 	if err := json.Unmarshal(data, &txResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal transaction response: %w", err)
+	}
+
+	// Delay between requests to prevent burst rate limiting (critical for Blockfrost free tier)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(150 * time.Millisecond):
 	}
 
 	// Fetch UTXOs (inputs/outputs)
@@ -235,6 +249,7 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 }
 
 // FetchTransactionsParallel fetches transactions concurrently with bounded concurrency
+// Each transaction requires 2 API calls (tx info + utxos), so actual RPS = 2 × concurrency
 func (c *CardanoClient) FetchTransactionsParallel(
 	ctx context.Context,
 	txHashes []string,
@@ -254,17 +269,30 @@ func (c *CardanoClient) FetchTransactionsParallel(
 		sem      = make(chan struct{}, concurrency)
 	)
 
-	for _, h := range txHashes {
+	for i, h := range txHashes {
 		h := h
+		idx := i
 		sem <- struct{}{}
 		g.Go(func() error {
 			defer func() { <-sem }()
+
+			// Delay between batches to prevent burst rate limiting
+			if idx > 0 && idx%concurrency == 0 {
+				select {
+				case <-gctx.Done():
+					return gctx.Err()
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+
 			tx, err := c.GetTransaction(gctx, h)
 			if err != nil {
 				// Detect rate-limit style errors (Blockfrost cancels context on quota)
 				msg := strings.ToLower(err.Error())
 				if strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") ||
+					strings.Contains(msg, "429") ||
 					(strings.Contains(msg, "http request failed") && strings.Contains(msg, "context canceled")) {
+					logger.Warn("Rate limit detected in parallel fetch", "tx_hash", h, "error", err)
 					return err
 				}
 				// If group context is already canceled due to prior error, suppress noise
@@ -288,6 +316,7 @@ func (c *CardanoClient) FetchTransactionsParallel(
 		// Propagate rate-limit style errors upward to trigger failover.
 		msg := strings.ToLower(err.Error())
 		if strings.Contains(msg, "rate limit") || strings.Contains(msg, "too many requests") ||
+			strings.Contains(msg, "429") ||
 			(strings.Contains(msg, "http request failed") && strings.Contains(msg, "context canceled")) {
 			return nil, err
 		}
@@ -296,5 +325,3 @@ func (c *CardanoClient) FetchTransactionsParallel(
 	}
 	return results, nil
 }
-
-

@@ -66,7 +66,7 @@ chains:
     network_id: "cardano"
     type: "cardano"
     start_block: 12768402 # Cardano mainnet block height
-    poll_interval: "10s" # Cardano block time is ~20 seconds
+    poll_interval: "15s" # Cardano block time is ~20 seconds
     nodes:
       - url: "https://cardano-mainnet.blockfrost.io/api/v0"
         auth:
@@ -76,11 +76,10 @@ chains:
     client:
       timeout: "30s"
       max_retries: 3
-      retry_delay: "5s"
+      retry_delay: "10s"
     throttle:
       rps: 10 # Blockfrost free tier allows 10 req/s
       burst: 20
-      batch_size: 50 # Number of parallel transaction fetches.
       concurrency: 4 # With a free plan from providers like Blockfrost, it's recommended to keep this value low (e.g., 2-4)
 
 # Infrastructure services

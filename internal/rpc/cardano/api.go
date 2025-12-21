@@ -14,6 +14,7 @@ type CardanoAPI interface {
 	GetBlockByNumber(ctx context.Context, blockNumber uint64) (*Block, error)
 	GetBlockHash(ctx context.Context, blockNumber uint64) (string, error)
 	GetTransactionsByBlock(ctx context.Context, blockNumber uint64) ([]string, error)
+	GetTransactionsByBlockHash(ctx context.Context, blockHash string) ([]string, error)
 	GetTransaction(ctx context.Context, txHash string) (*Transaction, error)
 	FetchTransactionsParallel(ctx context.Context, txHashes []string, concurrency int) ([]Transaction, error)
 	GetBlockByHash(ctx context.Context, blockHash string) (*Block, error)
