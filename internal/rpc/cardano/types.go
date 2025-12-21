@@ -51,12 +51,14 @@ type BlockResponse struct {
 
 // TransactionResponse is the response from transaction query
 type TransactionResponse struct {
-	Hash          string `json:"hash"`
-	Fees          string `json:"fees"`
-	Height        uint64 `json:"block_height"`
-	Time          uint64 `json:"block_time"`
-	Slot          uint64 `json:"slot"`
-	ValidContract *bool  `json:"valid_contract"`
+	Hash             string  `json:"hash"`
+	Fees             string  `json:"fees"`
+	Height           uint64  `json:"block_height"`
+	Time             uint64  `json:"block_time"`
+	Slot             uint64  `json:"slot"`
+	ValidContract    *bool   `json:"valid_contract"`
+	InvalidBefore    *string `json:"invalid_before"`    // TTL lower bound (optional, string from API)
+	InvalidHereafter *string `json:"invalid_hereafter"` // TTL upper bound (optional, string from API)
 }
 
 type Amount struct {
