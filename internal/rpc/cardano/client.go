@@ -192,6 +192,57 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 		return nil, fmt.Errorf("failed to unmarshal transaction response: %w", err)
 	}
 
+	// Validate transaction is finalized (in a block)
+	if txResp.Height == 0 {
+		return nil, fmt.Errorf("transaction %s not finalized: block_height is 0", txHash)
+	}
+
+	// Validate TTL (Time To Live) - validity interval
+	// Note: If transaction is in a block, TTL should already be valid (validated by ledger)
+	// This is defensive programming to catch any edge cases
+	if txResp.InvalidBefore != nil && *txResp.InvalidBefore != "" {
+		invalidBefore, err := strconv.ParseUint(*txResp.InvalidBefore, 10, 64)
+		if err != nil {
+			logger.Warn("Failed to parse invalid_before",
+				"tx_hash", txHash,
+				"invalid_before", *txResp.InvalidBefore)
+		} else if txResp.Slot < invalidBefore {
+			logger.Warn("Transaction slot before invalid_before (should not happen)",
+				"tx_hash", txHash,
+				"slot", txResp.Slot,
+				"invalid_before", invalidBefore)
+		}
+	}
+	if txResp.InvalidHereafter != nil && *txResp.InvalidHereafter != "" {
+		invalidHereafter, err := strconv.ParseUint(*txResp.InvalidHereafter, 10, 64)
+		if err != nil {
+			logger.Warn("Failed to parse invalid_hereafter",
+				"tx_hash", txHash,
+				"invalid_hereafter", *txResp.InvalidHereafter)
+		} else if txResp.Slot > invalidHereafter {
+			logger.Warn("Transaction slot after invalid_hereafter (should not happen)",
+				"tx_hash", txHash,
+			"slot", txResp.Slot,
+			"invalid_hereafter", invalidHereafter)
+		}
+	}
+
+	// Validate fees
+	// Note: Failed smart contracts have fees = "0" but lose collateral instead
+	// Normal transactions always have fees > 0
+	fees, err := strconv.ParseUint(txResp.Fees, 10, 64)
+	if err != nil {
+		logger.Warn("Failed to parse transaction fees",
+			"tx_hash", txHash,
+			"fees", txResp.Fees,
+			"error", err)
+	}
+	if fees == 0 {
+		logger.Debug("Transaction with zero fees (likely failed smart contract)",
+			"tx_hash", txHash,
+			"block_height", txResp.Height)
+	}
+
 	// Delay between requests to prevent burst rate limiting (critical for Blockfrost free tier)
 	select {
 	case <-ctx.Done():
@@ -235,7 +286,7 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 		})
 	}
 
-	fees, _ := strconv.ParseUint(txResp.Fees, 10, 64)
+	fees, _ = strconv.ParseUint(txResp.Fees, 10, 64)
 
 	return &Transaction{
 		Hash:          txResp.Hash,
