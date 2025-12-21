@@ -40,12 +40,13 @@ type Output struct {
 }
 
 // BlockResponse is the response from block query
+// Blockfrost API returns "previous_block" not "parent_hash"
 type BlockResponse struct {
 	Hash       string `json:"hash"`
 	Height     uint64 `json:"height"`
 	Slot       uint64 `json:"slot"`
 	Time       uint64 `json:"time"`
-	ParentHash string `json:"parent_hash"`
+	ParentHash string `json:"previous_block"` // Blockfrost uses "previous_block" field name
 }
 
 // TransactionResponse is the response from transaction query
@@ -82,4 +83,3 @@ type TxUTxOsResponse struct {
 type BlockTxsResponse struct {
 	Transactions []string `json:"transactions"`
 }
-

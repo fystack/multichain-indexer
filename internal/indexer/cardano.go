@@ -67,11 +67,13 @@ func (c *CardanoIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*typ
 
 	err := c.failover.ExecuteWithRetry(ctx, func(api cardano.CardanoAPI) error {
 		var err error
+		// Fetch block header first
 		header, err = api.GetBlockHeaderByNumber(ctx, blockNumber)
 		if err != nil {
 			return err
 		}
-		txHashes, err = api.GetTransactionsByBlock(ctx, blockNumber)
+		// Use block hash to fetch transactions (avoids duplicate GetBlockHeaderByNumber call)
+		txHashes, err = api.GetTransactionsByBlockHash(ctx, header.Hash)
 		if err != nil {
 			return err
 		}
@@ -141,11 +143,17 @@ func (c *CardanoIndexer) fetchBlocks(
 		return nil, nil
 	}
 
-	workers := len(blockNums)
-	if c.config.Throttle.Concurrency > 0 && c.config.Throttle.Concurrency < workers {
+	// For Cardano, we should fetch blocks sequentially to avoid rate limiting
+	// because each block fetch involves multiple API calls (header + txs + utxos for each tx)
+	// With Blockfrost free tier (10 RPS), parallel block fetching can easily exceed limits
+	workers := 1 // Always use 1 worker for block fetching to be safe
+
+	// Only use configured concurrency if explicitly parallel and concurrency > 1
+	if isParallel && c.config.Throttle.Concurrency > 1 {
 		workers = c.config.Throttle.Concurrency
-	} else if c.config.Throttle.Concurrency <= 0 && workers > cardano.DefaultTxFetchConcurrency {
-		workers = cardano.DefaultTxFetchConcurrency
+		if workers > len(blockNums) {
+			workers = len(blockNums)
+		}
 	}
 
 	type job struct {
@@ -159,14 +167,27 @@ func (c *CardanoIndexer) fetchBlocks(
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer wg.Done()
+			blockCount := 0
 			for j := range jobs {
 				// Early exit if context is canceled
 				select {
 				case <-ctx.Done():
 					return
 				default:
+				}
+
+				// Add delay every 5 blocks to avoid rate limiting
+				// This is critical for Cardano/Blockfrost to prevent burst traffic
+				if blockCount > 0 && blockCount%5 == 0 {
+					logger.Debug("Rate limit protection: pausing between blocks",
+						"worker", workerID, "blocks_processed", blockCount)
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(2 * time.Second):
+					}
 				}
 
 				block, err := c.GetBlock(ctx, j.num)
@@ -179,8 +200,9 @@ func (c *CardanoIndexer) fetchBlocks(
 				} else {
 					results[j.index] = BlockResult{Number: j.num, Block: block}
 				}
+				blockCount++
 			}
-		}()
+		}(i)
 	}
 
 	// Feed jobs to workers and close channel when done
@@ -277,4 +299,3 @@ func (c *CardanoIndexer) IsHealthy() bool {
 	_, err := c.GetLatestBlockNumber(ctx)
 	return err == nil
 }
-
