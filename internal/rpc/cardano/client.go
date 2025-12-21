@@ -286,7 +286,7 @@ func (c *CardanoClient) GetTransaction(ctx context.Context, txHash string) (*Tra
 		})
 	}
 
-	fees, _ := strconv.ParseUint(txResp.Fees, 10, 64)
+	fees, _ = strconv.ParseUint(txResp.Fees, 10, 64)
 
 	return &Transaction{
 		Hash:          txResp.Hash,
