@@ -19,16 +19,18 @@ type Block struct {
 }
 
 type Transaction struct {
-	TxHash       string          `json:"txHash"`
-	NetworkId    string          `json:"networkId"`
-	BlockNumber  uint64          `json:"blockNumber"`
-	FromAddress  string          `json:"fromAddress"`
-	ToAddress    string          `json:"toAddress"`
-	AssetAddress string          `json:"assetAddress"`
-	Amount       string          `json:"amount"`
-	Type         string          `json:"type"`
-	TxFee        decimal.Decimal `json:"txFee"`
-	Timestamp    uint64          `json:"timestamp"`
+	TxHash        string          `json:"txHash"`
+	NetworkId     string          `json:"networkId"`
+	BlockNumber   uint64          `json:"blockNumber"`
+	FromAddress   string          `json:"fromAddress"`
+	ToAddress     string          `json:"toAddress"`
+	AssetAddress  string          `json:"assetAddress"`
+	Amount        string          `json:"amount"`
+	Type          string          `json:"type"`
+	TxFee         decimal.Decimal `json:"txFee"`
+	Timestamp     uint64          `json:"timestamp"`
+	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
+	Status        string          `json:"status"`        // "pending" (0 conf), "confirming" (1-5 conf), "confirmed" (6+ conf)
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
@@ -45,7 +47,7 @@ func (t *Transaction) UnmarshalBinary(data []byte) error {
 
 func (t Transaction) String() string {
 	return fmt.Sprintf(
-		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d}",
+		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d, Confirmations: %d, Status: %s}",
 		t.TxHash,
 		t.NetworkId,
 		t.BlockNumber,
@@ -56,6 +58,8 @@ func (t Transaction) String() string {
 		t.Type,
 		t.TxFee,
 		t.Timestamp,
+		t.Confirmations,
+		t.Status,
 	)
 }
 
@@ -74,4 +78,17 @@ func (t Transaction) Hash() string {
 	builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
 	hash := sha256.Sum256([]byte(builder.String()))
 	return fmt.Sprintf("%x", hash)
+}
+
+// CalculateStatus determines transaction status based on confirmation count
+// 0 confirmations: "pending" (mempool)
+// 1-5 confirmations: "confirming"
+// 6+ confirmations: "confirmed"
+func CalculateStatus(confirmations uint64) string {
+	if confirmations == 0 {
+		return "pending"
+	} else if confirmations < 6 {
+		return "confirming"
+	}
+	return "confirmed"
 }

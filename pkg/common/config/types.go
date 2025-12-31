@@ -37,11 +37,12 @@ type ChainConfig struct {
 	Name                string           `yaml:"-"`
 	NetworkId           string           `yaml:"network_id"`
 	InternalCode        string           `yaml:"internal_code"`
-	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm"`
+	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm btc"`
 	FromLatest          bool             `yaml:"from_latest"`
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`
 	ReorgRollbackWindow int              `yaml:"reorg_rollback_window"`
+	Confirmations       uint64           `yaml:"confirmations"`
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`

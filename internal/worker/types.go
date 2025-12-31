@@ -8,6 +8,7 @@ const (
 	ModeCatchup   WorkerMode = "catchup"
 	ModeRescanner WorkerMode = "rescanner"
 	ModeManual    WorkerMode = "manual"
+	ModeMempool   WorkerMode = "mempool"
 )
 
 type FailedBlockEvent struct {
