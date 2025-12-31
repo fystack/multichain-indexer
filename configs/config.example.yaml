@@ -61,6 +61,50 @@ chains:
       - url: "https://bsc.blockrazor.xyz"
       - url: "https://bnb.rpc.subquery.network/public"
 
+  bitcoin_testnet:
+    network_id: "bitcoin_testnet"
+    internal_code: "BTC_TESTNET"
+    type: "btc"
+    start_block: 2500000 # recent testnet block
+    poll_interval: "60s" # Bitcoin blocks ~10 minutes
+    confirmations: 6 # wait for 6 confirmations before indexing
+    reorg_rollback_window: 100 # Bitcoin can have deeper reorgs than EVM chains
+    nodes:
+      - url: "https://bitcoin-testnet-rpc.publicnode.com"
+      - url: "https://blockstream.info/testnet/api"
+      - url: "https://api.blockcypher.com/v1/btc/test3"
+    client:
+      timeout: "30s"
+      max_retries: 5
+      retry_delay: "10s"
+    throttle:
+      rps: 10
+      burst: 20
+      batch_size: 10 # Bitcoin processes sequentially
+      concurrency: 1 # No parallel fetching needed
+
+  bitcoin_mainnet:
+    network_id: "bitcoin"
+    internal_code: "BTC_MAINNET"
+    type: "btc"
+    start_block: 850000
+    poll_interval: "60s"
+    confirmations: 6
+    reorg_rollback_window: 100
+    nodes:
+      - url: "https://bitcoin-rpc.publicnode.com"
+      - url: "https://blockstream.info/api"
+      - url: "https://api.blockcypher.com/v1/btc/main"
+    client:
+      timeout: "30s"
+      max_retries: 5
+      retry_delay: "10s"
+    throttle:
+      rps: 10
+      burst: 20
+      batch_size: 10
+      concurrency: 1
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
@@ -74,6 +118,8 @@ services:
       enabled: true
     regular:
       enabled: true
+    mempool:
+      enabled: true  # Bitcoin-only: 0-conf transaction tracking for instant UX
 
   nats:
     url: "nats://localhost:4222"

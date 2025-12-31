@@ -38,7 +38,10 @@ DO $$ BEGIN
         'native',
         'spl',
         'trc20',
-        'trc721'
+        'trc721',
+        'btc_p2pkh',
+        'btc_p2sh',
+        'btc_bech32'
     );
 EXCEPTION
     WHEN duplicate_object THEN null;

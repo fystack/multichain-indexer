@@ -6,6 +6,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
@@ -102,6 +103,19 @@ func BuildWorkers(
 				deps.FailedChan,
 			),
 		}
+	case ModeMempool:
+		return []Worker{
+			NewMempoolWorker(
+				deps.Ctx,
+				idxr,
+				cfg,
+				deps.KVStore,
+				deps.BlockStore,
+				deps.Emitter,
+				deps.Pubkey,
+				deps.FailedChan,
+			),
+		}
 	default:
 		return nil
 	}
@@ -175,6 +189,45 @@ func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode Worker
 	return indexer.NewTronIndexer(chainName, chainCfg, failover)
 }
 
+// buildBitcoinIndexer constructs a Bitcoin indexer with failover and providers.
+func buildBitcoinIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[bitcoin.BitcoinAPI](nil)
+
+	// Shared rate limiter for all workers of this chain (global across regular, catchup, etc.)
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := bitcoin.NewBitcoinClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "rpc",
+			Client:     client,
+			State:      rpc.StateHealthy, // Initialize as healthy
+		})
+	}
+
+	return indexer.NewBitcoinIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -208,6 +261,8 @@ func CreateManagerWithWorkers(
 			idxr = buildEVMIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTron:
 			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular)
+		case enum.NetworkTypeBtc:
+			idxr = buildBitcoinIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
@@ -241,6 +296,11 @@ func CreateManagerWithWorkers(
 		)
 		addIfEnabled(ModeCatchup, managerCfg.EnableCatchup || cfg.Services.Worker.Catchup.Enabled)
 		addIfEnabled(ModeManual, managerCfg.EnableManual || cfg.Services.Worker.Manual.Enabled)
+
+		// Mempool worker is Bitcoin-specific (0-conf transaction tracking)
+		if chainCfg.Type == enum.NetworkTypeBtc {
+			addIfEnabled(ModeMempool, cfg.Services.Worker.Mempool.Enabled)
+		}
 	}
 
 	return manager
