@@ -84,41 +84,57 @@ func (mw *MempoolWorker) Stop() {
 func (mw *MempoolWorker) processMempool() error {
 	mw.logger.Debug("Polling mempool", "chain", mw.chain.GetName())
 
-	// Get mempool transactions
+	// Get mempool transactions (already filtered by monitored addresses in indexer)
 	transactions, err := mw.btcIndexer.GetMempoolTransactions(mw.ctx)
 	if err != nil {
 		mw.logger.Error("Failed to get mempool transactions", "err", err)
 		return err
 	}
 
-	// Track new transactions
+	// Track and emit new transactions
 	newTxCount := 0
+	networkType := mw.chain.GetNetworkType()
+
 	for _, tx := range transactions {
-		// Skip if we've already seen this transaction
-		if mw.seenTxs[tx.TxHash] {
+		// Create unique key for deduplication (txHash + toAddress for UTXO model)
+		txKey := tx.TxHash + ":" + tx.ToAddress
+		if mw.seenTxs[txKey] {
 			continue
 		}
 
 		// Mark as seen
-		mw.seenTxs[tx.TxHash] = true
+		mw.seenTxs[txKey] = true
 		newTxCount++
 
-		// Emit transaction to NATS (only if ToAddress is monitored)
-		if mw.pubkeyStore.Exist(mw.chain.GetNetworkType(), tx.ToAddress) {
-			if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
-				mw.logger.Error("Failed to emit mempool transaction",
-					"txHash", tx.TxHash,
-					"err", err,
-				)
-			} else {
-				mw.logger.Debug("Emitted mempool transaction",
-					"txHash", tx.TxHash,
-					"to", tx.ToAddress,
-					"amount", tx.Amount,
-					"confirmations", tx.Confirmations,
-					"status", tx.Status,
-				)
-			}
+		// Determine direction for logging
+		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
+		fromMonitored := tx.FromAddress != "" && mw.pubkeyStore.Exist(networkType, tx.FromAddress)
+
+		direction := "unknown"
+		if toMonitored && fromMonitored {
+			direction = "internal"
+		} else if toMonitored {
+			direction = "incoming"
+		} else if fromMonitored {
+			direction = "outgoing"
+		}
+
+		// Emit transaction to NATS
+		if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
+			mw.logger.Error("Failed to emit mempool transaction",
+				"txHash", tx.TxHash,
+				"direction", direction,
+				"err", err,
+			)
+		} else {
+			mw.logger.Debug("Emitted mempool transaction",
+				"txHash", tx.TxHash,
+				"direction", direction,
+				"from", tx.FromAddress,
+				"to", tx.ToAddress,
+				"amount", tx.Amount,
+				"status", tx.Status,
+			)
 		}
 	}
 
@@ -133,8 +149,8 @@ func (mw *MempoolWorker) processMempool() error {
 	if len(mw.seenTxs) > 10000 {
 		// Clear half the map (simple approach)
 		count := 0
-		for txHash := range mw.seenTxs {
-			delete(mw.seenTxs, txHash)
+		for txKey := range mw.seenTxs {
+			delete(mw.seenTxs, txKey)
 			count++
 			if count > 5000 {
 				break
