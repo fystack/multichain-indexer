@@ -143,7 +143,7 @@ func (c *BitcoinClient) GetRawMempool(ctx context.Context, verbose bool) (interf
 
 // GetRawTransaction returns a transaction by txid
 // If verbose is false, returns raw hex string
-// If verbose is true, returns Transaction struct
+// If verbose is true, returns Transaction struct with prevout data
 func (c *BitcoinClient) GetRawTransaction(ctx context.Context, txid string, verbose bool) (*Transaction, error) {
 	verbosity := 0
 	if verbose {
@@ -166,6 +166,40 @@ func (c *BitcoinClient) GetRawTransaction(ctx context.Context, txid string, verb
 	}
 
 	return &tx, nil
+}
+
+// GetTransactionWithPrevouts fetches a transaction and resolves prevout data for all inputs.
+// This is necessary because getblock verbosity=2 doesn't include prevout data.
+func (c *BitcoinClient) GetTransactionWithPrevouts(ctx context.Context, txid string) (*Transaction, error) {
+	tx, err := c.GetRawTransaction(ctx, txid, true)
+	if err != nil {
+		return nil, err
+	}
+
+	// If prevout data already present, return as-is
+	if len(tx.Vin) > 0 && tx.Vin[0].PrevOut != nil {
+		return tx, nil
+	}
+
+	// Resolve prevout for each input (skip coinbase)
+	for i := range tx.Vin {
+		if tx.Vin[i].TxID == "" {
+			continue // Coinbase input
+		}
+
+		prevTx, err := c.GetRawTransaction(ctx, tx.Vin[i].TxID, true)
+		if err != nil {
+			// Log but don't fail - some prevouts may be unavailable
+			continue
+		}
+
+		voutIdx := tx.Vin[i].Vout
+		if int(voutIdx) < len(prevTx.Vout) {
+			tx.Vin[i].PrevOut = &prevTx.Vout[voutIdx]
+		}
+	}
+
+	return tx, nil
 }
 
 // GetMempoolEntry returns mempool entry for a specific transaction
