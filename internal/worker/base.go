@@ -156,6 +156,7 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 }
 
 // emitBlock emits relevant transactions for subscribed addresses.
+// Emits transactions where either ToAddress OR FromAddress is monitored.
 func (bw *BaseWorker) emitBlock(block *types.Block) {
 	if block == nil || bw.pubkeyStore == nil {
 		return
@@ -163,14 +164,28 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 
 	addressType := bw.chain.GetNetworkType()
 	for _, tx := range block.Transactions {
-		if bw.pubkeyStore.Exist(addressType, tx.ToAddress) {
+		// Check if ToAddress is monitored (incoming transfer)
+		toMonitored := tx.ToAddress != "" && bw.pubkeyStore.Exist(addressType, tx.ToAddress)
+		// Check if FromAddress is monitored (outgoing transfer)
+		fromMonitored := tx.FromAddress != "" && bw.pubkeyStore.Exist(addressType, tx.FromAddress)
+
+		if toMonitored || fromMonitored {
+			direction := "incoming"
+			if fromMonitored && !toMonitored {
+				direction = "outgoing"
+			} else if fromMonitored && toMonitored {
+				direction = "internal"
+			}
+
 			bw.logger.Info("Emitting matched transaction",
+				"direction", direction,
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
 				"chain", bw.chain.GetName(),
 				"addressType", addressType,
-				"txhash", tx.Hash,
-				"tx", tx,
+				"txhash", tx.TxHash,
+				"status", tx.Status,
+				"confirmations", tx.Confirmations,
 			)
 			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
 		}

@@ -22,5 +22,6 @@ type BitcoinAPI interface {
 	// Mempool operations
 	GetRawMempool(ctx context.Context, verbose bool) (interface{}, error)
 	GetRawTransaction(ctx context.Context, txid string, verbose bool) (*Transaction, error)
+	GetTransactionWithPrevouts(ctx context.Context, txid string) (*Transaction, error)
 	GetMempoolEntry(ctx context.Context, txid string) (*MempoolEntry, error)
 }

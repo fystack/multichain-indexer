@@ -80,15 +80,29 @@ func (t Transaction) Hash() string {
 	return fmt.Sprintf("%x", hash)
 }
 
+// Transaction status constants
+const (
+	StatusPending    = "pending"    // 0 confirmations (mempool)
+	StatusConfirming = "confirming" // 1-5 confirmations
+	StatusConfirmed  = "confirmed"  // 6+ confirmations
+	StatusOrphaned   = "orphaned"   // Transaction was in a reorged block
+)
+
 // CalculateStatus determines transaction status based on confirmation count
 // 0 confirmations: "pending" (mempool)
 // 1-5 confirmations: "confirming"
 // 6+ confirmations: "confirmed"
+// Note: "orphaned" status is set manually when a reorg is detected
 func CalculateStatus(confirmations uint64) string {
 	if confirmations == 0 {
-		return "pending"
+		return StatusPending
 	} else if confirmations < 6 {
-		return "confirming"
+		return StatusConfirming
 	}
-	return "confirmed"
+	return StatusConfirmed
+}
+
+// IsFinalized returns true if the transaction status is final (confirmed or orphaned)
+func IsFinalized(status string) bool {
+	return status == StatusConfirmed || status == StatusOrphaned
 }
