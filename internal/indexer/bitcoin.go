@@ -265,7 +265,7 @@ func (b *BitcoinIndexer) convertBlock(btcBlock *bitcoin.Block) (*types.Block, er
 
 // extractTransfersFromTx extracts relevant transfers for monitored addresses from a transaction.
 // This is the main extraction function that works with transaction data that may or may not have prevout.
-// It handles both incoming (TO monitored) and outgoing (FROM monitored) transfers.
+// Only extracts incoming transfers (TO monitored addresses) - outgoing transfers are handled by withdrawal flow.
 func (b *BitcoinIndexer) extractTransfersFromTx(
 	tx *bitcoin.Transaction,
 	blockNumber, ts, latestBlock uint64,
@@ -280,20 +280,10 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	// Calculate fee (will be zero if prevout data is missing)
 	fee := tx.CalculateFee()
 
-	// Track monitored addresses in this transaction
-	monitoredInputs := make(map[string]bool)  // Addresses sending (FROM)
-	monitoredOutputs := make(map[string]bool) // Addresses receiving (TO)
+	// Track monitored output addresses (TO addresses for deposits)
+	monitoredOutputs := make(map[string]bool)
 
-	// PASS 1: Identify monitored inputs (outgoing/spending)
-	// Note: This requires prevout data to work
-	for _, vin := range tx.Vin {
-		inputAddr := bitcoin.GetInputAddress(&vin)
-		if inputAddr != "" && b.pubkeyStore != nil && b.pubkeyStore.Exist(enum.NetworkTypeBtc, inputAddr) {
-			monitoredInputs[inputAddr] = true
-		}
-	}
-
-	// PASS 2: Identify monitored outputs (incoming/receiving)
+	// Identify monitored outputs (incoming/receiving)
 	for _, vout := range tx.Vout {
 		outputAddr := bitcoin.GetOutputAddress(&vout)
 		if outputAddr != "" && b.pubkeyStore != nil && b.pubkeyStore.Exist(enum.NetworkTypeBtc, outputAddr) {
@@ -301,8 +291,8 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 		}
 	}
 
-	// Early return if no monitored addresses found
-	if len(monitoredInputs) == 0 && len(monitoredOutputs) == 0 {
+	// Early return if no monitored TO addresses found
+	if len(monitoredOutputs) == 0 {
 		return transfers
 	}
 
@@ -310,7 +300,7 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	confirmations := b.calculateConfirmations(blockNumber, latestBlock)
 	status := types.CalculateStatus(confirmations)
 
-	// PASS 3A: Incoming transfers (TO monitored addresses)
+	// Extract incoming transfers (TO monitored addresses only)
 	feeAssigned := false
 	for _, vout := range tx.Vout {
 		toAddr := bitcoin.GetOutputAddress(&vout)
@@ -346,40 +336,6 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 		}
 
 		transfers = append(transfers, transfer)
-	}
-
-	// PASS 3B: Outgoing transfers (FROM monitored addresses)
-	for fromAddr := range monitoredInputs {
-		for _, vout := range tx.Vout {
-			toAddr := bitcoin.GetOutputAddress(&vout)
-			if toAddr == "" {
-				continue // Skip unspendable outputs
-			}
-
-			// Skip if output goes to a monitored address (already recorded above)
-			if monitoredOutputs[toAddr] {
-				continue
-			}
-
-			amountSat := int64(vout.Value * 1e8)
-
-			transfer := types.Transaction{
-				TxHash:        tx.TxID,
-				NetworkId:     b.config.NetworkId,
-				BlockNumber:   blockNumber,
-				FromAddress:   fromAddr,
-				ToAddress:     toAddr,
-				AssetAddress:  "",
-				Amount:        strconv.FormatInt(amountSat, 10),
-				Type:          constant.TxnTypeTransfer,
-				TxFee:         decimal.Zero, // Fee assigned to first transfer
-				Timestamp:     ts,
-				Confirmations: confirmations,
-				Status:        status,
-			}
-
-			transfers = append(transfers, transfer)
-		}
 	}
 
 	return transfers
