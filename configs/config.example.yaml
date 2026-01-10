@@ -105,6 +105,49 @@ chains:
       batch_size: 10
       concurrency: 1
 
+solana_mainnet:
+    network_id: "solana"
+    internal_code: "SOL_MAINNET"
+    type: "sol"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://solana-rpc.publicnode.com"
+      - url: "https://solana.drpc.org"
+      - url: "https://api.mainnet.solana.com" 
+      - url: "https://solana.leorpc.com/?api_key=FREE"
+      - url: "https://solana.api.pocket.network"
+      - url: "https://public.rpc.solanavibestation.com"
+      # - url: "https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
+      # - url: "https://solana-mainnet.g.quicknode.pro/${QUICKNODE_KEY}/"  # optional
+    client:
+      timeout: "30s"
+      max_retries: 5
+      retry_delay: "10s"
+    throttle:
+      rps: 8
+      burst: 16
+      batch_size: 5
+      concurrency: 1
+
+solana_testnet:
+    network_id: "solana_testnet"
+    internal_code: "SOL_TESTNET"
+    type: "sol"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://api.testnet.solana.com"
+      - url: "https://solana-testnet-rpc.publicnode.com"
+    client:
+      timeout: "30s"
+      max_retries: 5
+      retry_delay: "10s"
+    throttle:
+      rps: 8
+      burst: 16
+      batch_size: 5
+      concurrency: 1
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
