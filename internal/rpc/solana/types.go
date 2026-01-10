@@ -28,6 +28,7 @@ type GetBlockConfig struct {
 	TransactionDetails             string `json:"transactionDetails"`             // full
 	Rewards                        bool   `json:"rewards"`                        // false
 	MaxSupportedTransactionVersion int    `json:"maxSupportedTransactionVersion"` // 0
+	Commitment                     string `json:"commitment,omitempty"`           // processed | confirmed | finalized
 }
 
 type GetBlockResult struct {

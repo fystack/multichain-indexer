@@ -43,6 +43,7 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 		TransactionDetails:             "full",
 		Rewards:                        false,
 		MaxSupportedTransactionVersion: 0,
+		Commitment:                     "finalized",
 	}
 	resp, err := c.base.CallRPC(ctx, "getBlock", []any{slot, cfg})
 	if err != nil {
