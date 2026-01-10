@@ -105,7 +105,7 @@ chains:
       batch_size: 10
       concurrency: 1
 
-solana_mainnet:
+  solana_mainnet:
     network_id: "solana"
     internal_code: "SOL_MAINNET"
     type: "sol"
@@ -130,7 +130,7 @@ solana_mainnet:
       batch_size: 5
       concurrency: 1
 
-solana_testnet:
+  solana_testnet:
     network_id: "solana_testnet"
     internal_code: "SOL_TESTNET"
     type: "sol"

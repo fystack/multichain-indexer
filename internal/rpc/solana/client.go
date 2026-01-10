@@ -24,9 +24,21 @@ func NewSolanaClient(
 		base: rpc.NewBaseClient(baseURL, "sol", rpc.ClientTypeRPC, auth, timeout, rl),
 	}
 }
+func (c *Client) CallRPC(ctx context.Context, method string, params any) (*rpc.RPCResponse, error) {
+	return c.base.CallRPC(ctx, method, params)
+}
+
+func (c *Client) Do(ctx context.Context, method, endpoint string, body any, params map[string]string) ([]byte, error) {
+	return c.base.Do(ctx, method, endpoint, body, params)
+}
+
+func (c *Client) GetNetworkType() string { return c.base.GetNetworkType() }
+func (c *Client) GetClientType() string  { return c.base.GetClientType() }
+func (c *Client) GetURL() string         { return c.base.GetURL() }
+func (c *Client) Close() error           { return c.base.Close() }
 
 func (c *Client) GetSlot(ctx context.Context) (uint64, error) {
-	resp, err := c.base.CallRPC(ctx, "getSlot", []any{"finalized"})
+	resp, err := c.base.CallRPC(ctx, "getSlot", []any{map[string]any{"commitment": "finalized"}})
 	if err != nil {
 		return 0, err
 	}
