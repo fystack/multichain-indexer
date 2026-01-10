@@ -61,7 +61,14 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 	if err != nil {
 		return nil, err
 	}
-	// Some RPCs return null if slot is skipped.
+
+	// Skipped slots are normal on Solana. Some RPCs return null, others return error -32007.
+	if resp.Error != nil {
+		if resp.Error.Code == -32007 {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("getBlock RPC error: %w", resp.Error)
+	}
 	if string(resp.Result) == "null" {
 		return nil, nil
 	}

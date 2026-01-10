@@ -77,9 +77,11 @@ type AccountKey struct {
 	Writable bool   `json:"writable"`
 }
 
+// Instruction JSON shape differs between encodings. With jsonParsed, "accounts" may be strings.
+// We don't need instructions for our current balance-delta based extraction, so keep it flexible.
 type Instruction struct {
-	ProgramIdIndex uint64  `json:"programIdIndex"`
-	Accounts       []uint64 `json:"accounts"`
-	Data           string  `json:"data"` // base58
+	ProgramIdIndex uint64 `json:"programIdIndex"`
+	Accounts       any    `json:"accounts"`
+	Data           string `json:"data"` // base58
 }
 
