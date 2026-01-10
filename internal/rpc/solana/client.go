@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
@@ -59,6 +60,10 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 	}
 	resp, err := c.base.CallRPC(ctx, "getBlock", []any{slot, cfg})
 	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "-32007") || strings.Contains(strings.ToLower(msg), "was skipped") || strings.Contains(strings.ToLower(msg), "ledger jump") {
+			return nil, nil
+		}
 		return nil, err
 	}
 

@@ -10,9 +10,10 @@ import (
 	"github.com/shopspring/decimal"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
-	solrpc "github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 )
 const solAssetAddress = "SOL"
@@ -20,10 +21,10 @@ const solAssetAddress = "SOL"
 type SolanaIndexer struct {
 	chainName string
 	config    config.ChainConfig
-	failover  *rpc.Failover[solrpc.SolanaAPI]
+	failover  *rpc.Failover[solana.SolanaAPI]
 }
 
-func NewSolanaIndexer(chainName string, cfg config.ChainConfig, failover *rpc.Failover[solrpc.SolanaAPI]) *SolanaIndexer {
+func NewSolanaIndexer(chainName string, cfg config.ChainConfig, failover *rpc.Failover[solana.SolanaAPI]) *SolanaIndexer {
 	return &SolanaIndexer{chainName: chainName, config: cfg, failover: failover}
 }
 
@@ -33,7 +34,7 @@ func (s *SolanaIndexer) GetNetworkInternalCode() string   { return s.config.Inte
 
 func (s *SolanaIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var slot uint64
-	err := s.failover.ExecuteWithRetry(ctx, func(c solrpc.SolanaAPI) error {
+	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
 		n, err := c.GetSlot(ctx)
 		slot = n
 		return err
@@ -70,8 +71,8 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 	results := make([]BlockResult, 0, len(blockNumbers))
 	for _, slot := range blockNumbers {
 		slot := slot
-		var b *solrpc.GetBlockResult
-		err := s.failover.ExecuteWithRetry(ctx, func(c solrpc.SolanaAPI) error {
+		var b *solana.GetBlockResult
+		err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
 			blk, err := c.GetBlock(ctx, slot)
 			b = blk
 			return err
@@ -91,6 +92,13 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 		} else {
 			timestamp = uint64(time.Now().UTC().Unix())
 		}
+		logger.Debug("[SOLANA] fetched block",
+			"chain", s.chainName,
+			"slot", slot,
+			"txs", len(b.Transactions),
+			"blockhash", b.Blockhash,
+			"parent", b.PreviousBlockhash,
+		)
 
 		txs := extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b)
 		block := &types.Block{
@@ -112,7 +120,7 @@ func (s *SolanaIndexer) IsHealthy() bool {
 	return err == nil
 }
 
-func extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solrpc.GetBlockResult) []types.Transaction {
+func extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
 	out := make([]types.Transaction, 0)
 
 	for _, tx := range b.Transactions {
