@@ -8,6 +8,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
@@ -243,6 +244,13 @@ func (cw *CatchupWorker) processRange(r blockstore.CatchupRange, workerID int) e
 		// Process results
 		batchSuccess := current - 1
 		for _, res := range results {
+			if res.Error != nil && res.Error.ErrorType == indexer.ErrorTypeBlockNotFound && cw.chain.GetNetworkType() == enum.NetworkTypeSol {
+				// Solana skipped slots are normal. Do not treat as errors during catchup.
+				if res.Number > batchSuccess {
+					batchSuccess = res.Number
+				}
+				continue
+			}
 			if cw.handleBlockResult(res) && res.Number > batchSuccess {
 				batchSuccess = res.Number
 			}
