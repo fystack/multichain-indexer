@@ -3,12 +3,13 @@ package indexer
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	"github.com/shopspring/decimal"
-
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
@@ -16,7 +17,9 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 )
+
 const solAssetAddress = "SOL"
+const solanaMaxParallelFactor = 8
 
 type SolanaIndexer struct {
 	chainName string
@@ -64,10 +67,14 @@ func (s *SolanaIndexer) GetBlocks(ctx context.Context, from, to uint64, isParall
 	for n := from; n <= to; n++ {
 		nums = append(nums, n)
 	}
+
+	if !isParallel {
+		return s.getBlocksByNumbersSequential(ctx, nums)
+	}
 	return s.GetBlocksByNumbers(ctx, nums)
 }
 
-func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
+func (s *SolanaIndexer) getBlocksByNumbersSequential(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
 	results := make([]BlockResult, 0, len(blockNumbers))
 	for _, slot := range blockNumbers {
 		slot := slot
@@ -110,6 +117,91 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 		}
 		results = append(results, BlockResult{Number: slot, Block: block})
 	}
+	return results, nil
+}
+
+func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
+	if len(blockNumbers) == 0 {
+		return []BlockResult{}, nil
+	}
+
+	maxConc := s.config.Throttle.Concurrency
+	if maxConc <= 0 {
+		maxConc = 1
+	}
+	if maxConc > runtime.GOMAXPROCS(0)*solanaMaxParallelFactor {
+		maxConc = runtime.GOMAXPROCS(0) * solanaMaxParallelFactor
+	}
+
+	results := make([]BlockResult, len(blockNumbers))
+
+	eg, egCtx := errgroup.WithContext(ctx)
+	sem := make(chan struct{}, maxConc)
+
+	for i, slot := range blockNumbers {
+		i := i
+		slot := slot
+		eg.Go(func() error {
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-egCtx.Done():
+				return egCtx.Err()
+			}
+
+			var (
+				b   *solana.GetBlockResult
+				berr error
+			)
+			berr = s.failover.ExecuteWithRetry(egCtx, func(c solana.SolanaAPI) error {
+				blk, err := c.GetBlock(egCtx, slot)
+				b = blk
+				return err
+			})
+
+			if berr != nil {
+				results[i] = BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: berr.Error()}}
+				return nil
+			}
+			if b == nil {
+				results[i] = BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeBlockNotFound, Message: "block not found (skipped slot?)"}}
+				return nil
+			}
+
+			timestamp := uint64(0)
+			if b.BlockTime != nil {
+				timestamp = uint64(*b.BlockTime)
+			} else {
+				timestamp = uint64(time.Now().UTC().Unix())
+			}
+			logger.Debug("[SOLANA] fetched block",
+				"chain", s.chainName,
+				"slot", slot,
+				"txs", len(b.Transactions),
+				"blockhash", b.Blockhash,
+				"parent", b.PreviousBlockhash,
+			)
+
+			txs := extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b)
+			block := &types.Block{
+				Number:       slot,
+				Hash:         b.Blockhash,
+				ParentHash:   b.PreviousBlockhash,
+				Timestamp:    timestamp,
+				Transactions: txs,
+			}
+			results[i] = BlockResult{Number: slot, Block: block}
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		if err == context.Canceled || err == context.DeadlineExceeded {
+			return nil, err
+		}
+		return nil, err
+	}
+
 	return results, nil
 }
 

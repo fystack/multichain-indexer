@@ -113,41 +113,42 @@ chains:
     poll_interval: "2s"
     nodes:
       - url: "https://solana-rpc.publicnode.com"
+      - url: "https://api.mainnet.solana.com"
       - url: "https://solana.drpc.org"
-      - url: "https://api.mainnet.solana.com" 
       - url: "https://solana.leorpc.com/?api_key=FREE"
       - url: "https://solana.api.pocket.network"
       - url: "https://public.rpc.solanavibestation.com"
       # - url: "https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
       # - url: "https://solana-mainnet.g.quicknode.pro/${QUICKNODE_KEY}/"  # optional
     client:
-      timeout: "30s"
-      max_retries: 5
-      retry_delay: "10s"
+      timeout: "12s"
+      max_retries: 2
+      retry_delay: "500ms"
     throttle:
-      rps: 8
-      burst: 16
-      batch_size: 5
-      concurrency: 1
+      rps: 80
+      burst: 160
+      batch_size: 40
+      concurrency: 12
 
   solana_testnet:
     network_id: "solana_testnet"
     internal_code: "SOL_TESTNET"
     type: "sol"
-    start_block: 0
+    start_block: 380860781
     poll_interval: "2s"
     nodes:
-      - url: "https://api.testnet.solana.com"
       - url: "https://solana-testnet-rpc.publicnode.com"
+      - url: "https://api.testnet.solana.com"
     client:
-      timeout: "30s"
-      max_retries: 5
-      retry_delay: "10s"
+      timeout: "12s"
+      max_retries: 2
+      retry_delay: "500ms"
     throttle:
-      rps: 8
-      burst: 16
-      batch_size: 5
-      concurrency: 1
+      rps: 80
+      burst: 160
+      batch_size: 40
+      concurrency: 12
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
