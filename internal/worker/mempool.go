@@ -17,9 +17,9 @@ import (
 // Polls the mempool for pending transactions and emits them to NATS
 type MempoolWorker struct {
 	*BaseWorker
-	seenTxs       map[string]bool // Track seen transactions to avoid duplicates
-	pollInterval  time.Duration   // How often to poll mempool
-	btcIndexer    *indexer.BitcoinIndexer
+	seenTxs      map[string]bool // Track seen transactions to avoid duplicates
+	pollInterval time.Duration   // How often to poll mempool
+	btcIndexer   *indexer.BitcoinIndexer
 }
 
 // NewMempoolWorker creates a new mempool worker for Bitcoin chains

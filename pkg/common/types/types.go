@@ -21,7 +21,7 @@ type Block struct {
 type Transaction struct {
 	TxHash        string          `json:"txHash"`
 	NetworkId     string          `json:"networkId"`
-	BlockNumber   uint64          `json:"blockNumber"`             // 0 for mempool transactions
+	BlockNumber   uint64          `json:"blockNumber"` // 0 for mempool transactions
 	FromAddress   string          `json:"fromAddress"`
 	ToAddress     string          `json:"toAddress"`
 	AssetAddress  string          `json:"assetAddress"`

@@ -66,7 +66,7 @@ chains:
     type: "btc"
     start_block: 4440000 # recent testnet block
     poll_interval: "60s" # Bitcoin blocks ~10 minutes
-    confirmations: 6
+    confirmations: 1
     reorg_rollback_window: 100
     nodes:
       - url: "https://bitcoin-testnet-rpc.publicnode.com"
@@ -87,7 +87,7 @@ chains:
     type: "btc"
     start_block: 850000
     poll_interval: "60s"
-    confirmations: 6
+    confirmations: 1
     reorg_rollback_window: 100
     nodes:
       - url: "https://bitcoin-rpc.publicnode.com"

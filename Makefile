@@ -22,10 +22,10 @@ run:
 	./$(INDEXER_BINARY) index --catchup
 
 run-ethereum-mainnet: build
-	./$(INDEXER_BINARY) index --chain=ethereum-mainnet --catchup
+	./$(INDEXER_BINARY) index --chain=ethereum_mainnet --catchup
 
 run-tron-mainnet: build
-	./$(INDEXER_BINARY) index --chain=tron-mainnet --catchup
+	./$(INDEXER_BINARY) index --chain=tron_mainnet --catchup
 
 run-bitcoin-testnet: build
 	./$(INDEXER_BINARY) index --chain=bitcoin_testnet --catchup
@@ -39,3 +39,6 @@ wallet-kv-load: build-wallet-kv-load
 stop:
 	@echo "Killing indexer..."
 	- pkill -f "./$(INDEXER_BINARY)" || true
+
+fmt:
+	go fmt ./...

@@ -223,35 +223,6 @@ func (b *BitcoinIndexer) GetBlocksByNumbers(
 	return results, firstErr
 }
 
-// convertBlock converts a Bitcoin block without prevout resolution (fast path)
-// Use convertBlockWithPrevoutResolution for full address resolution
-func (b *BitcoinIndexer) convertBlock(btcBlock *bitcoin.Block) (*types.Block, error) {
-	var allTransfers []types.Transaction
-
-	// Calculate latest block height from confirmations
-	latestBlock := btcBlock.Height
-	if btcBlock.Confirmations > 0 {
-		latestBlock = btcBlock.Height + btcBlock.Confirmations - 1
-	}
-
-	for i := range btcBlock.Tx {
-		tx := &btcBlock.Tx[i]
-		if tx.IsCoinbase() {
-			continue
-		}
-		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
-		allTransfers = append(allTransfers, transfers...)
-	}
-
-	return &types.Block{
-		Number:       btcBlock.Height,
-		Hash:         btcBlock.Hash,
-		ParentHash:   btcBlock.PreviousBlockHash,
-		Timestamp:    btcBlock.Time,
-		Transactions: allTransfers,
-	}, nil
-}
-
 // extractTransfersFromTx extracts all transfers from a transaction.
 func (b *BitcoinIndexer) extractTransfersFromTx(
 	tx *bitcoin.Transaction,
@@ -276,6 +247,11 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 		toAddr := bitcoin.GetOutputAddress(&vout)
 		if toAddr == "" {
 			continue // Skip unspendable outputs (OP_RETURN, etc.)
+		}
+
+		// Normalize Bitcoin address (bech32 -> lowercase, base58 -> validated)
+		if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
+			toAddr = normalized
 		}
 
 		// Convert BTC to satoshis (multiply by 1e8)
@@ -312,6 +288,9 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 func (b *BitcoinIndexer) getFirstInputAddress(tx *bitcoin.Transaction) string {
 	for _, vin := range tx.Vin {
 		if addr := bitcoin.GetInputAddress(&vin); addr != "" {
+			if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
+				return normalized
+			}
 			return addr
 		}
 	}
