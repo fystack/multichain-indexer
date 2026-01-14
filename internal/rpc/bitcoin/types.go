@@ -15,9 +15,9 @@ type Block struct {
 // Transaction represents a Bitcoin transaction
 type Transaction struct {
 	TxID     string   `json:"txid"`
-	Hash     string   `json:"hash"`      // Witness hash
+	Hash     string   `json:"hash"` // Witness hash
 	Size     int      `json:"size"`
-	VSize    int      `json:"vsize"`     // Virtual size (for SegWit)
+	VSize    int      `json:"vsize"` // Virtual size (for SegWit)
 	Version  int      `json:"version"`
 	LockTime uint64   `json:"locktime"`
 	Vin      []Input  `json:"vin"`
@@ -26,12 +26,12 @@ type Transaction struct {
 
 // Input represents a transaction input
 type Input struct {
-	TxID      string     `json:"txid"`              // Previous transaction hash
-	Vout      uint32     `json:"vout"`              // Previous output index
-	ScriptSig ScriptSig  `json:"scriptSig"`         // Signature script
-	Sequence  uint64     `json:"sequence"`          // Sequence number
-	Witness   []string   `json:"txinwitness,omitempty"` // Witness data (for SegWit)
-	PrevOut   *Output    `json:"prevout,omitempty"` // Previous output (extended API)
+	TxID      string    `json:"txid"`                  // Previous transaction hash
+	Vout      uint32    `json:"vout"`                  // Previous output index
+	ScriptSig ScriptSig `json:"scriptSig"`             // Signature script
+	Sequence  uint64    `json:"sequence"`              // Sequence number
+	Witness   []string  `json:"txinwitness,omitempty"` // Witness data (for SegWit)
+	PrevOut   *Output   `json:"prevout,omitempty"`     // Previous output (extended API)
 }
 
 // Output represents a transaction output
@@ -51,7 +51,7 @@ type ScriptSig struct {
 type ScriptPubKey struct {
 	ASM       string   `json:"asm"`
 	Hex       string   `json:"hex"`
-	Type      string   `json:"type"` // pubkeyhash, scripthash, witness_v0_keyhash, etc.
+	Type      string   `json:"type"`                // pubkeyhash, scripthash, witness_v0_keyhash, etc.
 	Address   string   `json:"address,omitempty"`   // Single address (extended API)
 	Addresses []string `json:"addresses,omitempty"` // Multiple addresses (legacy)
 }
@@ -66,13 +66,13 @@ type BlockchainInfo struct {
 
 // MempoolEntry represents a mempool transaction entry
 type MempoolEntry struct {
-	VSize          int     `json:"vsize"`          // Virtual size
-	Weight         int     `json:"weight"`         // Transaction weight
-	Time           uint64  `json:"time"`           // Unix time when tx entered mempool
-	Height         uint64  `json:"height"`         // Block height when tx entered mempool
-	Fee            float64 `json:"fee"`            // Transaction fee in BTC
-	ModifiedFee    float64 `json:"modifiedfee"`    // Transaction fee with descendants
-	Depends        []string `json:"depends"`        // Unconfirmed parent transactions
-	SpentBy        []string `json:"spentby"`        // Unconfirmed child transactions
-	BIP125Replace  bool    `json:"bip125-replaceable"` // Whether tx signals RBF
+	VSize         int      `json:"vsize"`              // Virtual size
+	Weight        int      `json:"weight"`             // Transaction weight
+	Time          uint64   `json:"time"`               // Unix time when tx entered mempool
+	Height        uint64   `json:"height"`             // Block height when tx entered mempool
+	Fee           float64  `json:"fee"`                // Transaction fee in BTC
+	ModifiedFee   float64  `json:"modifiedfee"`        // Transaction fee with descendants
+	Depends       []string `json:"depends"`            // Unconfirmed parent transactions
+	SpentBy       []string `json:"spentby"`            // Unconfirmed child transactions
+	BIP125Replace bool     `json:"bip125-replaceable"` // Whether tx signals RBF
 }
