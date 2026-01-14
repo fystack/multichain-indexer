@@ -82,21 +82,10 @@ func (t Transaction) Hash() string {
 
 // Transaction status constants
 const (
-	StatusPending   = "pending"   // 0 confirmations (mempool)
-	StatusConfirmed = "confirmed" // 1+ confirmations (txfinalizer handles finality)
+	StatusPending   = "pending"   // Less than required confirmations
+	StatusConfirmed = "confirmed" // Meets or exceeds required confirmations
 	StatusOrphaned  = "orphaned"  // Transaction was in a reorged block
 )
-
-// CalculateStatus determines transaction status based on confirmation count
-// 0 confirmations: "pending" (mempool)
-// 1+ confirmations: "confirmed" (txfinalizer handles finality with 6+ blocks)
-// Note: "orphaned" status is set manually when a reorg is detected
-func CalculateStatus(confirmations uint64) string {
-	if confirmations == 0 {
-		return StatusPending
-	}
-	return StatusConfirmed
-}
 
 // IsFinalized returns true if the transaction status is final (confirmed or orphaned)
 func IsFinalized(status string) bool {

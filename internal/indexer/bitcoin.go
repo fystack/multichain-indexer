@@ -14,6 +14,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
 )
 
@@ -238,7 +239,7 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	fee := tx.CalculateFee()
 
 	confirmations := b.calculateConfirmations(blockNumber, latestBlock)
-	status := types.CalculateStatus(confirmations)
+	status := utils.CalculateTransactionStatus(confirmations, b.confirmations)
 
 	fromAddr := b.getFirstInputAddress(tx)
 
