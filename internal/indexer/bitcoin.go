@@ -254,6 +254,12 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			toAddr = normalized
 		}
 
+		// Skip self-transfers (change outputs back to sender)
+		// This prevents confusing transfers where from=to
+		if fromAddr != "" && fromAddr == toAddr {
+			continue
+		}
+
 		// Convert BTC to satoshis (multiply by 1e8)
 		amountSat := int64(vout.Value * 1e8)
 
