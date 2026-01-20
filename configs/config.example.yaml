@@ -103,6 +103,17 @@ chains:
       batch_size: 10
       concurrency: 1
 
+  sui_mainnet:
+    # Example Sui network using gRPC-based node endpoint.
+    # Adjust network_id, internal_code, start_block (checkpoint sequence), and URL to your setup.
+    network_id: "sui_mainnet"
+    internal_code: "SUI_MAINNET"
+    type: "sui"
+    start_block: 0
+    poll_interval: "5s"
+    nodes:
+      - url: "https://fullnode.testnet.sui.io:443" # e.g. 127.0.0.1:9000
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port

@@ -4,3 +4,7 @@ configs/config.yaml
 indexer
 kv-migrate
 wallet-kv-load
+
+# External dependencies
+sui-apis
+sui-apis.backup
