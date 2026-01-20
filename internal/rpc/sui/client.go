@@ -149,11 +149,9 @@ func (c *SuiClient) BatchGetCheckpoints(ctx context.Context, sequenceNumbers []u
 	}
 
 	// Note: The proto doesn't have BatchGetCheckpoints, so we'll do sequential calls
-	// In a production system, you might want to use goroutines for parallel requests
 	for _, seq := range sequenceNumbers {
 		cp, err := c.GetCheckpoint(ctx, seq)
 		if err != nil {
-			// Continue on error, but you might want to handle this differently
 			continue
 		}
 		results[seq] = cp
