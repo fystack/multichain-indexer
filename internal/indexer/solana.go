@@ -21,7 +21,6 @@ import (
 )
 
 const solAssetAddress = "SOL"
-const solanaMaxParallelFactor = 8
 
 type SolanaIndexer struct {
 	chainName   string
@@ -142,9 +141,6 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 	maxConc := s.config.Throttle.Concurrency
 	if maxConc <= 0 {
 		maxConc = 1
-	}
-	if maxConc > runtime.GOMAXPROCS(0)*solanaMaxParallelFactor {
-		maxConc = runtime.GOMAXPROCS(0) * solanaMaxParallelFactor
 	}
 
 	results := make([]BlockResult, len(blockNumbers))
