@@ -230,7 +230,7 @@ func buildBitcoinIndexer(
 }
 
 // buildSolanaIndexer constructs a Solana indexer with failover and providers.
-func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode) indexer.Indexer {
+func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
 	failover := rpc.NewFailover[solana.SolanaAPI](nil)
 
 	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
@@ -259,7 +259,7 @@ func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode Work
 		})
 	}
 
-	return indexer.NewSolanaIndexer(chainName, chainCfg, failover)
+	return indexer.NewSolanaIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
@@ -298,7 +298,7 @@ func CreateManagerWithWorkers(
 		case enum.NetworkTypeBtc:
 			idxr = buildBitcoinIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSol:
-			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular)
+			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
