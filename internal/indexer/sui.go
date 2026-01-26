@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -28,11 +27,22 @@ type SuiIndexer struct {
 }
 
 func NewSuiIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[sui.SuiAPI]) *SuiIndexer {
-	return &SuiIndexer{
+	s := &SuiIndexer{
 		chainName: chainName,
 		cfg:       cfg,
 		failover:  f,
 	}
+
+	// Start streaming in background on best available node
+	go func() {
+		// Small delay to allow initial connection
+		time.Sleep(1 * time.Second)
+		_ = s.failover.ExecuteWithRetry(context.Background(), func(c sui.SuiAPI) error {
+			return c.StartStreaming(context.Background())
+		})
+	}()
+
+	return s
 }
 
 func (s *SuiIndexer) GetName() string                  { return strings.ToUpper(s.chainName) }
@@ -41,7 +51,6 @@ func (s *SuiIndexer) GetNetworkInternalCode() string   { return s.cfg.InternalCo
 
 // GetLatestBlockNumber returns the latest checkpoint sequence number.
 func (s *SuiIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
-	fmt.Fprintln(os.Stderr, "DEBUG: GetLatestBlockNumber called")
 
 	timeout := s.cfg.Client.Timeout
 	if timeout == 0 {
@@ -56,7 +65,6 @@ func (s *SuiIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 		latest = n
 		return err
 	})
-	fmt.Fprintf(os.Stderr, "DEBUG: GetLatestBlockNumber returning %d, err=%v\n", latest, err)
 	return latest, err
 }
 
@@ -68,6 +76,25 @@ func (s *SuiIndexer) GetBlock(ctx context.Context, number uint64) (*types.Block,
 		cp, err = c.GetCheckpoint(ctx, number)
 		return err
 	})
+
+	// Optimization: If block not found but theoretically exists (based on latest height),
+	// wait briefly and retry once to handle public node lag.
+	if err != nil && strings.Contains(err.Error(), "not found") {
+		latest, _ := s.GetLatestBlockNumber(ctx)
+		if latest > 0 && number <= latest {
+			time.Sleep(500 * time.Millisecond)
+			_ = s.failover.ExecuteWithRetry(ctx, func(c sui.SuiAPI) error {
+				var retryErr error
+				cp, retryErr = c.GetCheckpoint(ctx, number)
+				return retryErr
+			})
+			// If cp is found now, clear error
+			if cp != nil {
+				err = nil
+			}
+		}
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("get sui checkpoint %d failed: %w", number, err)
 	}

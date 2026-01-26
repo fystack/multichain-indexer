@@ -24,4 +24,7 @@ type SuiAPI interface {
 
 	// Batch get transactions by digests
 	BatchGetTransactions(ctx context.Context, digests []string) (map[string]*Transaction, error)
+
+	// Start streaming checkpoints
+	StartStreaming(ctx context.Context) error
 }

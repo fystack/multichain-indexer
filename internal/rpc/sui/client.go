@@ -3,6 +3,7 @@ package sui
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc"
@@ -16,19 +17,27 @@ import (
 
 // SuiClient implements the SuiAPI interface using gRPC
 type SuiClient struct {
-	conn         *grpc.ClientConn
-	ledgerClient v2.LedgerServiceClient
-	baseURL      string
-	network      string
-	clientType   string
+	conn             *grpc.ClientConn
+	ledgerClient     v2.LedgerServiceClient
+	subscriberClient v2.SubscriptionServiceClient
+	baseURL          string
+	network          string
+	clientType       string
+
+	// Streaming & Caching
+	streamMu           sync.RWMutex
+	streamHeight       uint64
+	streamBuffer       map[uint64]*Checkpoint
+	streamDisconnected bool
 }
 
 // NewSuiClient creates a new Sui gRPC client
 func NewSuiClient(url string) *SuiClient {
 	return &SuiClient{
-		baseURL:    url,
-		network:    "sui",
-		clientType: "grpc",
+		baseURL:      url,
+		network:      "sui",
+		clientType:   "grpc",
+		streamBuffer: make(map[uint64]*Checkpoint),
 	}
 }
 
@@ -70,40 +79,141 @@ func (c *SuiClient) connect(ctx context.Context) error {
 	}
 	c.conn = conn
 	c.ledgerClient = v2.NewLedgerServiceClient(conn)
+	// Initialize subscription client
+	c.subscriberClient = v2.NewSubscriptionServiceClient(conn)
 	return nil
+}
+
+// StartStreaming starts the background streaming process
+func (c *SuiClient) StartStreaming(ctx context.Context) error {
+	// Call connect to ensure connection exists before streaming
+	if err := c.connect(ctx); err != nil {
+		return err
+	}
+	go c.streamLoop(ctx)
+	return nil
+}
+
+func (c *SuiClient) streamLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			if err := c.subscribe(ctx); err != nil {
+				c.streamMu.Lock()
+				c.streamDisconnected = true
+				c.streamMu.Unlock()
+				// Backoff
+				time.Sleep(5 * time.Second)
+			}
+		}
+	}
+}
+
+func (c *SuiClient) subscribe(ctx context.Context) error {
+	mask, err := fieldmaskpb.New(
+		&v2.SubscribeCheckpointsResponse{},
+		"checkpoint.sequence_number",
+		"checkpoint.digest",
+		"checkpoint.summary",
+		"checkpoint.transactions",
+		"checkpoint.transactions.transaction",
+		"checkpoint.transactions.effects",
+		"checkpoint.transactions.balance_changes",
+	)
+	if err != nil {
+		return err
+	}
+
+	req := &v2.SubscribeCheckpointsRequest{
+		ReadMask: mask,
+	}
+
+	stream, err := c.subscriberClient.SubscribeCheckpoints(ctx, req)
+	if err != nil {
+		return fmt.Errorf("subscribe failed: %w", err)
+	}
+
+	for {
+		resp, err := stream.Recv()
+		if err != nil {
+			return err
+		}
+
+		cursor := resp.GetCursor()
+		checkpoint := resp.GetCheckpoint()
+
+		seq := cursor
+		if checkpoint != nil && checkpoint.SequenceNumber != nil {
+			seq = *checkpoint.SequenceNumber
+		}
+
+		if seq > 0 {
+			c.streamMu.Lock()
+			c.streamDisconnected = false
+			if seq > c.streamHeight {
+				c.streamHeight = seq
+			}
+
+			if checkpoint != nil && checkpoint.GetDigest() != "" {
+				// Ensure SequenceNumber is populated if we relied on cursor
+				if checkpoint.SequenceNumber == nil {
+					checkpoint.SequenceNumber = &seq
+				}
+
+				// Buffer recent checkpoints
+				c.streamBuffer[seq] = &Checkpoint{Checkpoint: checkpoint}
+
+				// Prune buffer (limit to 100)
+				if len(c.streamBuffer) > 100 {
+					for k := range c.streamBuffer {
+						if k < seq-100 {
+							delete(c.streamBuffer, k)
+						}
+					}
+				}
+			}
+			c.streamMu.Unlock()
+		}
+	}
 }
 
 // GetLatestCheckpointSequence returns the latest checkpoint sequence number
 func (c *SuiClient) GetLatestCheckpointSequence(ctx context.Context) (uint64, error) {
+	// Check stream first
+	c.streamMu.RLock()
+	height := c.streamHeight
+	disconnected := c.streamDisconnected
+	c.streamMu.RUnlock()
+
+	if height > 0 && !disconnected {
+		return height, nil
+	}
+
 	if err := c.connect(ctx); err != nil {
 		return 0, err
 	}
 
-	// Get current checkpoint
-	req := &v2.GetCheckpointRequest{
-		ReadMask: &fieldmaskpb.FieldMask{
-			Paths: []string{
-				"sequence_number",
-				"summary.timestamp",
-				"contents.transactions",
-			},
-		},
-	}
-
-	resp, err := c.ledgerClient.GetCheckpoint(ctx, req)
+	// Use lightweight GetServiceInfo fallback
+	resp, err := c.ledgerClient.GetServiceInfo(ctx, &v2.GetServiceInfoRequest{})
 	if err != nil {
-		return 0, fmt.Errorf("GetCheckpoint failed: %w", err)
+		return 0, fmt.Errorf("GetServiceInfo failed (fallback): %w", err)
 	}
 
-	if resp.Checkpoint == nil {
-		return 0, fmt.Errorf("checkpoint not available")
-	}
-
-	return *resp.Checkpoint.SequenceNumber, nil
+	return resp.GetCheckpointHeight(), nil
 }
 
 // GetCheckpoint returns a checkpoint by sequence number
 func (c *SuiClient) GetCheckpoint(ctx context.Context, sequenceNumber uint64) (*Checkpoint, error) {
+	// Check stream buffer first
+	c.streamMu.RLock()
+	cp, found := c.streamBuffer[sequenceNumber]
+	c.streamMu.RUnlock()
+	if found {
+		return cp, nil
+	}
+
 	if err := c.connect(ctx); err != nil {
 		return nil, err
 	}
