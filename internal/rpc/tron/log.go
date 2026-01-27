@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/shopspring/decimal"
 )
@@ -31,7 +32,7 @@ func (l Log) ParseTRC20Transfers(
 		ToAddress:    HexToTronAddress(to),
 		AssetAddress: HexToTronAddress(l.Address),
 		Amount:       amount.String(),
-		Type:         "erc20_transfer",
+		Type:         constant.TxTypeTokenTransfer,
 		TxFee:        decimal.Zero,
 		Timestamp:    ts,
 	}
