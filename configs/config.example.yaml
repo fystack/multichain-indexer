@@ -112,7 +112,8 @@ chains:
     start_block: 0
     poll_interval: "5s"
     nodes:
-      - url: "https://fullnode.testnet.sui.io:443" # e.g. 127.0.0.1:9000
+      - url: "https://fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
+      - url: "https://sui-mainnet.nodeinfra.com:443"
 
 # Infrastructure services
 services:
