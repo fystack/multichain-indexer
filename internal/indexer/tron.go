@@ -172,7 +172,7 @@ func (t *TronIndexer) processBlock(
 						ToAddress:    tron.HexToTronAddress(transfer.ToAddress),
 						AssetAddress: "",
 						Amount:       decimal.NewFromInt(transfer.Amount).String(),
-						Type:         constant.TxnTypeTransfer,
+						Type:         constant.TxTypeNativeTransfer,
 						Timestamp:    ts,
 					}
 				}
@@ -187,7 +187,7 @@ func (t *TronIndexer) processBlock(
 						ToAddress:    tron.HexToTronAddress(asset.ToAddress),
 						AssetAddress: asset.AssetName,
 						Amount:       decimal.NewFromInt(asset.Amount).String(),
-						Type:         constant.TxnTypeTRC10Transfer,
+						Type:         constant.TxTypeTokenTransfer,
 						Timestamp:    ts,
 					}
 				}
