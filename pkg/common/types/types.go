@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/shopspring/decimal"
 )
 
@@ -26,7 +27,7 @@ type Transaction struct {
 	ToAddress     string          `json:"toAddress"`
 	AssetAddress  string          `json:"assetAddress"`
 	Amount        string          `json:"amount"`
-	Type          string          `json:"type"`
+	Type          constant.TxType `json:"type"`
 	TxFee         decimal.Decimal `json:"txFee"`
 	Timestamp     uint64          `json:"timestamp"`
 	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)

@@ -278,7 +278,7 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			ToAddress:     toAddr,
 			AssetAddress:  "", // Empty for native BTC
 			Amount:        strconv.FormatInt(amountSat, 10),
-			Type:          constant.TxnTypeTransfer,
+			Type:          constant.TxTypeNativeTransfer,
 			TxFee:         txFee,
 			Timestamp:     ts,
 			Confirmations: confirmations,
