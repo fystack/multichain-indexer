@@ -17,9 +17,9 @@ import (
 // Polls the mempool for pending transactions and emits them to NATS
 type MempoolWorker struct {
 	*BaseWorker
-	seenTxs       map[string]bool // Track seen transactions to avoid duplicates
-	pollInterval  time.Duration   // How often to poll mempool
-	btcIndexer    *indexer.BitcoinIndexer
+	seenTxs      map[string]bool // Track seen transactions to avoid duplicates
+	pollInterval time.Duration   // How often to poll mempool
+	btcIndexer   *indexer.BitcoinIndexer
 }
 
 // NewMempoolWorker creates a new mempool worker for Bitcoin chains
@@ -91,11 +91,18 @@ func (mw *MempoolWorker) processMempool() error {
 		return err
 	}
 
-	// Track and emit new transactions
+	// Track and emit new transactions (only TO monitored addresses - deposits)
 	newTxCount := 0
 	networkType := mw.chain.GetNetworkType()
 
 	for _, tx := range transactions {
+		// Only emit transactions where TO address is monitored (incoming deposits)
+		// Outgoing transactions are handled by the withdrawal flow
+		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
+		if !toMonitored {
+			continue
+		}
+
 		// Create unique key for deduplication (txHash + toAddress for UTXO model)
 		txKey := tx.TxHash + ":" + tx.ToAddress
 		if mw.seenTxs[txKey] {
@@ -106,30 +113,17 @@ func (mw *MempoolWorker) processMempool() error {
 		mw.seenTxs[txKey] = true
 		newTxCount++
 
-		// Determine direction for logging
-		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
-		fromMonitored := tx.FromAddress != "" && mw.pubkeyStore.Exist(networkType, tx.FromAddress)
-
-		direction := "unknown"
-		if toMonitored && fromMonitored {
-			direction = "internal"
-		} else if toMonitored {
-			direction = "incoming"
-		} else if fromMonitored {
-			direction = "outgoing"
-		}
-
 		// Emit transaction to NATS
 		if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
 			mw.logger.Error("Failed to emit mempool transaction",
 				"txHash", tx.TxHash,
-				"direction", direction,
+				"direction", "incoming",
 				"err", err,
 			)
 		} else {
 			mw.logger.Debug("Emitted mempool transaction",
 				"txHash", tx.TxHash,
-				"direction", direction,
+				"direction", "incoming",
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
 				"amount", tx.Amount,

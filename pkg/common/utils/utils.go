@@ -43,3 +43,16 @@ func ChunkBySize[T any](slice []T, chunkSize int) [][]T {
 	}
 	return chunks
 }
+
+// CalculateTransactionStatus calculates the transaction status based on the number of confirmations and the required confirmations.
+func CalculateTransactionStatus(confirmations, requiredConfirmations uint64) string {
+	const (
+		StatusPending   = "pending"
+		StatusConfirmed = "confirmed"
+	)
+
+	if confirmations < requiredConfirmations {
+		return StatusPending
+	}
+	return StatusConfirmed
+}
