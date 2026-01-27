@@ -62,13 +62,12 @@ chains:
       - url: "https://bnb.rpc.subquery.network/public"
 
   bitcoin_testnet:
-    network_id: "bitcoin_testnet"
     internal_code: "BTC_TESTNET"
     type: "btc"
-    start_block: 2500000 # recent testnet block
+    start_block: 4440000 # recent testnet block
     poll_interval: "60s" # Bitcoin blocks ~10 minutes
-    confirmations: 6 # wait for 6 confirmations before indexing
-    reorg_rollback_window: 100 # Bitcoin can have deeper reorgs than EVM chains
+    confirmations: 1
+    reorg_rollback_window: 100
     nodes:
       - url: "https://bitcoin-testnet-rpc.publicnode.com"
       - url: "https://blockstream.info/testnet/api"
@@ -84,12 +83,11 @@ chains:
       concurrency: 1 # No parallel fetching needed
 
   bitcoin_mainnet:
-    network_id: "bitcoin"
     internal_code: "BTC_MAINNET"
     type: "btc"
     start_block: 850000
     poll_interval: "60s"
-    confirmations: 6
+    confirmations: 1
     reorg_rollback_window: 100
     nodes:
       - url: "https://bitcoin-rpc.publicnode.com"

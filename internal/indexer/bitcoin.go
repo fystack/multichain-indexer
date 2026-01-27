@@ -14,6 +14,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
 )
 
@@ -91,7 +92,7 @@ func (b *BitcoinIndexer) GetBlock(ctx context.Context, number uint64) (*types.Bl
 	return b.convertBlockWithPrevoutResolution(ctx, btcBlock)
 }
 
-// convertBlockWithPrevoutResolution converts a block and resolves prevout data for monitored transactions
+// convertBlockWithPrevoutResolution converts a block and resolves prevout data for transactions
 func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, btcBlock *bitcoin.Block) (*types.Block, error) {
 	var allTransfers []types.Transaction
 
@@ -116,19 +117,8 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 			continue
 		}
 
-		// Check if any output goes to a monitored address
-		hasMonitoredOutput := false
-		for _, vout := range tx.Vout {
-			addr := bitcoin.GetOutputAddress(&vout)
-			if addr != "" && b.pubkeyStore != nil && b.pubkeyStore.Exist(enum.NetworkTypeBtc, addr) {
-				hasMonitoredOutput = true
-				break
-			}
-		}
-
-		// If we have a monitored output and need prevout data for FROM address
-		if hasMonitoredOutput && btcClient != nil && len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil {
-			// Resolve prevout for the first input only (for FROM address)
+		// Try to resolve prevout data for FROM address if not already present
+		if btcClient != nil && len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil {
 			if tx.Vin[0].TxID != "" {
 				if resolved, err := btcClient.GetTransactionWithPrevouts(ctx, tx.TxID); err == nil {
 					// Copy resolved prevout data
@@ -141,7 +131,7 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 			}
 		}
 
-		// Extract transfers
+		// Extract all transfers - filtering happens in worker's emitBlock
 		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 	}
@@ -234,38 +224,7 @@ func (b *BitcoinIndexer) GetBlocksByNumbers(
 	return results, firstErr
 }
 
-// convertBlock converts a Bitcoin block without prevout resolution (fast path)
-// Use convertBlockWithPrevoutResolution for full address resolution
-func (b *BitcoinIndexer) convertBlock(btcBlock *bitcoin.Block) (*types.Block, error) {
-	var allTransfers []types.Transaction
-
-	// Calculate latest block height from confirmations
-	latestBlock := btcBlock.Height
-	if btcBlock.Confirmations > 0 {
-		latestBlock = btcBlock.Height + btcBlock.Confirmations - 1
-	}
-
-	for i := range btcBlock.Tx {
-		tx := &btcBlock.Tx[i]
-		if tx.IsCoinbase() {
-			continue
-		}
-		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
-		allTransfers = append(allTransfers, transfers...)
-	}
-
-	return &types.Block{
-		Number:       btcBlock.Height,
-		Hash:         btcBlock.Hash,
-		ParentHash:   btcBlock.PreviousBlockHash,
-		Timestamp:    btcBlock.Time,
-		Transactions: allTransfers,
-	}, nil
-}
-
-// extractTransfersFromTx extracts relevant transfers for monitored addresses from a transaction.
-// This is the main extraction function that works with transaction data that may or may not have prevout.
-// It handles both incoming (TO monitored) and outgoing (FROM monitored) transfers.
+// extractTransfersFromTx extracts all transfers from a transaction.
 func (b *BitcoinIndexer) extractTransfersFromTx(
 	tx *bitcoin.Transaction,
 	blockNumber, ts, latestBlock uint64,
@@ -277,49 +236,30 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 		return transfers
 	}
 
-	// Calculate fee (will be zero if prevout data is missing)
 	fee := tx.CalculateFee()
 
-	// Track monitored addresses in this transaction
-	monitoredInputs := make(map[string]bool)  // Addresses sending (FROM)
-	monitoredOutputs := make(map[string]bool) // Addresses receiving (TO)
-
-	// PASS 1: Identify monitored inputs (outgoing/spending)
-	// Note: This requires prevout data to work
-	for _, vin := range tx.Vin {
-		inputAddr := bitcoin.GetInputAddress(&vin)
-		if inputAddr != "" && b.pubkeyStore != nil && b.pubkeyStore.Exist(enum.NetworkTypeBtc, inputAddr) {
-			monitoredInputs[inputAddr] = true
-		}
-	}
-
-	// PASS 2: Identify monitored outputs (incoming/receiving)
-	for _, vout := range tx.Vout {
-		outputAddr := bitcoin.GetOutputAddress(&vout)
-		if outputAddr != "" && b.pubkeyStore != nil && b.pubkeyStore.Exist(enum.NetworkTypeBtc, outputAddr) {
-			monitoredOutputs[outputAddr] = true
-		}
-	}
-
-	// Early return if no monitored addresses found
-	if len(monitoredInputs) == 0 && len(monitoredOutputs) == 0 {
-		return transfers
-	}
-
-	// Calculate confirmations once
 	confirmations := b.calculateConfirmations(blockNumber, latestBlock)
-	status := types.CalculateStatus(confirmations)
+	status := utils.CalculateTransactionStatus(confirmations, b.confirmations)
 
-	// PASS 3A: Incoming transfers (TO monitored addresses)
+	fromAddr := b.getFirstInputAddress(tx)
+
 	feeAssigned := false
 	for _, vout := range tx.Vout {
 		toAddr := bitcoin.GetOutputAddress(&vout)
-		if toAddr == "" || !monitoredOutputs[toAddr] {
-			continue
+		if toAddr == "" {
+			continue // Skip unspendable outputs (OP_RETURN, etc.)
 		}
 
-		// Get "from" address (first input address with prevout)
-		fromAddr := b.getFirstInputAddress(tx)
+		// Normalize Bitcoin address (bech32 -> lowercase, base58 -> validated)
+		if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
+			toAddr = normalized
+		}
+
+		// Skip self-transfers (change outputs back to sender)
+		// This prevents confusing transfers where from=to
+		if fromAddr != "" && fromAddr == toAddr {
+			continue
+		}
 
 		// Convert BTC to satoshis (multiply by 1e8)
 		amountSat := int64(vout.Value * 1e8)
@@ -348,40 +288,6 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 		transfers = append(transfers, transfer)
 	}
 
-	// PASS 3B: Outgoing transfers (FROM monitored addresses)
-	for fromAddr := range monitoredInputs {
-		for _, vout := range tx.Vout {
-			toAddr := bitcoin.GetOutputAddress(&vout)
-			if toAddr == "" {
-				continue // Skip unspendable outputs
-			}
-
-			// Skip if output goes to a monitored address (already recorded above)
-			if monitoredOutputs[toAddr] {
-				continue
-			}
-
-			amountSat := int64(vout.Value * 1e8)
-
-			transfer := types.Transaction{
-				TxHash:        tx.TxID,
-				NetworkId:     b.config.NetworkId,
-				BlockNumber:   blockNumber,
-				FromAddress:   fromAddr,
-				ToAddress:     toAddr,
-				AssetAddress:  "",
-				Amount:        strconv.FormatInt(amountSat, 10),
-				Type:          constant.TxnTypeTransfer,
-				TxFee:         decimal.Zero, // Fee assigned to first transfer
-				Timestamp:     ts,
-				Confirmations: confirmations,
-				Status:        status,
-			}
-
-			transfers = append(transfers, transfer)
-		}
-	}
-
 	return transfers
 }
 
@@ -389,6 +295,9 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 func (b *BitcoinIndexer) getFirstInputAddress(tx *bitcoin.Transaction) string {
 	for _, vin := range tx.Vin {
 		if addr := bitcoin.GetInputAddress(&vin); addr != "" {
+			if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
+				return normalized
+			}
 			return addr
 		}
 	}
@@ -404,15 +313,6 @@ func (b *BitcoinIndexer) calculateConfirmations(blockNumber, latestBlock uint64)
 		return latestBlock - blockNumber + 1
 	}
 	return 0
-}
-
-// extractTransfers is kept for backward compatibility with mempool worker
-// Deprecated: Use extractTransfersFromTx instead
-func (b *BitcoinIndexer) extractTransfers(
-	tx *bitcoin.Transaction,
-	blockNumber, ts, latestBlock uint64,
-) []types.Transaction {
-	return b.extractTransfersFromTx(tx, blockNumber, ts, latestBlock)
 }
 
 func (b *BitcoinIndexer) IsHealthy() bool {
@@ -477,7 +377,6 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 		// This is critical for detecting FROM addresses
 		tx, err := btcClient.GetTransactionWithPrevouts(ctx, txid)
 		if err != nil {
-			// Skip transactions we can't fetch (might be confirmed already)
 			continue
 		}
 
