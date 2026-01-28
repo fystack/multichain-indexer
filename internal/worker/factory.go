@@ -8,6 +8,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
+	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
@@ -228,6 +229,30 @@ func buildBitcoinIndexer(
 	return indexer.NewBitcoinIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildSuiIndexer constructs a Sui indexer with failover and providers.
+func buildSuiIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+) indexer.Indexer {
+	failover := rpc.NewFailover[sui.SuiAPI](nil)
+
+	for i, node := range chainCfg.Nodes {
+		client := sui.NewSuiClient(node.URL)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "grpc",
+			Client:     client,
+			State:      rpc.StateHealthy, // Initialize as healthy
+		})
+	}
+
+	return indexer.NewSuiIndexer(chainName, chainCfg, failover)
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -263,6 +288,8 @@ func CreateManagerWithWorkers(
 			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular)
 		case enum.NetworkTypeBtc:
 			idxr = buildBitcoinIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeSui:
+			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
