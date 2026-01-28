@@ -216,24 +216,12 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 		Confirmations: 1, // Checkpoints are finalized
 	}
 
-	// 1. Status
-	if execTx.Effects != nil && execTx.Effects.Status != nil && execTx.Effects.Status.Success != nil {
-		if *execTx.Effects.Status.Success {
-			t.Status = types.StatusConfirmed
-		} else {
-			t.Status = "failed"
-		}
-	} else {
-		// Fallback if status is missing, though likely successful if in checkpoint
-		t.Status = types.StatusConfirmed
-	}
-
-	// 2. Sender
+	// 1. Sender
 	if execTx.Transaction != nil {
 		t.FromAddress = execTx.Transaction.GetSender()
 	}
 
-	// 3. TxFee
+	// 2. TxFee
 	// Cost = StorageCost + ComputationCost + NonRefundableStorageFee - StorageRebate
 	if execTx.Effects != nil && execTx.Effects.GasUsed != nil {
 		g := execTx.Effects.GasUsed
@@ -257,7 +245,7 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 		t.TxFee = decimal.NewFromBigInt(new(big.Int).SetUint64(cost), 0)
 	}
 
-	// 4. Amount and ToAddress
+	// 3. Amount and ToAddress
 	// This is a heuristic: find the largest positive balance change to a non-sender
 	// Note: Sui PTBs can have multiple transfers. This maps to a single "main" action.
 	var maxAmount uint64
@@ -287,11 +275,7 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 		t.ToAddress = receiver
 		t.Amount = decimal.NewFromBigInt(new(big.Int).SetUint64(maxAmount), 0).String()
 		t.AssetAddress = maxAsset
-		t.Type = "transfer" // Simple static type
-	} else {
-		// Possibly a contract call or self-transfer
-		t.Type = "execution"
-		t.Amount = "0"
+		t.Type = "transfer"
 	}
 
 	return t
