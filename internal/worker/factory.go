@@ -266,7 +266,7 @@ func CreateManagerWithWorkers(
 ) *Manager {
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
-	pubkeyStore := pubkeystore.NewPublicKeyStore(kvstore, addressBF)
+	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
 	failedChan := make(chan FailedBlockEvent, 100)
 
 	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore, failedChan)
