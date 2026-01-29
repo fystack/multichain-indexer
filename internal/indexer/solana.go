@@ -507,7 +507,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 				ToAddress:    to,
 				AssetAddress: "",
 				Amount:       strconv.FormatUint(lamports, 10),
-				Type:         constant.TxTypeTokenTransfer,
+				Type:         constant.TxTypeNativeTransfer,
 				TxFee:        fee,
 				Timestamp:    ts,
 			})
@@ -541,7 +541,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 				ToAddress:    toOwner,
 				AssetAddress: mint,
 				Amount:       strconv.FormatUint(amount, 10),
-				Type:         constant.TxnTypeSPLTransfer,
+				Type:         constant.TxTypeTokenTransfer,
 				TxFee:        fee,
 				Timestamp:    ts,
 			})
