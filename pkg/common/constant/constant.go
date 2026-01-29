@@ -19,6 +19,7 @@ const (
 	TxnTypeTransfer      = "transfer"
 	TxnTypeTRC10Transfer = "trc10_transfer"
 	TxnTypeERC20Transfer = "erc20_transfer"
+	TxnTypeSPLTransfer   = "spl_transfer"
 
 	// Transaction confirmation status
 	TxnStatusPending    = "pending"    // 0 confirmations (mempool)

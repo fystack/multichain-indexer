@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,8 +19,6 @@ import (
 	"github.com/shopspring/decimal"
 	"golang.org/x/sync/errgroup"
 )
-
-const solAssetAddress = "SOL"
 
 type SolanaIndexer struct {
 	chainName   string
@@ -160,7 +158,7 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 			}
 
 			var (
-				b   *solana.GetBlockResult
+				b    *solana.GetBlockResult
 				berr error
 			)
 			berr = s.failover.ExecuteWithRetry(egCtx, func(c solana.SolanaAPI) error {
@@ -453,13 +451,7 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 }
 
 func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
-logger.Info("[SOLANA] extract transfers start",
-		"chain", s.chainName,
-		"slot", slot,
-		"rpc_txs", len(b.Transactions),
-	)
 	out := make([]types.Transaction, 0)
-
 	for _, tx := range b.Transactions {
 		if tx.Meta == nil {
 			continue
@@ -476,17 +468,17 @@ logger.Info("[SOLANA] extract transfers start",
 
 		// Build token-account -> (owner, mint) lookup from token balance metadata.
 		// This isn't used to infer transfers; only to map SPL token accounts to owners/mints.
-		tokOwnerByAcc := map[string]string{}
-		tokMintByAcc := map[string]string{}
+		tokenOwnerByAcc := map[string]string{}
+		tokenMintByAcc := map[string]string{}
 		for _, tb := range tx.Meta.PreTokenBalances {
 			idx := int(tb.AccountIndex)
 			if idx >= 0 && idx < len(accountKeys) {
 				acc := accountKeys[idx].Pubkey
 				if tb.Owner != "" {
-					tokOwnerByAcc[acc] = tb.Owner
+					tokenOwnerByAcc[acc] = tb.Owner
 				}
 				if tb.Mint != "" {
-					tokMintByAcc[acc] = tb.Mint
+					tokenMintByAcc[acc] = tb.Mint
 				}
 			}
 		}
@@ -495,10 +487,10 @@ logger.Info("[SOLANA] extract transfers start",
 			if idx >= 0 && idx < len(accountKeys) {
 				acc := accountKeys[idx].Pubkey
 				if tb.Owner != "" {
-					tokOwnerByAcc[acc] = tb.Owner
+					tokenOwnerByAcc[acc] = tb.Owner
 				}
 				if tb.Mint != "" {
-					tokMintByAcc[acc] = tb.Mint
+					tokenMintByAcc[acc] = tb.Mint
 				}
 			}
 		}
@@ -513,8 +505,8 @@ logger.Info("[SOLANA] extract transfers start",
 				BlockNumber:  slot,
 				FromAddress:  from,
 				ToAddress:    to,
-				AssetAddress: solAssetAddress,
-				Amount:       fmt.Sprintf("%d", lamports),
+				AssetAddress: "",
+				Amount:       strconv.FormatUint(lamports, 10),
 				Type:         constant.TxnTypeTransfer,
 				TxFee:        fee,
 				Timestamp:    ts,
@@ -522,8 +514,8 @@ logger.Info("[SOLANA] extract transfers start",
 		}
 
 		appendSPL := func(srcTokenAcc, dstTokenAcc, mint string, amount uint64) {
-			fromOwner := tokOwnerByAcc[srcTokenAcc]
-			toOwner := tokOwnerByAcc[dstTokenAcc]
+			fromOwner := tokenOwnerByAcc[srcTokenAcc]
+			toOwner := tokenOwnerByAcc[dstTokenAcc]
 
 			if s.pubkeyStore != nil {
 				if toOwner == "" || !s.pubkeyStore.Exist(enum.NetworkTypeSol, toOwner) {
@@ -532,9 +524,9 @@ logger.Info("[SOLANA] extract transfers start",
 			}
 
 			if mint == "" {
-				mint = tokMintByAcc[srcTokenAcc]
+				mint = tokenMintByAcc[srcTokenAcc]
 				if mint == "" {
-					mint = tokMintByAcc[dstTokenAcc]
+					mint = tokenMintByAcc[dstTokenAcc]
 				}
 			}
 			if mint == "" {
@@ -548,8 +540,8 @@ logger.Info("[SOLANA] extract transfers start",
 				FromAddress:  fromOwner,
 				ToAddress:    toOwner,
 				AssetAddress: mint,
-				Amount:       fmt.Sprintf("%d", amount),
-				Type:         constant.TxnTypeTransfer,
+				Amount:       strconv.FormatUint(amount, 10),
+				Type:         constant.TxnTypeSPLTransfer,
 				TxFee:        fee,
 				Timestamp:    ts,
 			})
@@ -578,4 +570,3 @@ logger.Info("[SOLANA] extract transfers start",
 
 	return out
 }
-
