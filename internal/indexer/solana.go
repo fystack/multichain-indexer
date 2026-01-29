@@ -507,7 +507,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 				ToAddress:    to,
 				AssetAddress: "",
 				Amount:       strconv.FormatUint(lamports, 10),
-				Type:         constant.TxnTypeTransfer,
+				Type:         constant.TxTypeTokenTransfer,
 				TxFee:        fee,
 				Timestamp:    ts,
 			})
