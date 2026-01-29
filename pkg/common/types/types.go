@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/shopspring/decimal"
 )
 
@@ -21,16 +22,16 @@ type Block struct {
 type Transaction struct {
 	TxHash        string          `json:"txHash"`
 	NetworkId     string          `json:"networkId"`
-	BlockNumber   uint64          `json:"blockNumber"`
+	BlockNumber   uint64          `json:"blockNumber"` // 0 for mempool transactions
 	FromAddress   string          `json:"fromAddress"`
 	ToAddress     string          `json:"toAddress"`
 	AssetAddress  string          `json:"assetAddress"`
 	Amount        string          `json:"amount"`
-	Type          string          `json:"type"`
+	Type          constant.TxType `json:"type"`
 	TxFee         decimal.Decimal `json:"txFee"`
 	Timestamp     uint64          `json:"timestamp"`
 	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
-	Status        string          `json:"status"`        // "pending" (0 conf), "confirming" (1-5 conf), "confirmed" (6+ conf)
+	Status        string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
@@ -82,25 +83,10 @@ func (t Transaction) Hash() string {
 
 // Transaction status constants
 const (
-	StatusPending    = "pending"    // 0 confirmations (mempool)
-	StatusConfirming = "confirming" // 1-5 confirmations
-	StatusConfirmed  = "confirmed"  // 6+ confirmations
-	StatusOrphaned   = "orphaned"   // Transaction was in a reorged block
+	StatusPending   = "pending"   // Less than required confirmations
+	StatusConfirmed = "confirmed" // Meets or exceeds required confirmations
+	StatusOrphaned  = "orphaned"  // Transaction was in a reorged block
 )
-
-// CalculateStatus determines transaction status based on confirmation count
-// 0 confirmations: "pending" (mempool)
-// 1-5 confirmations: "confirming"
-// 6+ confirmations: "confirmed"
-// Note: "orphaned" status is set manually when a reorg is detected
-func CalculateStatus(confirmations uint64) string {
-	if confirmations == 0 {
-		return StatusPending
-	} else if confirmations < 6 {
-		return StatusConfirming
-	}
-	return StatusConfirmed
-}
 
 // IsFinalized returns true if the transaction status is final (confirmed or orphaned)
 func IsFinalized(status string) bool {

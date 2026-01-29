@@ -75,7 +75,7 @@ func (tx Txn) parseERC20Input(
 			ToAddress:    to,
 			AssetAddress: ToChecksumAddress(tx.To),
 			Amount:       amount.String(),
-			Type:         constant.TxnTypeERC20Transfer,
+			Type:         constant.TxTypeTokenTransfer,
 			TxFee:        fee,
 			Timestamp:    ts,
 		}
@@ -93,7 +93,7 @@ func (tx Txn) parseERC20Input(
 			ToAddress:    to,
 			AssetAddress: ToChecksumAddress(tx.To),
 			Amount:       amount.String(),
-			Type:         constant.TxnTypeERC20Transfer,
+			Type:         constant.TxTypeTokenTransfer,
 			TxFee:        fee,
 			Timestamp:    ts,
 		}
@@ -136,7 +136,7 @@ func (tx Txn) ExtractTransfers(
 			FromAddress: ToChecksumAddress(tx.From),
 			ToAddress:   ToChecksumAddress(tx.To),
 			Amount:      val.String(),
-			Type:        constant.TxnTypeTransfer,
+			Type:        constant.TxTypeNativeTransfer,
 			TxFee:       fee,
 			Timestamp:   ts,
 		})

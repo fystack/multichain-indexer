@@ -2,6 +2,8 @@ package constant
 
 import "time"
 
+type TxType string
+
 const (
 	EnvProduction  = "production"
 	EnvDevelopment = "development"
@@ -16,10 +18,8 @@ const (
 
 	RangeProcessingTimeout = 3 * time.Minute
 
-	TxnTypeTransfer      = "transfer"
-	TxnTypeTRC10Transfer = "trc10_transfer"
-	TxnTypeERC20Transfer = "erc20_transfer"
-	TxnTypeSPLTransfer   = "spl_transfer"
+	TxTypeTokenTransfer  TxType = "token_transfer"
+	TxTypeNativeTransfer TxType = "native_transfer"
 
 	// Transaction confirmation status
 	TxnStatusPending    = "pending"    // 0 confirmations (mempool)
