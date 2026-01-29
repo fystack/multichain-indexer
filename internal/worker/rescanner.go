@@ -8,6 +8,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
@@ -196,6 +197,11 @@ func (rw *RescannerWorker) processBatch(blocks []uint64) error {
 	success := 0
 
 	for _, res := range results {
+		if res.Error != nil && res.Error.ErrorType == indexer.ErrorTypeBlockNotFound && rw.chain.GetNetworkType() == enum.NetworkTypeSol {
+			// Solana skipped slots are normal. Do not retry them.
+			toRemove = append(toRemove, res.Number)
+			continue
+		}
 		if rw.handleBlockResult(res) {
 			success++
 			toRemove = append(toRemove, res.Number)
