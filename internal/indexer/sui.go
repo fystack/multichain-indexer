@@ -12,6 +12,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	v2 "github.com/fystack/multichain-indexer/internal/rpc/sui/rpc/v2"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/shopspring/decimal"
@@ -274,7 +275,11 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 		t.ToAddress = receiver
 		t.Amount = decimal.NewFromBigInt(new(big.Int).SetUint64(maxAmount), 0).String()
 		t.AssetAddress = maxAsset
-		t.Type = "transfer"
+		if maxAsset == "0x2::sui::SUI" {
+			t.Type = constant.TxTypeNativeTransfer
+		} else {
+			t.Type = constant.TxTypeTokenTransfer
+		}
 	}
 
 	return t
