@@ -158,7 +158,7 @@ func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerM
 }
 
 // buildTronIndexer constructs a Tron indexer with failover and providers.
-func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode) indexer.Indexer {
+func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
 	failover := rpc.NewFailover[tron.TronAPI](nil)
 
 	// Shared rate limiter for all workers of this chain (global across regular, catchup, etc.)
@@ -188,7 +188,7 @@ func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode Worker
 		})
 	}
 
-	return indexer.NewTronIndexer(chainName, chainCfg, failover)
+	return indexer.NewTronIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
 // buildBitcoinIndexer constructs a Bitcoin indexer with failover and providers.
@@ -268,6 +268,7 @@ func buildSuiIndexer(
 	chainName string,
 	chainCfg config.ChainConfig,
 	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
 ) indexer.Indexer {
 	failover := rpc.NewFailover[sui.SuiAPI](nil)
 
@@ -284,7 +285,7 @@ func buildSuiIndexer(
 		})
 	}
 
-	return indexer.NewSuiIndexer(chainName, chainCfg, failover)
+	return indexer.NewSuiIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
@@ -319,13 +320,13 @@ func CreateManagerWithWorkers(
 		case enum.NetworkTypeEVM:
 			idxr = buildEVMIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTron:
-			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular)
+			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeBtc:
 			idxr = buildBitcoinIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSol:
 			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSui:
-			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular)
+			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
