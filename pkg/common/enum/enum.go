@@ -24,6 +24,7 @@ const (
 	NetworkTypeBtc  NetworkType = "btc"
 	NetworkTypeSol  NetworkType = "sol"
 	NetworkTypeApt  NetworkType = "apt"
+	NetworkTypeSui  NetworkType = "sui"
 )
 
 const (
