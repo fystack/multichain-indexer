@@ -5,8 +5,6 @@ import (
 
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
-	"github.com/fystack/multichain-indexer/pkg/infra"
-	"github.com/fystack/multichain-indexer/pkg/kvstore"
 )
 
 func composeKey(addressType enum.NetworkType, publicKey string) string {
@@ -20,44 +18,29 @@ type Store interface {
 }
 
 type publicKeyStore struct {
-	kvstore     infra.KVStore
 	bloomFilter addressbloomfilter.WalletAddressBloomFilter
 }
 
 func NewPublicKeyStore(
-	client infra.KVStore,
 	bloomFilter addressbloomfilter.WalletAddressBloomFilter,
 ) Store {
-	return &publicKeyStore{kvstore: client, bloomFilter: bloomFilter}
+	return &publicKeyStore{bloomFilter: bloomFilter}
 }
 
 func (s *publicKeyStore) Exist(addressType enum.NetworkType, publicKey string) bool {
-	// If the bloom filter returns false, the key definitely doesn't exist.
-	if s.bloomFilter != nil && !s.bloomFilter.Contains(publicKey, addressType) {
+	if s.bloomFilter == nil {
 		return false
 	}
-
-	// Since bloom filters may have false positives, or if no bloom filter is available,
-	// check the underlying KV store.
-	v, err := s.kvstore.GetWithOptions(
-		composeKey(addressType, publicKey),
-		&kvstore.DefaultCacheOptions,
-	)
-	if v == "" || err != nil {
-		return false
-	}
-
-	return true
+	return s.bloomFilter.Contains(publicKey, addressType)
 }
 
 func (s *publicKeyStore) Save(addressType enum.NetworkType, publicKey string) error {
-	// Only add to bloom filter if it's available
 	if s.bloomFilter != nil {
 		s.bloomFilter.Add(publicKey, addressType)
 	}
-	return s.kvstore.Set(composeKey(addressType, publicKey), "ok")
+	return nil
 }
 
 func (s *publicKeyStore) Close() error {
-	return s.kvstore.Close()
+	return nil
 }
