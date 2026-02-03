@@ -15,6 +15,7 @@ require (
 	github.com/hashicorp/consul/api v1.32.1
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/lmittmann/tint v1.1.2
+	github.com/mr-tron/base58 v1.2.0
 	github.com/nats-io/nats.go v1.44.0
 	github.com/redis/go-redis/v9 v9.12.1
 	github.com/samber/lo v1.51.0

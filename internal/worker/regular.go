@@ -133,7 +133,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	originalStart := rw.currentBlock
 	originalEnd := end
 
-	results, err := rw.chain.GetBlocks(rw.ctx, rw.currentBlock, end, false)
+	results, err := rw.chain.GetBlocks(rw.ctx, rw.currentBlock, end, rw.config.Throttle.Parallel)
 	if err != nil {
 		return fmt.Errorf("get blocks: %w", err)
 	}
@@ -356,3 +356,4 @@ func splitCatchupRange(r blockstore.CatchupRange, maxSize uint64) []blockstore.C
 
 	return ranges
 }
+

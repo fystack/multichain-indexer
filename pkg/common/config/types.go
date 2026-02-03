@@ -37,7 +37,7 @@ type ChainConfig struct {
 	Name                string           `yaml:"-"`
 	NetworkId           string           `yaml:"network_id"`
 	InternalCode        string           `yaml:"internal_code"`
-	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm btc sui"`
+	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm btc sol sui"`
 	FromLatest          bool             `yaml:"from_latest"`
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`
@@ -55,10 +55,11 @@ type ClientConfig struct {
 }
 
 type Throttle struct {
-	RPS         int `yaml:"rps"`
-	Burst       int `yaml:"burst"`
-	BatchSize   int `yaml:"batch_size"`
-	Concurrency int `yaml:"concurrency"`
+	RPS         int  `yaml:"rps"`
+	Burst       int  `yaml:"burst"`
+	BatchSize   int  `yaml:"batch_size"`
+	Concurrency int  `yaml:"concurrency"`
+	Parallel    bool `yaml:"parallel"`
 }
 
 type NodeConfig struct {
