@@ -55,10 +55,11 @@ type ClientConfig struct {
 }
 
 type Throttle struct {
-	RPS         int `yaml:"rps"`
-	Burst       int `yaml:"burst"`
-	BatchSize   int `yaml:"batch_size"`
-	Concurrency int `yaml:"concurrency"`
+	RPS         int  `yaml:"rps"`
+	Burst       int  `yaml:"burst"`
+	BatchSize   int  `yaml:"batch_size"`
+	Concurrency int  `yaml:"concurrency"`
+	Parallel    bool `yaml:"parallel"`
 }
 
 type NodeConfig struct {
