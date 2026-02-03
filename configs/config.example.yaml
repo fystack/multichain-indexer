@@ -127,6 +127,7 @@ chains:
       burst: 200
       batch_size: 80
       concurrency: 16
+      parallel: true
 
   solana_devnet:
     network_id: "solana_devnet"
@@ -146,6 +147,19 @@ chains:
       burst: 160
       batch_size: 40
       concurrency: 12
+      parallel: true
+
+  sui_mainnet:
+    # Example Sui network using gRPC-based node endpoint.
+    # Adjust network_id, internal_code, start_block (checkpoint sequence), and URL to your setup.
+    network_id: "sui_mainnet"
+    internal_code: "SUI_MAINNET"
+    type: "sui"
+    start_block: 0
+    poll_interval: "5s"
+    nodes:
+      - url: "https://fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
+      - url: "https://sui-mainnet.nodeinfra.com:443"
 
 # Infrastructure services
 services:

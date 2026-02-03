@@ -9,6 +9,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
@@ -262,6 +263,30 @@ func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode Work
 	return indexer.NewSolanaIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildSuiIndexer constructs a Sui indexer with failover and providers.
+func buildSuiIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+) indexer.Indexer {
+	failover := rpc.NewFailover[sui.SuiAPI](nil)
+
+	for i, node := range chainCfg.Nodes {
+		client := sui.NewSuiClient(node.URL)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "grpc",
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewSuiIndexer(chainName, chainCfg, failover)
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -275,7 +300,7 @@ func CreateManagerWithWorkers(
 ) *Manager {
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
-	pubkeyStore := pubkeystore.NewPublicKeyStore(kvstore, addressBF)
+	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
 	failedChan := make(chan FailedBlockEvent, 100)
 
 	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore, failedChan)
@@ -299,6 +324,8 @@ func CreateManagerWithWorkers(
 			idxr = buildBitcoinIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSol:
 			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeSui:
+			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}

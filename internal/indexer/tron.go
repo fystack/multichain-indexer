@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,7 +65,7 @@ func (t *TronIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*types.
 	go func() {
 		defer wg.Done()
 		blockErr = t.failover.ExecuteWithRetry(ctx, func(c tron.TronAPI) error {
-			b, err := c.GetBlockByNumber(ctx, fmt.Sprintf("%d", blockNumber), true)
+			b, err := c.GetBlockByNumber(ctx, strconv.FormatUint(blockNumber, 10), true)
 			if err == nil {
 				tronBlock = b
 			}
@@ -101,7 +102,7 @@ func (t *TronIndexer) processBlock(
 		Hash:         tronBlock.BlockID,
 		ParentHash:   tronBlock.BlockHeader.RawData.ParentHash,
 		Timestamp:    tron.ConvertTronTimestamp(tronBlock.BlockHeader.RawData.Timestamp),
-		Transactions: []types.Transaction{},
+		Transactions: make([]types.Transaction, 0, len(tronBlock.Transactions)),
 	}
 
 	// Index TxnInfo by ID
@@ -115,15 +116,16 @@ func (t *TronIndexer) processBlock(
 	feeAssigned := make(map[string]bool, len(txns))
 
 	// Parse receipts logs (TRC20/721)
+	networkId := t.GetNetworkId()
 	for _, ti := range txns {
 		if ti == nil {
 			continue
 		}
-		transfers := []types.Transaction{}
+		transfers := make([]types.Transaction, 0, len(ti.Log))
 		for _, log := range ti.Log {
 			parsed, err := log.ParseTRC20Transfers(
 				ti.ID,
-				t.GetNetworkId(),
+				networkId,
 				uint64(ti.BlockNumber),
 				tron.ConvertTronTimestamp(ti.BlockTimestamp),
 			)
@@ -166,7 +168,7 @@ func (t *TronIndexer) processBlock(
 				if err = json.Unmarshal(contract.Parameter.Value, &transfer); err == nil {
 					tr = &types.Transaction{
 						TxHash:       rawTx.TxID,
-						NetworkId:    t.GetNetworkId(),
+						NetworkId:    networkId,
 						BlockNumber:  blkNum,
 						FromAddress:  tron.HexToTronAddress(transfer.OwnerAddress),
 						ToAddress:    tron.HexToTronAddress(transfer.ToAddress),
@@ -181,7 +183,7 @@ func (t *TronIndexer) processBlock(
 				if err = json.Unmarshal(contract.Parameter.Value, &asset); err == nil {
 					tr = &types.Transaction{
 						TxHash:       rawTx.TxID,
-						NetworkId:    t.GetNetworkId(),
+						NetworkId:    networkId,
 						BlockNumber:  blkNum,
 						FromAddress:  tron.HexToTronAddress(asset.OwnerAddress),
 						ToAddress:    tron.HexToTronAddress(asset.ToAddress),
@@ -213,7 +215,7 @@ func (t *TronIndexer) GetBlocks(
 	start, end uint64,
 	isParallel bool,
 ) ([]BlockResult, error) {
-	var nums []uint64
+	nums := make([]uint64, 0, end-start+1)
 	for i := start; i <= end; i++ {
 		nums = append(nums, i)
 	}
