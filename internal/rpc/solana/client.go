@@ -50,6 +50,29 @@ func (c *Client) GetSlot(ctx context.Context) (uint64, error) {
 	return slot, nil
 }
 
+func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTransactionResult, error) {
+	cfg := map[string]any{
+		"encoding":                       "jsonParsed",
+		"maxSupportedTransactionVersion": 0,
+		"commitment":                     "finalized",
+	}
+	resp, err := c.base.CallRPC(ctx, "getTransaction", []any{signature, cfg})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("getTransaction RPC error: %w", resp.Error)
+	}
+	if string(resp.Result) == "null" {
+		return nil, nil
+	}
+	var out GetTransactionResult
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return nil, fmt.Errorf("decode getTransaction result: %w", err)
+	}
+	return &out, nil
+}
+
 func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, error) {
 	cfg := GetBlockConfig{
 		Encoding:                       "jsonParsed",

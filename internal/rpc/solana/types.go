@@ -77,6 +77,13 @@ type TxnEnvelope struct {
 	Signatures []string `json:"signatures"`
 }
 
+type GetTransactionResult struct {
+	Slot        uint64      `json:"slot"`
+	BlockTime   *int64      `json:"blockTime"`
+	Meta        *TxnMeta    `json:"meta"`
+	Transaction TxnEnvelope `json:"transaction"`
+}
+
 type AccountKey struct {
 	Pubkey   string `json:"pubkey"`
 	Signer   bool   `json:"signer"`
