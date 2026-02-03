@@ -103,6 +103,52 @@ chains:
       batch_size: 10
       concurrency: 1
 
+  solana_mainnet:
+    network_id: "solana"
+    internal_code: "SOL_MAINNET"
+    type: "sol"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://solana-rpc.publicnode.com"
+      - url: "https://api.mainnet.solana.com"
+      - url: "https://solana.drpc.org"
+      - url: "https://solana.leorpc.com/?api_key=FREE"
+      - url: "https://solana.api.pocket.network"
+      - url: "https://public.rpc.solanavibestation.com"
+      # - url: "https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
+      # - url: "https://solana-mainnet.g.quicknode.pro/${QUICKNODE_KEY}/"  # optional
+    client:
+      timeout: "15s"
+      max_retries: 2
+      retry_delay: "1s"
+    throttle:
+      rps: 120
+      burst: 200
+      batch_size: 80
+      concurrency: 16
+      parallel: true
+
+  solana_devnet:
+    network_id: "solana_devnet"
+    internal_code: "SOL_DEVNET"
+    type: "sol"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://api.devnet.solana.com"
+      - url: "https://solana-devnet.api.onfinality.io/public"
+    client:
+      timeout: "12s"
+      max_retries: 2
+      retry_delay: "500ms"
+    throttle:
+      rps: 80
+      burst: 160
+      batch_size: 40
+      concurrency: 12
+      parallel: true
+
   sui_mainnet:
     # Example Sui network using gRPC-based node endpoint.
     # Adjust network_id, internal_code, start_block (checkpoint sequence), and URL to your setup.

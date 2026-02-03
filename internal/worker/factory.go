@@ -8,6 +8,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
+	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
@@ -229,6 +230,39 @@ func buildBitcoinIndexer(
 	return indexer.NewBitcoinIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildSolanaIndexer constructs a Solana indexer with failover and providers.
+func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
+	failover := rpc.NewFailover[solana.SolanaAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := solana.NewSolanaClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: "rpc",
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewSolanaIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
 // buildSuiIndexer constructs a Sui indexer with failover and providers.
 func buildSuiIndexer(
 	chainName string,
@@ -246,7 +280,7 @@ func buildSuiIndexer(
 			Network:    chainName,
 			ClientType: "grpc",
 			Client:     client,
-			State:      rpc.StateHealthy, // Initialize as healthy
+			State:      rpc.StateHealthy,
 		})
 	}
 
@@ -288,6 +322,8 @@ func CreateManagerWithWorkers(
 			idxr = buildTronIndexer(chainName, chainCfg, ModeRegular)
 		case enum.NetworkTypeBtc:
 			idxr = buildBitcoinIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeSol:
+			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSui:
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular)
 		default:

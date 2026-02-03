@@ -71,6 +71,7 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 		enum.NetworkTypeEVM,
 		enum.NetworkTypeTron,
 		enum.NetworkTypeBtc,
+		enum.NetworkTypeSol,
 		enum.NetworkTypeSui,
 	}
 
