@@ -20,16 +20,18 @@ import (
 )
 
 type TronIndexer struct {
-	chainName string
-	config    config.ChainConfig
-	failover  *rpc.Failover[tron.TronAPI]
+	chainName   string
+	config      config.ChainConfig
+	failover    *rpc.Failover[tron.TronAPI]
+	pubkeyStore PubkeyStore
 }
 
-func NewTronIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[tron.TronAPI]) *TronIndexer {
+func NewTronIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[tron.TronAPI], pubkeyStore PubkeyStore) *TronIndexer {
 	return &TronIndexer{
-		chainName: chainName,
-		config:    cfg,
-		failover:  f,
+		chainName:   chainName,
+		config:      cfg,
+		failover:    f,
+		pubkeyStore: pubkeyStore,
 	}
 }
 
@@ -130,7 +132,12 @@ func (t *TronIndexer) processBlock(
 				tron.ConvertTronTimestamp(ti.BlockTimestamp),
 			)
 			if err == nil && len(parsed) > 0 {
-				transfers = append(transfers, parsed...)
+				for _, p := range parsed {
+					if t.pubkeyStore != nil && !t.pubkeyStore.Exist(enum.NetworkTypeTron, p.ToAddress) {
+						continue
+					}
+					transfers = append(transfers, p)
+				}
 			}
 		}
 		if len(transfers) > 0 {
@@ -195,6 +202,9 @@ func (t *TronIndexer) processBlock(
 				}
 			}
 			if tr == nil {
+				continue
+			}
+			if t.pubkeyStore != nil && !t.pubkeyStore.Exist(enum.NetworkTypeTron, tr.ToAddress) {
 				continue
 			}
 

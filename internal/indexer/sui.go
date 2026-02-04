@@ -22,16 +22,18 @@ import (
 // SuiIndexer implements the generic Indexer interface for the Sui blockchain,
 // using the gRPC-based SuiAPI client defined in internal/rpc/sui.
 type SuiIndexer struct {
-	chainName string
-	cfg       config.ChainConfig
-	failover  *rpc.Failover[sui.SuiAPI]
+	chainName   string
+	cfg         config.ChainConfig
+	failover    *rpc.Failover[sui.SuiAPI]
+	pubkeyStore PubkeyStore
 }
 
-func NewSuiIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[sui.SuiAPI]) *SuiIndexer {
+func NewSuiIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[sui.SuiAPI], pubkeyStore PubkeyStore) *SuiIndexer {
 	s := &SuiIndexer{
-		chainName: chainName,
-		cfg:       cfg,
-		failover:  f,
+		chainName:   chainName,
+		cfg:         cfg,
+		failover:    f,
+		pubkeyStore: pubkeyStore,
 	}
 
 	// Start streaming in background on best available node
@@ -196,7 +198,14 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 
 	txs := make([]types.Transaction, 0, len(cp.GetTransactions()))
 	for _, execTx := range cp.GetTransactions() {
-		txs = append(txs, s.convertTransaction(execTx, cp.SequenceNumber(), ts))
+		tx := s.convertTransaction(execTx, cp.SequenceNumber(), ts)
+		if tx.ToAddress == "" {
+			continue
+		}
+		if s.pubkeyStore != nil && !s.pubkeyStore.Exist(enum.NetworkTypeSui, tx.ToAddress) {
+			continue
+		}
+		txs = append(txs, tx)
 	}
 
 	return &types.Block{
