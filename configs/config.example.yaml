@@ -158,8 +158,8 @@ chains:
     start_block: 0
     poll_interval: "5s"
     nodes:
-      - url: "https://fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
-      - url: "https://sui-mainnet.nodeinfra.com:443"
+      - url: "fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
+      - url: "sui-mainnet.nodeinfra.com:443"
 
 # Infrastructure services
 services:
@@ -175,26 +175,26 @@ services:
     regular:
       enabled: true
     mempool:
-      enabled: true  # Bitcoin-only: 0-conf transaction tracking for instant UX
+      enabled: true # Bitcoin-only: 0-conf transaction tracking for instant UX
 
   nats:
     url: "nats://localhost:4222"
-    subject_prefix: "indexer"  # optional subject prefix
-    username: ""               # optional username
-    password: ""               # optional password
+    subject_prefix: "indexer" # optional subject prefix
+    username: "" # optional username
+    password: "" # optional password
     # TLS configuration (optional, defaults to ./certs/ if not specified)
     tls:
-      client_cert: "./certs/client-cert.pem"  # defaults to ./certs/client-cert.pem
-      client_key: "./certs/client-key.pem"    # defaults to ./certs/client-key.pem
-      ca_cert: "./certs/rootCA.pem"           # defaults to ./certs/rootCA.pem
+      client_cert: "./certs/client-cert.pem" # defaults to ./certs/client-cert.pem
+      client_key: "./certs/client-key.pem" # defaults to ./certs/client-key.pem
+      ca_cert: "./certs/rootCA.pem" # defaults to ./certs/rootCA.pem
 
   database:
     url: "postgres://postgres:postgres@localhost:5432/postgres"
 
   redis:
-    url: "localhost:6379"                           # supports redis://host:port or rediss://host:port (TLS)
+    url: "localhost:6379" # supports redis://host:port or rediss://host:port (TLS)
     password: ""
-    mtls: false                                     # enable mutual TLS with client certificates (production only)
+    mtls: false # enable mutual TLS with client certificates (production only)
 
   kvstore:
     type: "consul"
