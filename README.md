@@ -1,7 +1,7 @@
 # Multi-Chain Transaction Indexer
 
-Production-ready indexer for multiple blockchains with four cooperating workers:
-**Regular (real-time)**, **Catchup (historical)**, **Rescanner (failed/missed blocks)**, **Manual (manual blocks)**.
+Production-ready indexer for multiple blockchains with five cooperating workers:
+**Regular (real-time)**, **Catchup (historical)**, **Rescanner (failed/missed blocks)**, **Manual (manual blocks)**, **BloomSync (real-time address sync)**.
 
 This indexer is designed to be used in a multi-chain environment, where each chain is indexed independently and emits events.
 
@@ -26,12 +26,16 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 
 ```mermaid
 flowchart TB
-    subgraph Workers ["Workers"]
+    subgraph Workers ["Chain Workers"]
         direction LR
         R[RegularWorker]
         C[CatchupWorker]
         M[ManualWorker]
         Re[RescannerWorker]
+    end
+
+    subgraph Infrastructure ["Infrastructure Workers"]
+        BS[BloomSyncWorker]
     end
 
     BW[BaseWorker]
@@ -44,6 +48,8 @@ flowchart TB
     end
 
     Redis[(Redis ZSET)]
+    DB[(PostgreSQL)]
+    BF[Bloom Filter]
 
     %% Workers to BaseWorker
     R --> BW
@@ -55,12 +61,17 @@ flowchart TB
     BW --> KV
     BW --> NATS
     BW --> FChan
+    BW --> BF
 
     %% Feedback failedChan -> Rescanner
     FChan -.-> Re
 
     %% ManualWorker special connection
     M -.-> Redis
+
+    %% BloomSyncWorker connections
+    BS --> DB
+    BS --> BF
 ```
 
 **Logic Flow:**
@@ -69,6 +80,7 @@ flowchart TB
 2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
 3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
 4. **RescannerWorker**: retries failed blocks, updates KV on success
+5. **BloomSyncWorker**: polls DB for new addresses, syncs to bloom filter in real-time
 
 ---
 
@@ -153,6 +165,42 @@ go build -o indexer cmd/indexer/main.go
 
 ---
 
+### **BloomSyncWorker**
+
+- Polls PostgreSQL for newly added wallet addresses at configurable intervals
+- Syncs new addresses to bloom filter in real-time (~1s latency)
+- Enables multi-instance deployments to detect new addresses without restart
+- Tracks sync progress per network type (EVM, Tron, Bitcoin, Solana, Sui)
+- Idempotent: safe to add same address multiple times
+
+**Configuration:**
+
+```yaml
+services:
+  bloomfilter:
+    sync:
+      enabled: true      # Enable real-time address sync
+      interval: "1s"     # Poll interval (1s = ~1 second latency)
+      batch_size: 500    # Max addresses to sync per cycle
+```
+
+**How it works:**
+
+1. On startup, `Initialize()` loads all existing addresses from DB
+2. BloomSyncWorker starts, sets `lastSyncedTime = now` for each network type
+3. Every interval (default 1s), queries DB for addresses with `created_at > lastSyncedTime`
+4. Adds new addresses to bloom filter via `AddBatch()`
+5. Updates `lastSyncedTime` to the latest address's `created_at`
+
+**Benefits for production:**
+
+- No need to restart indexers when new addresses are added
+- All indexer instances see new addresses within ~1 second
+- Self-healing: catches up automatically if sync falls behind
+- Minimal DB load: only fetches new addresses, not full table scan
+
+---
+
 ## 🗝️ KVStore / Redis Keys
 
 | Key                                      | Purpose                             |
@@ -186,7 +234,8 @@ docker-compose up -d
 
 - **Chains**: configurable (`start_block`, `batch_size`, `poll_interval`)
 - **KVStore**: BadgerDB / in-memory / Consul
-- **Bloom Filter**: Redis or in-memory
+- **Bloom Filter**: Redis or in-memory, with optional real-time sync
+- **Bloom Sync**: background worker for real-time address sync (configurable interval/batch)
 - **Event Emitter**: NATS streaming
 - **RPC Providers**: failover + rate-limiting
 
