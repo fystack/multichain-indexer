@@ -41,11 +41,11 @@ func (a *AptosIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error)
 		if err != nil {
 			return err
 		}
-		version, err := aptos.ParseVersion(info.BlockHeight)
+		blockHeight, err := aptos.ParseVersion(info.BlockHeight)
 		if err != nil {
 			return err
 		}
-		latest = version
+		latest = blockHeight
 		return nil
 	})
 	return latest, err
@@ -55,7 +55,7 @@ func (a *AptosIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*types
 	var aptosBlock *aptos.Block
 
 	err := a.failover.ExecuteWithRetry(ctx, func(c aptos.AptosAPI) error {
-		block, err := c.GetBlockByVersion(ctx, blockNumber, false)
+		block, err := c.GetBlockByHeight(ctx, blockNumber, false)
 		if err != nil {
 			return err
 		}
@@ -67,6 +67,11 @@ func (a *AptosIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*types
 		return nil, err
 	}
 
+	return a.processBlockWithTransactions(ctx, aptosBlock)
+}
+
+// processBlockWithTransactions fetches and processes transactions for a block
+func (a *AptosIndexer) processBlockWithTransactions(ctx context.Context, aptosBlock *aptos.Block) (*types.Block, error) {
 	firstVersion, err := aptos.ParseVersion(aptosBlock.FirstVersion)
 	if err != nil {
 		return nil, fmt.Errorf("invalid first_version: %w", err)
@@ -81,26 +86,54 @@ func (a *AptosIndexer) GetBlock(ctx context.Context, blockNumber uint64) (*types
 		return nil, fmt.Errorf("invalid version range: last_version %d < first_version %d", lastVersion, firstVersion)
 	}
 
-	limit := lastVersion - firstVersion + 1
-	if limit > 100 {
-		limit = 100
-	}
+	totalTxs := lastVersion - firstVersion + 1
+	txBatchSize := uint64(100)
 
-	var txs []aptos.Transaction
-	err = a.failover.ExecuteWithRetry(ctx, func(c aptos.AptosAPI) error {
-		transactions, err := c.GetTransactionsByVersion(ctx, firstVersion, limit)
+	var allTxs []aptos.Transaction
+
+	if totalTxs <= txBatchSize {
+		var txs []aptos.Transaction
+		err := a.failover.ExecuteWithRetry(ctx, func(c aptos.AptosAPI) error {
+			batch, err := c.GetTransactionsByVersion(ctx, firstVersion, totalTxs)
+			if err != nil {
+				return err
+			}
+			txs = batch
+			return nil
+		})
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("failed to fetch transactions: %w", err)
 		}
-		txs = transactions
-		return nil
-	})
+		allTxs = txs
+	} else {
+		currentVersion := firstVersion
+		for currentVersion <= lastVersion {
+			limit := txBatchSize
+			remaining := lastVersion - currentVersion + 1
+			if remaining < limit {
+				limit = remaining
+			}
 
-	if err != nil {
-		return nil, err
+			var txs []aptos.Transaction
+			err := a.failover.ExecuteWithRetry(ctx, func(c aptos.AptosAPI) error {
+				batch, err := c.GetTransactionsByVersion(ctx, currentVersion, limit)
+				if err != nil {
+					return err
+				}
+				txs = batch
+				return nil
+			})
+
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch transactions at version %d: %w", currentVersion, err)
+			}
+
+			allTxs = append(allTxs, txs...)
+			currentVersion += limit
+		}
 	}
 
-	return a.processBlock(aptosBlock, txs)
+	return a.processBlock(aptosBlock, allTxs)
 }
 
 func (a *AptosIndexer) processBlock(
@@ -150,35 +183,104 @@ func (a *AptosIndexer) GetBlocksByNumbers(
 	ctx context.Context,
 	nums []uint64,
 ) ([]BlockResult, error) {
-	return a.getBlocks(ctx, nums)
+	return a.getBlocksOptimized(ctx, nums)
 }
 
-func (a *AptosIndexer) getBlocks(ctx context.Context, nums []uint64) ([]BlockResult, error) {
+// getBlocksOptimized fetches blocks with optimized parallel processing:
+// 1. Fetches all block metadata in parallel (small, fast)
+// 2. Processes blocks with transactions in parallel
+func (a *AptosIndexer) getBlocksOptimized(ctx context.Context, nums []uint64) ([]BlockResult, error) {
 	if len(nums) == 0 {
 		return nil, nil
 	}
-	blocks := make([]BlockResult, len(nums))
 
-	workers := len(nums)
-	workers = min(workers, a.config.Throttle.Concurrency)
+	results := make([]BlockResult, len(nums))
 
-	type job struct {
+	aptosBlocks := make([]*aptos.Block, len(nums))
+
+	type metaJob struct {
 		num   uint64
 		index int
 	}
 
-	jobs := make(chan job, workers*2)
-	var wg sync.WaitGroup
+	metaWorkers := min(len(nums), a.config.Throttle.Concurrency*2)
+	metaJobs := make(chan metaJob, metaWorkers*2)
+	var metaWg sync.WaitGroup
 
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
+	for i := 0; i < metaWorkers; i++ {
+		metaWg.Add(1)
 		go func() {
-			defer wg.Done()
-			for j := range jobs {
-				blk, err := a.GetBlock(ctx, j.num)
-				blocks[j.index] = BlockResult{Number: j.num, Block: blk}
+			defer metaWg.Done()
+			for j := range metaJobs {
+				var block *aptos.Block
+				err := a.failover.ExecuteWithRetry(ctx, func(c aptos.AptosAPI) error {
+					b, err := c.GetBlockByHeight(ctx, j.num, false)
+					if err != nil {
+						return err
+					}
+					block = b
+					return nil
+				})
+
 				if err != nil {
-					blocks[j.index].Error = &Error{
+					results[j.index] = BlockResult{
+						Number: j.num,
+						Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
+					}
+				} else {
+					aptosBlocks[j.index] = block
+				}
+			}
+		}()
+	}
+
+	go func() {
+		defer close(metaJobs)
+		for i, num := range nums {
+			select {
+			case <-ctx.Done():
+				return
+			case metaJobs <- metaJob{num: num, index: i}:
+			}
+		}
+	}()
+
+	metaWg.Wait()
+
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	var firstErr error
+	for _, r := range results {
+		if r.Error != nil {
+			firstErr = fmt.Errorf("block %d: %s", r.Number, r.Error.Message)
+			return results, firstErr
+		}
+	}
+
+	type txJob struct {
+		aptosBlock *aptos.Block
+		index      int
+	}
+
+	txWorkers := min(len(nums), a.config.Throttle.Concurrency)
+	txJobs := make(chan txJob, txWorkers*2)
+	var txWg sync.WaitGroup
+
+	for i := 0; i < txWorkers; i++ {
+		txWg.Add(1)
+		go func() {
+			defer txWg.Done()
+			for j := range txJobs {
+				blk, err := a.processBlockWithTransactions(ctx, j.aptosBlock)
+				blockHeight, _ := aptos.ParseVersion(j.aptosBlock.BlockHeight)
+				results[j.index] = BlockResult{
+					Number: blockHeight,
+					Block:  blk,
+				}
+				if err != nil {
+					results[j.index].Error = &Error{
 						ErrorType: ErrorTypeUnknown,
 						Message:   err.Error(),
 					}
@@ -188,29 +290,33 @@ func (a *AptosIndexer) getBlocks(ctx context.Context, nums []uint64) ([]BlockRes
 	}
 
 	go func() {
-		defer close(jobs)
-		for i, num := range nums {
+		defer close(txJobs)
+		for i, block := range aptosBlocks {
+			if block == nil {
+				continue
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case jobs <- job{num: num, index: i}:
+			case txJobs <- txJob{aptosBlock: block, index: i}:
 			}
 		}
 	}()
 
-	wg.Wait()
+	txWg.Wait()
+
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 
-	var firstErr error
-	for _, b := range blocks {
-		if b.Error != nil {
-			firstErr = fmt.Errorf("block %d: %s", b.Number, b.Error.Message)
+	for _, r := range results {
+		if r.Error != nil {
+			firstErr = fmt.Errorf("block %d: %s", r.Number, r.Error.Message)
 			break
 		}
 	}
-	return blocks, firstErr
+
+	return results, firstErr
 }
 
 func (a *AptosIndexer) IsHealthy() bool {

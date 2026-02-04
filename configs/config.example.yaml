@@ -161,31 +161,37 @@ chains:
       - url: "fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
       - url: "sui-mainnet.nodeinfra.com:443"
   aptos_mainnet:
-    type: "aptos"
+    network_id: "APTOS_MAINNET"
+    internal_code: "APTOS_MAINNET"
+    type: "apt"
     start_block: 596926179
-    poll_interval: "1s" # override default poll interval
+    poll_interval: "3s"     # Poll every 3s (blocks are ~1s, this reduces API load)
+    throttle:
+      batch_size: 25
+      rps: 5
+      burst: 8
     nodes:
-      - url: "https://aptos-rest.publicnode.com"
+      - url: "https://aptos-rest.publicnode.com/v1"
       - url: "https://fullnode.mainnet.aptoslabs.com/v1"
     client:
       max_retries: 5 # override global max retries
       retry_delay: "10s"
-    throttle:
-      rps: 5
-      burst: 8
 
   aptos_testnet:
-    type: "aptos"
-    start_block: 638572579
-    poll_interval: "1s" # override default poll interval
+    network_id: "APTOS_TESTNET"
+    internal_code: "APTOS_TESTNET"
+    type: "apt"
+    start_block: 642939715
+    poll_interval: "3s"     # Poll every 3s (blocks are ~1s, this reduces API load)
+    throttle:
+      batch_size: 25
+      rps: 5
+      burst: 8
     nodes:
       - url: "https://fullnode.testnet.aptoslabs.com/v1"
     client:
       max_retries: 5 # override global max retries
       retry_delay: "10s"
-    throttle:
-      rps: 5
-      burst: 8
 
 # Infrastructure services
 services:

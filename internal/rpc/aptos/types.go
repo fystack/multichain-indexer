@@ -67,11 +67,21 @@ type EventGUID struct {
 
 type EventData struct {
 	Amount string `json:"amount,omitempty"`
+	Store  string `json:"store,omitempty"`
+}
+
+type ObjectCore struct {
+	AllowUngatedTransfer bool   `json:"allow_ungated_transfer"`
+	GUIDCreationNum      string `json:"guid_creation_num"`
+	Owner                string `json:"owner"`
 }
 
 const (
 	EventTypeWithdraw = "0x1::coin::WithdrawEvent"
 	EventTypeDeposit  = "0x1::coin::DepositEvent"
+
+	EventTypeFAWithdraw = "0x1::fungible_asset::Withdraw"
+	EventTypeFADeposit  = "0x1::fungible_asset::Deposit"
 
 	PayloadTypeEntryFunction = "entry_function_payload"
 	PayloadTypeScript        = "script_payload"

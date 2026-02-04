@@ -34,7 +34,7 @@ func NewAptosClient(
 }
 
 func (c *Client) GetLedgerInfo(ctx context.Context) (*LedgerInfo, error) {
-	data, err := c.Do(ctx, http.MethodGet, "/v1", nil, nil)
+	data, err := c.Do(ctx, http.MethodGet, "/", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getLedgerInfo failed: %w", err)
 	}
@@ -47,7 +47,7 @@ func (c *Client) GetLedgerInfo(ctx context.Context) (*LedgerInfo, error) {
 }
 
 func (c *Client) GetBlockByVersion(ctx context.Context, version uint64, withTransactions bool) (*Block, error) {
-	path := fmt.Sprintf("/v1/blocks/by_version/%d", version)
+	path := fmt.Sprintf("/blocks/by_version/%d", version)
 	query := map[string]string{}
 	if withTransactions {
 		query["with_transactions"] = "true"
@@ -65,8 +65,27 @@ func (c *Client) GetBlockByVersion(ctx context.Context, version uint64, withTran
 	return &block, nil
 }
 
+func (c *Client) GetBlockByHeight(ctx context.Context, height uint64, withTransactions bool) (*Block, error) {
+	path := fmt.Sprintf("/blocks/by_height/%d", height)
+	query := map[string]string{}
+	if withTransactions {
+		query["with_transactions"] = "true"
+	}
+
+	data, err := c.Do(ctx, http.MethodGet, path, nil, query)
+	if err != nil {
+		return nil, fmt.Errorf("getBlockByHeight failed: %w", err)
+	}
+
+	var block Block
+	if err := json.Unmarshal(data, &block); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal block: %w", err)
+	}
+	return &block, nil
+}
+
 func (c *Client) GetTransactionsByVersion(ctx context.Context, start, limit uint64) ([]Transaction, error) {
-	path := fmt.Sprintf("/v1/transactions?start=%d&limit=%d", start, limit)
+	path := fmt.Sprintf("/transactions?start=%d&limit=%d", start, limit)
 
 	data, err := c.Do(ctx, http.MethodGet, path, nil, nil)
 	if err != nil {
