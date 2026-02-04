@@ -16,12 +16,9 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 - Polygon
 - Arbitrum
 - Optimism
-
-**Roadmap:**
 - Bitcoin
-- Litecoin
-- Dogecoin
 - Solana
+- Sui
 
 ---
 
@@ -308,6 +305,127 @@ nats consumer sub transfer my-consumer
 # Get stream info
 nats stream info transfer
 ```
+
+### Sample Transfer Events
+
+Each message published to NATS contains a single transaction serialized as JSON.
+
+**EVM Native Transfer (ETH):**
+
+```json
+{
+  "txHash": "0x8a5c1b3e9f2d4a6b7c0e1f3d5a7b9c2e4f6a8d0b3c5e7f9a1b3d5f7a9c1e3f",
+  "networkId": "ethereum_mainnet",
+  "blockNumber": 21500150,
+  "fromAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18",
+  "toAddress": "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+  "assetAddress": "",
+  "amount": "1500000000000000000",
+  "type": "native_transfer",
+  "txFee": "0.000315",
+  "timestamp": 1704067200
+}
+```
+
+**EVM Token Transfer (ERC-20 USDT):**
+
+```json
+{
+  "txHash": "0x1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b",
+  "networkId": "ethereum_mainnet",
+  "blockNumber": 21500200,
+  "fromAddress": "0xA1b2C3d4E5f6789abcdef0123456789ABCDEF01",
+  "toAddress": "0xF1e2D3c4B5a6978654321fedcba9876543210FED",
+  "assetAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+  "amount": "50000000",
+  "type": "token_transfer",
+  "txFee": "0.00042",
+  "timestamp": 1704067800
+}
+```
+
+**TRON Native Transfer (TRX):**
+
+```json
+{
+  "txHash": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+  "networkId": "tron_mainnet",
+  "blockNumber": 75144300,
+  "fromAddress": "TJYeasTPa3GwE8Rrk2DLJ9RVmPEBsXcZnH",
+  "toAddress": "TVj35JkE8NNohMGjhYhD47Rk3KLBQvSfbx",
+  "assetAddress": "",
+  "amount": "10000000",
+  "type": "native_transfer",
+  "txFee": "1.1",
+  "timestamp": 1704068400
+}
+```
+
+**Solana Token Transfer (SPL USDC):**
+
+```json
+{
+  "txHash": "5KtPn1LGuxhFiwjxErkxTb5dTmJmx8bLmQrXUpwZhfJzNFyRHNLFpA8yrJcdminZ",
+  "networkId": "solana_mainnet",
+  "blockNumber": 312000500,
+  "fromAddress": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+  "toAddress": "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU",
+  "assetAddress": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+  "amount": "1000000",
+  "type": "token_transfer",
+  "txFee": "0.000005",
+  "timestamp": 1704069000
+}
+```
+
+**Sui Native Transfer (SUI):**
+
+```json
+{
+  "txHash": "3Fz8wLkMnPqRsT2uVxY4zA1bC5dE7fG9hI0jK3lM5nO",
+  "networkId": "sui_mainnet",
+  "blockNumber": 48500100,
+  "fromAddress": "0x1a2b3c4d5e6f7890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "toAddress": "0xfedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+  "assetAddress": "0x2::sui::SUI",
+  "amount": "2000000000",
+  "type": "native_transfer",
+  "txFee": "0.001",
+  "timestamp": 1704069600
+}
+```
+
+**Bitcoin Native Transfer (BTC):**
+
+```json
+{
+  "txHash": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2",
+  "networkId": "bitcoin_mainnet",
+  "blockNumber": 850100,
+  "fromAddress": "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh",
+  "toAddress": "bc1q9h5yjqka3g4fs3pwfmwqf5ye9h6ynxz0s7ywyx",
+  "assetAddress": "",
+  "amount": "50000",
+  "type": "native_transfer",
+  "txFee": "0.00001234",
+  "timestamp": 1704070200
+}
+```
+
+**Field Reference:**
+
+| Field | Description |
+| --- | --- |
+| `txHash` | Transaction hash |
+| `networkId` | Chain identifier matching config name |
+| `blockNumber` | Block height (0 for mempool) |
+| `fromAddress` | Sender address |
+| `toAddress` | Recipient address |
+| `assetAddress` | Token contract address (empty for native transfers) |
+| `amount` | Transfer amount in smallest unit (wei, sun, lamports, etc.) |
+| `type` | `native_transfer` or `token_transfer` |
+| `txFee` | Transaction fee in native token |
+| `timestamp` | Unix timestamp |
 
 ### Using Go JetStream Client
 
