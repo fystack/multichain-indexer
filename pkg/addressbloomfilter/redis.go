@@ -73,6 +73,7 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 		enum.NetworkTypeBtc,
 		enum.NetworkTypeSol,
 		enum.NetworkTypeSui,
+		enum.NetworkTypeApt,
 	}
 
 	for _, addrType := range types {
