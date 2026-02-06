@@ -37,7 +37,7 @@ type ChainConfig struct {
 	Name                string           `yaml:"-"`
 	NetworkId           string           `yaml:"network_id"`
 	InternalCode        string           `yaml:"internal_code"`
-	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm btc sol sui"`
+	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm btc sol sui ton"`
 	FromLatest          bool             `yaml:"from_latest"`
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`
@@ -46,6 +46,13 @@ type ChainConfig struct {
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`
+	Jettons             []JettonConfig   `yaml:"jettons"`
+}
+
+type JettonConfig struct {
+	MasterAddress string `yaml:"master_address"`
+	Symbol        string `yaml:"symbol"`
+	Decimals      int    `yaml:"decimals"`
 }
 
 type ClientConfig struct {
