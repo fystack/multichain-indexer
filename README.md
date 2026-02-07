@@ -451,8 +451,13 @@ func main() {
 
     js, _ := jetstream.New(nc)
 
-    // Get consumer
-    consumer, _ := js.Consumer(context.Background(), "transfer", "my-consumer")
+    // Create or get consumer filtered to transfer.event.dispatch
+    consumer, _ := js.CreateOrUpdateConsumer(context.Background(), "transfer", jetstream.ConsumerConfig{
+        Name:           "my-consumer",
+        Durable:        "my-consumer",
+        FilterSubjects: []string{"transfer.event.dispatch"},
+        MaxDeliver:     3,
+    })
 
     // Consume messages
     consumer.Consume(func(msg jetstream.Msg) {
