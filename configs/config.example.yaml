@@ -161,6 +161,21 @@ chains:
       - url: "fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
       - url: "sui-mainnet.nodeinfra.com:443"
 
+  ton_mainnet:
+    network_id: "ton"
+    internal_code: "TON_MAINNET"
+    type: "ton"
+    poll_interval: "5s"
+    nodes:
+      - url: "https://ton.org/global.config.json"
+    throttle:
+      concurrency: 10
+      batch_size: 50
+    jettons:
+      - master_address: "EQCxE6mUtQJKFnGfaROTgt1lZbDiiX1Gw83iAV82Cn_0opUb" # USDT
+        symbol: "USDT"
+        decimals: 6
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
