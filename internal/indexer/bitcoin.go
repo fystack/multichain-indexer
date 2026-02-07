@@ -32,10 +32,7 @@ func NewBitcoinIndexer(
 	failover *rpc.Failover[bitcoin.BitcoinAPI],
 	pubkeyStore PubkeyStore,
 ) *BitcoinIndexer {
-	confirmations := uint64(6) // Default 6 confirmations for Bitcoin
-	if cfg.Confirmations > 0 {
-		confirmations = cfg.Confirmations
-	}
+	confirmations := cfg.Confirmations
 
 	return &BitcoinIndexer{
 		chainName:     chainName,
