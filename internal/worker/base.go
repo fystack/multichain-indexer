@@ -165,13 +165,33 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 
 	addressType := bw.chain.GetNetworkType()
 	for _, tx := range block.Transactions {
-		// Only check if ToAddress is monitored (incoming transfer/deposit)
-		// Outgoing transactions (FROM monitored addresses) are handled by withdrawal flow
+		// Check if ToAddress is monitored (incoming transfer/deposit)
 		toMonitored := tx.ToAddress != "" && bw.pubkeyStore.Exist(addressType, tx.ToAddress)
+		// Check if FromAddress is monitored (outgoing transfer/sweep)
+		// Note: Withdrawals are also outgoing but initiated differently
+		fromMonitored := tx.FromAddress != "" && bw.pubkeyStore.Exist(addressType, tx.FromAddress)
 
+		// Emit incoming event for receiver
 		if toMonitored {
 			bw.logger.Info("Emitting matched transaction",
 				"direction", "incoming",
+				"from", tx.FromAddress,
+				"to", tx.ToAddress,
+				"chain", bw.chain.GetName(),
+				"addressType", addressType,
+				"txhash", tx.TxHash,
+				"status", tx.Status,
+				"confirmations", tx.Confirmations,
+			)
+			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
+		}
+
+		// Emit outgoing event for sender (enables balance decrements for sweeps)
+		// This ensures custody creates transaction records for BOTH sender and receiver
+		// which triggers finalization (and balance updates) for both wallets
+		if fromMonitored {
+			bw.logger.Info("Emitting matched transaction",
+				"direction", "outgoing",
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
 				"chain", bw.chain.GetName(),
