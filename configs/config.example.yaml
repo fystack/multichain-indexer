@@ -212,7 +212,7 @@ services:
     wallet_address_repo: "wallet_address"
     batch_size: 1000
     redis:
-      key_prefix: "bloomfilter"
+      key_prefix: "wallet_bloom"
       error_rate: 0.01 # expected false positive rate
       capacity: 1000000 # max number of addresses
     in_memory: # alternative config (if not using redis)
