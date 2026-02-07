@@ -45,6 +45,20 @@ services:
       retries: 10
     restart: always
 
+  nats-nui:
+    image: ghcr.io/nats-nui/nui:latest
+    container_name: nats-nui
+    ports:
+      - "31311:31311"
+    environment:
+      - NATS_URL=nats://nats-server:4222
+    volumes:
+      - nats_nui_data:/db
+    depends_on:
+      - nats-server
+    restart: always
+
 volumes:
   db_data:
   redis_data:
+  nats_nui_data:

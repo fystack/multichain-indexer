@@ -182,11 +182,29 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
+	// Build bloom sync config if enabled
+	var bloomSyncCfg *worker.BloomSyncConfig
+	if services.Bloomfilter != nil && services.Bloomfilter.Sync.Enabled && db != nil {
+		bloomSyncCfg = &worker.BloomSyncConfig{
+			Interval:  time.Second, // default
+			BatchSize: 500,         // default
+		}
+		if services.Bloomfilter.Sync.Interval != "" {
+			if interval, err := time.ParseDuration(services.Bloomfilter.Sync.Interval); err == nil {
+				bloomSyncCfg.Interval = interval
+			}
+		}
+		if services.Bloomfilter.Sync.BatchSize > 0 {
+			bloomSyncCfg.BatchSize = services.Bloomfilter.Sync.BatchSize
+		}
+	}
+
 	// Create manager with all workers using factory
 	managerCfg := worker.ManagerConfig{
 		Chains:        chains,
 		EnableCatchup: catchup,
 		EnableManual:  manual,
+		BloomSync:     bloomSyncCfg,
 	}
 
 	manager := worker.CreateManagerWithWorkers(

@@ -218,3 +218,9 @@ services:
     in_memory: # alternative config (if not using redis)
       expected_items: 1000000
       false_positive_rate: 0.01
+    # Background sync worker - polls database for newly added addresses
+    # and updates bloom filter in real-time across all indexer instances
+    sync:
+      enabled: true      # enable real-time address sync
+      interval: "1s"     # how often to poll for new addresses (1s = ~1 second latency)
+      batch_size: 500    # max addresses to sync per cycle

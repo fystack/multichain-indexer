@@ -41,6 +41,7 @@ type ManagerConfig struct {
 	EnableRescanner bool
 	EnableCatchup   bool
 	EnableManual    bool
+	BloomSync       *BloomSyncConfig // Optional bloom filter sync config (nil = disabled)
 }
 
 // BuildWorkers constructs workers for a given mode.
@@ -365,6 +366,16 @@ func CreateManagerWithWorkers(
 		if chainCfg.Type == enum.NetworkTypeBtc {
 			addIfEnabled(ModeMempool, cfg.Services.Worker.Mempool.Enabled)
 		}
+	}
+
+	// Add bloom filter sync worker if enabled (global, not per-chain)
+	if managerCfg.BloomSync != nil && addressBF != nil && db != nil {
+		bloomSyncWorker := NewBloomSyncWorker(ctx, addressBF, db, *managerCfg.BloomSync)
+		manager.AddWorkers(bloomSyncWorker)
+		logger.Info("Bloom filter sync worker enabled",
+			"interval", managerCfg.BloomSync.Interval,
+			"batchSize", managerCfg.BloomSync.BatchSize,
+		)
 	}
 
 	return manager
