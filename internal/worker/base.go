@@ -183,7 +183,9 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"status", tx.Status,
 				"confirmations", tx.Confirmations,
 			)
-			_ = bw.emitter.EmitTransactionWithKey(bw.chain.GetName(), &tx, tx.TxHash+"-in")
+			txCopy := tx
+			txCopy.Direction = "in"
+			_ = bw.emitter.EmitTransactionWithKey(bw.chain.GetName(), &txCopy, tx.TxHash+"-in")
 		}
 
 		// Emit outgoing event for sender (enables balance decrements for sweeps)
@@ -200,7 +202,9 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"status", tx.Status,
 				"confirmations", tx.Confirmations,
 			)
-			_ = bw.emitter.EmitTransactionWithKey(bw.chain.GetName(), &tx, tx.TxHash+"-out")
+			txCopy := tx
+			txCopy.Direction = "out"
+			_ = bw.emitter.EmitTransactionWithKey(bw.chain.GetName(), &txCopy, tx.TxHash+"-out")
 		}
 	}
 }
