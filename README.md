@@ -427,6 +427,12 @@ Each message published to NATS contains a single transaction serialized as JSON.
 | `txFee` | Transaction fee in native token |
 | `timestamp` | Unix timestamp |
 
+### Important: Bloom Filter and Event Verification
+
+> **Warning:** The bloom filter used for address filtering is a **probabilistic data structure**. It guarantees that if an address is *not* in the filter, it will never match (no false negatives), but it *may* occasionally produce **false positives** — meaning you could receive events for addresses that are not actually in your system.
+>
+> When consuming transaction events, **always verify that the destination address (`toAddress`) exists in your system before crediting your ledger.** Do not blindly trust bloom filter matches for financial operations.
+
 ### Using Go JetStream Client
 
 ```go
@@ -445,8 +451,13 @@ func main() {
 
     js, _ := jetstream.New(nc)
 
-    // Get consumer
-    consumer, _ := js.Consumer(context.Background(), "transfer", "my-consumer")
+    // Create or get consumer filtered to transfer.event.dispatch
+    consumer, _ := js.CreateOrUpdateConsumer(context.Background(), "transfer", jetstream.ConsumerConfig{
+        Name:           "my-consumer",
+        Durable:        "my-consumer",
+        FilterSubjects: []string{"transfer.event.dispatch"},
+        MaxDeliver:     3,
+    })
 
     // Consume messages
     consumer.Consume(func(msg jetstream.Msg) {

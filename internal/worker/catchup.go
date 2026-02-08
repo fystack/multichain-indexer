@@ -93,6 +93,17 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	if len(ranges) == 0 {
 		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
 			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
+				// For chains with confirmation requirements (e.g. Bitcoin), cap the catchup
+				// range at the confirmed height. Without this, catchup processes unconfirmed
+				// blocks that the regular worker can't reach yet, causing an infinite loop
+				// where the same range is re-created and transactions are re-emitted.
+				if cw.config.Confirmations > 0 && head > cw.config.Confirmations {
+					head = head - cw.config.Confirmations
+				}
+				if head <= latest {
+					// no gap between head and latest
+					return ranges
+				}
 				start, end := latest+1, head
 				cw.logger.Info("Creating new catchup range",
 					"chain", cw.chain.GetName(),
