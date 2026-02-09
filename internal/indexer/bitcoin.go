@@ -255,9 +255,8 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			toAddr = normalized
 		}
 
-		// Skip self-transfers (change outputs back to sender)
-		// This prevents confusing transfers where from=to
-		if fromAddr != "" && fromAddr == toAddr {
+		// If configured, skip transfers between the same address
+		if !b.config.IndexChangeOutput && fromAddr != "" && fromAddr == toAddr {
 			continue
 		}
 
