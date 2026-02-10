@@ -256,12 +256,12 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			continue // Skip unspendable outputs (OP_RETURN, etc.)
 		}
 
-		// Normalize Bitcoin address (bech32 -> lowercase, base58 -> validated)
 		if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
 			toAddr = normalized
 		}
 
-		// If configured, skip transfers between the same address
+		// For Transfer events, respect index_change_output config
+		// (This filters what goes to transfer.event.dispatch)
 		if !b.config.IndexChangeOutput && fromAddr != "" && fromAddr == toAddr {
 			continue
 		}
@@ -309,6 +309,8 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 	var created []types.UTXO
 	var spent []types.SpentUTXO
 
+	// Extract ALL created UTXOs (vouts) without filtering
+	// Filtering happens at emission level based on monitored addresses
 	for i, vout := range tx.Vout {
 		addr := bitcoin.GetOutputAddress(&vout)
 		if addr == "" {
@@ -317,13 +319,6 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 
 		if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
 			addr = normalized
-		}
-
-		if !b.config.IndexChangeOutput {
-			fromAddr := b.getFirstInputAddress(tx)
-			if fromAddr != "" && fromAddr == addr {
-				continue
-			}
 		}
 
 		amountSat := int64(vout.Value * 1e8)
@@ -337,6 +332,8 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 		})
 	}
 
+	// Extract ALL spent UTXOs (vins) without filtering
+	// Filtering happens at emission level based on monitored addresses
 	for i, vin := range tx.Vin {
 		if vin.PrevOut == nil {
 			continue
@@ -362,6 +359,8 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 		})
 	}
 
+	// Return event even if no monitored addresses
+	// Filtering happens at emission level
 	if len(created) == 0 && len(spent) == 0 {
 		return nil
 	}
