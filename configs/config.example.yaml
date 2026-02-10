@@ -69,6 +69,7 @@ chains:
     confirmations: 1
     reorg_rollback_window: 100
     index_change_output: false
+    index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-testnet-rpc.publicnode.com"
       - url: "https://blockstream.info/testnet/api"
@@ -91,6 +92,7 @@ chains:
     confirmations: 1
     reorg_rollback_window: 100
     index_change_output: false
+    index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-rpc.publicnode.com"
       - url: "https://blockstream.info/api"

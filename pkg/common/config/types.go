@@ -44,6 +44,7 @@ type ChainConfig struct {
 	ReorgRollbackWindow int              `yaml:"reorg_rollback_window"`
 	Confirmations       uint64           `yaml:"confirmations"`
 	IndexChangeOutput   bool             `yaml:"index_change_output"`
+	IndexUTXO           bool             `yaml:"index_utxo"`
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`

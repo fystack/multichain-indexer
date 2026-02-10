@@ -126,46 +126,48 @@ func (mw *MempoolWorker) processMempool() error {
 		}
 	}
 
-	for i := range utxoEvents {
-		event := &utxoEvents[i]
-		
-		if mw.seenTxs[event.TxHash+":utxo"] {
-			continue
-		}
-
-		isRelevant := false
-		for _, utxo := range event.Created {
-			if mw.pubkeyStore.Exist(networkType, utxo.Address) {
-				isRelevant = true
-				break
+	if mw.config.IndexUTXO {
+		for i := range utxoEvents {
+			event := &utxoEvents[i]
+			
+			if mw.seenTxs[event.TxHash+":utxo"] {
+				continue
 			}
-		}
 
-		if !isRelevant {
-			for _, spent := range event.Spent {
-				if mw.pubkeyStore.Exist(networkType, spent.Address) {
+			isRelevant := false
+			for _, utxo := range event.Created {
+				if mw.pubkeyStore.Exist(networkType, utxo.Address) {
 					isRelevant = true
 					break
 				}
 			}
-		}
 
-		if isRelevant {
-			mw.seenTxs[event.TxHash+":utxo"] = true
-			newUTXOCount++
+			if !isRelevant {
+				for _, spent := range event.Spent {
+					if mw.pubkeyStore.Exist(networkType, spent.Address) {
+						isRelevant = true
+						break
+					}
+				}
+			}
 
-			if err := mw.emitter.EmitUTXO(mw.chain.GetName(), event); err != nil {
-				mw.logger.Error("Failed to emit mempool UTXO",
-					"txHash", event.TxHash,
-					"err", err,
-				)
-			} else {
-				mw.logger.Debug("Emitted mempool UTXO",
-					"txHash", event.TxHash,
-					"created", len(event.Created),
-					"spent", len(event.Spent),
-					"status", event.Status,
-				)
+			if isRelevant {
+				mw.seenTxs[event.TxHash+":utxo"] = true
+				newUTXOCount++
+
+				if err := mw.emitter.EmitUTXO(mw.chain.GetName(), event); err != nil {
+					mw.logger.Error("Failed to emit mempool UTXO",
+						"txHash", event.TxHash,
+						"err", err,
+					)
+				} else {
+					mw.logger.Debug("Emitted mempool UTXO",
+						"txHash", event.TxHash,
+						"created", len(event.Created),
+						"spent", len(event.Spent),
+						"status", event.Status,
+					)
+				}
 			}
 		}
 	}

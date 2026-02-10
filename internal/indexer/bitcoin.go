@@ -130,9 +130,11 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 
-		utxoEvent := b.extractUTXOEvent(tx, btcBlock.Height, btcBlock.Hash, btcBlock.Time, latestBlock)
-		if utxoEvent != nil {
-			allUTXOEvents = append(allUTXOEvents, *utxoEvent)
+		if b.config.IndexUTXO {
+			utxoEvent := b.extractUTXOEvent(tx, btcBlock.Height, btcBlock.Hash, btcBlock.Time, latestBlock)
+			if utxoEvent != nil {
+				allUTXOEvents = append(allUTXOEvents, *utxoEvent)
+			}
 		}
 	}
 
@@ -468,9 +470,11 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 		transfers := b.extractTransfersFromTx(tx, 0, currentTime, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 
-		utxoEvent := b.extractUTXOEvent(tx, 0, "", currentTime, latestBlock)
-		if utxoEvent != nil {
-			allUTXOEvents = append(allUTXOEvents, *utxoEvent)
+		if b.config.IndexUTXO {
+			utxoEvent := b.extractUTXOEvent(tx, 0, "", currentTime, latestBlock)
+			if utxoEvent != nil {
+				allUTXOEvents = append(allUTXOEvents, *utxoEvent)
+			}
 		}
 	}
 

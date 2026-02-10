@@ -193,6 +193,10 @@ func (bw *BaseWorker) emitUTXOs(block *types.Block) {
 		return
 	}
 
+	if !bw.config.IndexUTXO {
+		return
+	}
+
 	utxoEvents, ok := block.GetMetadata("utxo_events")
 	if !ok {
 		return
