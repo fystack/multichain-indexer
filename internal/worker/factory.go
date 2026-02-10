@@ -53,6 +53,7 @@ type ManagerConfig struct {
 	EnableCatchup   bool
 	EnableManual    bool
 	Observer        BlockResultObserver
+	BloomSync       *BloomSyncConfig // nil = disabled
 }
 
 // setObserverOnWorkers injects the observer callback into each worker's BaseWorker.
@@ -809,6 +810,16 @@ func CreateManagerWithWorkers(
 		if chainCfg.Type == enum.NetworkTypeBtc {
 			addIfEnabled(ModeMempool, cfg.Services.Worker.Mempool.Enabled)
 		}
+	}
+
+	// Bloom filter sync worker (global, not per-chain)
+	if managerCfg.BloomSync != nil && db != nil && addressBF != nil {
+		bloomWorker := NewBloomSyncWorker(ctx, addressBF, db, *managerCfg.BloomSync)
+		manager.AddWorkers(bloomWorker)
+		logger.Info("Bloom filter sync worker enabled",
+			"interval", managerCfg.BloomSync.Interval,
+			"batchSize", managerCfg.BloomSync.BatchSize,
+		)
 	}
 
 	return manager
