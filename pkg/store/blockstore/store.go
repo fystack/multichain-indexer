@@ -1,6 +1,7 @@
 package blockstore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -22,12 +23,22 @@ type CatchupRange struct {
 	Current uint64 `json:"current"`
 }
 
+// BlockHashEntry stores a block number and its hash for reorg detection.
+type BlockHashEntry struct {
+	BlockNumber uint64 `json:"block_number"`
+	Hash        string `json:"hash"`
+}
+
 func latestBlockKey(chainName string) string {
 	return fmt.Sprintf("%s/%s/%s", BlockStates, chainName, constant.KVPrefixLatestBlock)
 }
 
 func failedBlocksKey(chainName string) string {
 	return fmt.Sprintf("%s/%s/%s", BlockStates, chainName, constant.KVPrefixFailedBlocks)
+}
+
+func blockHashesKey(chainName string) string {
+	return fmt.Sprintf("%s/%s/block_hashes", BlockStates, chainName)
 }
 
 // Catchup progress keys
@@ -55,6 +66,9 @@ type Store interface {
 	SaveCatchupProgress(chain string, start, end, current uint64) error
 	GetCatchupProgress(chain string) ([]CatchupRange, error)
 	DeleteCatchupRange(chain string, start, end uint64) error
+
+	SaveBlockHashes(chain string, hashes []BlockHashEntry) error
+	GetBlockHashes(chain string) ([]BlockHashEntry, error)
 
 	Close() error
 }
@@ -106,11 +120,17 @@ func (bs *blockStore) SaveFailedBlock(chainName string, blockNumber uint64) erro
 	var blocks []uint64
 	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
 
-	// dedup
-	found := slices.Contains(blocks, blockNumber)
-	if !found {
+	// O(1) dedup using a set
+	existing := make(map[uint64]struct{}, len(blocks))
+	for _, b := range blocks {
+		existing[b] = struct{}{}
+	}
+	if _, found := existing[blockNumber]; !found {
 		blocks = append(blocks, blockNumber)
-		slices.Sort(blocks)
+		// Insert in sorted position (blocks is already sorted)
+		for i := len(blocks) - 1; i > 0 && blocks[i] < blocks[i-1]; i-- {
+			blocks[i], blocks[i-1] = blocks[i-1], blocks[i]
+		}
 		if err := bs.store.SetAny(key, blocks); err != nil {
 			return err
 		}
@@ -241,6 +261,34 @@ func (bs *blockStore) DeleteCatchupRange(chain string, start, end uint64) error 
 		)
 	}
 	return err
+}
+
+// SaveBlockHashes persists block hashes for reorg detection across restarts.
+func (bs *blockStore) SaveBlockHashes(chain string, hashes []BlockHashEntry) error {
+	if chain == "" {
+		return errors.New("chain name is required")
+	}
+	data, err := json.Marshal(hashes)
+	if err != nil {
+		return fmt.Errorf("marshal block hashes: %w", err)
+	}
+	return bs.store.Set(blockHashesKey(chain), string(data))
+}
+
+// GetBlockHashes loads persisted block hashes for reorg detection.
+func (bs *blockStore) GetBlockHashes(chain string) ([]BlockHashEntry, error) {
+	if chain == "" {
+		return nil, errors.New("chain name is required")
+	}
+	raw, err := bs.store.Get(blockHashesKey(chain))
+	if err != nil {
+		return nil, nil // not found is not an error
+	}
+	var hashes []BlockHashEntry
+	if err := json.Unmarshal([]byte(raw), &hashes); err != nil {
+		return nil, fmt.Errorf("unmarshal block hashes: %w", err)
+	}
+	return hashes, nil
 }
 
 func (bs *blockStore) Close() error {

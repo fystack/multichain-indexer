@@ -229,18 +229,20 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	logger.Info("Shutting down indexer...")
 
-	// Shutdown health server
+	// Stop workers first so health endpoint can report during drain
+	manager.Stop()
+
+	// Then shutdown health server
 	if healthServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := healthServer.Shutdown(ctx); err != nil {
+		if err := healthServer.Shutdown(shutdownCtx); err != nil {
 			logger.Error("Health server shutdown failed", "error", err)
 		} else {
 			logger.Info("Health server stopped gracefully")
 		}
 	}
 
-	manager.Stop()
 	logger.Info("✅ Indexer stopped gracefully")
 }
 

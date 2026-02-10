@@ -24,4 +24,8 @@ type BitcoinAPI interface {
 	GetRawTransaction(ctx context.Context, txid string, verbose bool) (*Transaction, error)
 	GetTransactionWithPrevouts(ctx context.Context, txid string) (*Transaction, error)
 	GetMempoolEntry(ctx context.Context, txid string) (*MempoolEntry, error)
+
+	// Batch operations for efficient prevout resolution
+	ResolvePrevouts(ctx context.Context, txs []*Transaction) error
+	GetTransactionsWithPrevouts(ctx context.Context, txids []string) (map[string]*Transaction, error)
 }

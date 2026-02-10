@@ -16,18 +16,13 @@ import (
 )
 
 const (
-	MaxBlockHashSize = 20
+	MaxBlockHashSize = 50
 )
 
 type RegularWorker struct {
 	*BaseWorker
 	currentBlock uint64
-	blockHashes  []BlockHashEntry
-}
-
-type BlockHashEntry struct {
-	BlockNumber uint64
-	Hash        string
+	blockHashes  []blockstore.BlockHashEntry
 }
 
 func NewRegularWorker(
@@ -53,7 +48,8 @@ func NewRegularWorker(
 	)
 	rw := &RegularWorker{BaseWorker: worker}
 	rw.currentBlock = rw.determineStartingBlock()
-	rw.blockHashes = make([]BlockHashEntry, 0, MaxBlockHashSize)
+	rw.blockHashes = make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize)
+	rw.loadBlockHashes()
 	return rw
 }
 
@@ -71,7 +67,7 @@ func (rw *RegularWorker) Stop() {
 	if rw.currentBlock > 0 {
 		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), rw.currentBlock)
 	}
-	rw.clearBlockHashes()
+	rw.persistBlockHashes()
 	// Call base worker stop to cancel context and clean up
 	rw.BaseWorker.Stop()
 }
@@ -284,9 +280,9 @@ func (rw *RegularWorker) isReorgCheckRequired() bool {
 	return networkType == enum.NetworkTypeEVM || networkType == enum.NetworkTypeBtc
 }
 
-// addBlockHash adds a block hash to the array, maintaining max size
+// addBlockHash adds a block hash to the array, maintaining max size, and persists to store.
 func (rw *RegularWorker) addBlockHash(blockNumber uint64, hash string) {
-	entry := BlockHashEntry{
+	entry := blockstore.BlockHashEntry{
 		BlockNumber: blockNumber,
 		Hash:        hash,
 	}
@@ -298,6 +294,8 @@ func (rw *RegularWorker) addBlockHash(blockNumber uint64, hash string) {
 	if len(rw.blockHashes) > MaxBlockHashSize {
 		rw.blockHashes = rw.blockHashes[len(rw.blockHashes)-MaxBlockHashSize:]
 	}
+
+	rw.persistBlockHashes()
 }
 
 // getBlockHash retrieves a block hash by block number
@@ -313,6 +311,27 @@ func (rw *RegularWorker) getBlockHash(blockNumber uint64) string {
 // clearBlockHashes clears all block hashes (used on reorg)
 func (rw *RegularWorker) clearBlockHashes() {
 	rw.blockHashes = rw.blockHashes[:0] // Clear slice but keep capacity
+	rw.persistBlockHashes()
+}
+
+// loadBlockHashes restores persisted block hashes from the block store.
+func (rw *RegularWorker) loadBlockHashes() {
+	hashes, err := rw.blockStore.GetBlockHashes(rw.chain.GetNetworkInternalCode())
+	if err != nil {
+		rw.logger.Warn("Failed to load persisted block hashes", "err", err)
+		return
+	}
+	if len(hashes) > 0 {
+		rw.blockHashes = hashes
+		rw.logger.Info("Loaded persisted block hashes", "count", len(hashes))
+	}
+}
+
+// persistBlockHashes saves current block hashes to the block store.
+func (rw *RegularWorker) persistBlockHashes() {
+	if err := rw.blockStore.SaveBlockHashes(rw.chain.GetNetworkInternalCode(), rw.blockHashes); err != nil {
+		rw.logger.Warn("Failed to persist block hashes", "err", err)
+	}
 }
 
 func checkContinuity(prev, curr indexer.BlockResult) bool {

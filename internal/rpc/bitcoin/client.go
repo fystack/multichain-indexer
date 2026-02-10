@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
+	"golang.org/x/sync/errgroup"
 )
 
 // BitcoinClient implements the BitcoinAPI interface
@@ -176,30 +178,137 @@ func (c *BitcoinClient) GetTransactionWithPrevouts(ctx context.Context, txid str
 		return nil, err
 	}
 
-	// If prevout data already present, return as-is
-	if len(tx.Vin) > 0 && tx.Vin[0].PrevOut != nil {
-		return tx, nil
-	}
-
-	// Resolve prevout for each input (skip coinbase)
-	for i := range tx.Vin {
-		if tx.Vin[i].TxID == "" {
-			continue // Coinbase input
-		}
-
-		prevTx, err := c.GetRawTransaction(ctx, tx.Vin[i].TxID, true)
-		if err != nil {
-			// Log but don't fail - some prevouts may be unavailable
-			continue
-		}
-
-		voutIdx := tx.Vin[i].Vout
-		if int(voutIdx) < len(prevTx.Vout) {
-			tx.Vin[i].PrevOut = &prevTx.Vout[voutIdx]
-		}
+	if err := c.ResolvePrevouts(ctx, []*Transaction{tx}); err != nil {
+		return nil, err
 	}
 
 	return tx, nil
+}
+
+// ResolvePrevouts resolves prevout data for a batch of transactions in parallel.
+// It deduplicates shared prevout TxIDs and fetches them using a worker pool.
+func (c *BitcoinClient) ResolvePrevouts(ctx context.Context, txs []*Transaction) error {
+	// Collect all unique prevout TxIDs needed across all transactions
+	type prevoutRef struct {
+		tx       *Transaction
+		inputIdx int
+		voutIdx  uint32
+	}
+
+	needed := make(map[string][]prevoutRef) // prevout TxID -> list of references
+	for _, tx := range txs {
+		// Skip if prevout data already present
+		if len(tx.Vin) > 0 && tx.Vin[0].PrevOut != nil {
+			continue
+		}
+		for i := range tx.Vin {
+			if tx.Vin[i].TxID == "" {
+				continue // Coinbase input
+			}
+			needed[tx.Vin[i].TxID] = append(needed[tx.Vin[i].TxID], prevoutRef{
+				tx:       tx,
+				inputIdx: i,
+				voutIdx:  tx.Vin[i].Vout,
+			})
+		}
+	}
+
+	if len(needed) == 0 {
+		return nil
+	}
+
+	// Collect unique TxIDs to fetch
+	txids := make([]string, 0, len(needed))
+	for txid := range needed {
+		txids = append(txids, txid)
+	}
+
+	// Fetch all prevout transactions in parallel with bounded concurrency
+	const maxWorkers = 10
+	var mu sync.Mutex
+	fetched := make(map[string]*Transaction, len(txids))
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxWorkers)
+
+	for _, txid := range txids {
+		txid := txid
+		g.Go(func() error {
+			prevTx, err := c.GetRawTransaction(gctx, txid, true)
+			if err != nil {
+				// Non-fatal: some prevouts may be pruned or unavailable
+				return nil
+			}
+			mu.Lock()
+			fetched[txid] = prevTx
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return fmt.Errorf("resolve prevouts: %w", err)
+	}
+
+	// Assign prevout data to all inputs from the fetched cache
+	for txid, refs := range needed {
+		prevTx, ok := fetched[txid]
+		if !ok {
+			continue
+		}
+		for _, ref := range refs {
+			if int(ref.voutIdx) < len(prevTx.Vout) {
+				ref.tx.Vin[ref.inputIdx].PrevOut = &prevTx.Vout[ref.voutIdx]
+			}
+		}
+	}
+
+	return nil
+}
+
+// GetTransactionsWithPrevouts fetches multiple transactions by TxID and resolves all prevouts in batch.
+func (c *BitcoinClient) GetTransactionsWithPrevouts(ctx context.Context, txids []string) (map[string]*Transaction, error) {
+	if len(txids) == 0 {
+		return nil, nil
+	}
+
+	const maxWorkers = 10
+	var mu sync.Mutex
+	result := make(map[string]*Transaction, len(txids))
+
+	// Phase 1: Fetch all requested transactions in parallel
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(maxWorkers)
+
+	for _, txid := range txids {
+		txid := txid
+		g.Go(func() error {
+			tx, err := c.GetRawTransaction(gctx, txid, true)
+			if err != nil {
+				return nil // skip unavailable transactions
+			}
+			mu.Lock()
+			result[txid] = tx
+			mu.Unlock()
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return nil, fmt.Errorf("fetch transactions: %w", err)
+	}
+
+	// Phase 2: Resolve prevouts for all fetched transactions
+	txSlice := make([]*Transaction, 0, len(result))
+	for _, tx := range result {
+		txSlice = append(txSlice, tx)
+	}
+
+	if err := c.ResolvePrevouts(ctx, txSlice); err != nil {
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // GetMempoolEntry returns mempool entry for a specific transaction
