@@ -46,8 +46,16 @@ func NewBaseClient(
 	timeout time.Duration,
 	rl *ratelimiter.PooledRateLimiter,
 ) *BaseClient {
+	transport := &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 20,
+		IdleConnTimeout:     90 * time.Second,
+	}
 	return &BaseClient{
-		httpClient:  &http.Client{Timeout: timeout},
+		httpClient: &http.Client{
+			Timeout:   timeout,
+			Transport: transport,
+		},
 		baseURL:     strings.TrimSuffix(baseURL, "/"),
 		auth:        auth,
 		network:     network,

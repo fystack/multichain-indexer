@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
@@ -17,6 +18,7 @@ import (
 // Polls the mempool for pending transactions and emits them to NATS
 type MempoolWorker struct {
 	*BaseWorker
+	mu           sync.Mutex
 	seenTxs      map[string]bool // Track seen transactions to avoid duplicates
 	pollInterval time.Duration   // How often to poll mempool
 	btcIndexer   *indexer.BitcoinIndexer
@@ -95,6 +97,7 @@ func (mw *MempoolWorker) processMempool() error {
 	newTxCount := 0
 	networkType := mw.chain.GetNetworkType()
 
+	mw.mu.Lock()
 	for _, tx := range transactions {
 		// Only emit transactions where TO address is monitored (incoming deposits)
 		// Outgoing transactions are handled by the withdrawal flow
@@ -132,16 +135,10 @@ func (mw *MempoolWorker) processMempool() error {
 		}
 	}
 
-	if newTxCount > 0 {
-		mw.logger.Info("Processed mempool transactions",
-			"new_txs", newTxCount,
-			"total_tracked", len(mw.seenTxs),
-		)
-	}
+	trackedCount := len(mw.seenTxs)
 
 	// Cleanup: Remove old transactions from tracking (keep last 10k)
-	if len(mw.seenTxs) > 10000 {
-		// Clear half the map (simple approach)
+	if trackedCount > 10000 {
 		count := 0
 		for txKey := range mw.seenTxs {
 			delete(mw.seenTxs, txKey)
@@ -151,6 +148,14 @@ func (mw *MempoolWorker) processMempool() error {
 			}
 		}
 		mw.logger.Debug("Cleaned up old mempool transactions", "removed", count)
+	}
+	mw.mu.Unlock()
+
+	if newTxCount > 0 {
+		mw.logger.Info("Processed mempool transactions",
+			"new_txs", newTxCount,
+			"total_tracked", trackedCount,
+		)
 	}
 
 	// Sleep until next poll interval
