@@ -183,4 +183,57 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
 		}
 	}
+
+	bw.emitUTXOs(block)
+}
+
+// emitUTXOs emits UTXO events for monitored addresses.
+func (bw *BaseWorker) emitUTXOs(block *types.Block) {
+	if block == nil || bw.pubkeyStore == nil {
+		return
+	}
+
+	utxoEvents, ok := block.GetMetadata("utxo_events")
+	if !ok {
+		return
+	}
+
+	events, ok := utxoEvents.([]types.UTXOEvent)
+	if !ok {
+		return
+	}
+
+	addressType := bw.chain.GetNetworkType()
+	for i := range events {
+		event := &events[i]
+		isRelevant := false
+
+		for _, utxo := range event.Created {
+			if bw.pubkeyStore.Exist(addressType, utxo.Address) {
+				isRelevant = true
+				break
+			}
+		}
+
+		if !isRelevant {
+			for _, spent := range event.Spent {
+				if bw.pubkeyStore.Exist(addressType, spent.Address) {
+					isRelevant = true
+					break
+				}
+			}
+		}
+
+		if isRelevant {
+			bw.logger.Info("Emitting UTXO event",
+				"chain", bw.chain.GetName(),
+				"txhash", event.TxHash,
+				"created", len(event.Created),
+				"spent", len(event.Spent),
+				"status", event.Status,
+				"confirmations", event.Confirmations,
+			)
+			_ = bw.emitter.EmitUTXO(bw.chain.GetName(), event)
+		}
+	}
 }

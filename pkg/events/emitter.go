@@ -21,6 +21,7 @@ type IndexerEvent struct {
 type Emitter interface {
 	EmitBlock(chain string, block *types.Block) error
 	EmitTransaction(chain string, tx *types.Transaction) error
+	EmitUTXO(chain string, utxo *types.UTXOEvent) error
 	EmitError(chain string, err error) error
 	Emit(event IndexerEvent) error
 	Close()
@@ -50,6 +51,16 @@ func (e *emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	}
 	return e.queue.Enqueue(infra.TransferEventTopicQueue, txBytes, &infra.EnqueueOptions{
 		IdempotententKey: tx.Hash(),
+	})
+}
+
+func (e *emitter) EmitUTXO(chain string, utxo *types.UTXOEvent) error {
+	utxoBytes, err := utxo.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return e.queue.Enqueue(infra.UTXOEventTopicQueue, utxoBytes, &infra.EnqueueOptions{
+		IdempotententKey: utxo.Hash(),
 	})
 }
 

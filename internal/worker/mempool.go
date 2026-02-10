@@ -84,36 +84,30 @@ func (mw *MempoolWorker) Stop() {
 func (mw *MempoolWorker) processMempool() error {
 	mw.logger.Debug("Polling mempool", "chain", mw.chain.GetName())
 
-	// Get mempool transactions (already filtered by monitored addresses in indexer)
-	transactions, err := mw.btcIndexer.GetMempoolTransactions(mw.ctx)
+	transactions, utxoEvents, err := mw.btcIndexer.GetMempoolTransactions(mw.ctx)
 	if err != nil {
 		mw.logger.Error("Failed to get mempool transactions", "err", err)
 		return err
 	}
 
-	// Track and emit new transactions (only TO monitored addresses - deposits)
 	newTxCount := 0
+	newUTXOCount := 0
 	networkType := mw.chain.GetNetworkType()
 
 	for _, tx := range transactions {
-		// Only emit transactions where TO address is monitored (incoming deposits)
-		// Outgoing transactions are handled by the withdrawal flow
 		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
 		if !toMonitored {
 			continue
 		}
 
-		// Create unique key for deduplication (txHash + toAddress for UTXO model)
 		txKey := tx.TxHash + ":" + tx.ToAddress
 		if mw.seenTxs[txKey] {
 			continue
 		}
 
-		// Mark as seen
 		mw.seenTxs[txKey] = true
 		newTxCount++
 
-		// Emit transaction to NATS
 		if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
 			mw.logger.Error("Failed to emit mempool transaction",
 				"txHash", tx.TxHash,
@@ -132,9 +126,54 @@ func (mw *MempoolWorker) processMempool() error {
 		}
 	}
 
-	if newTxCount > 0 {
+	for i := range utxoEvents {
+		event := &utxoEvents[i]
+		
+		if mw.seenTxs[event.TxHash+":utxo"] {
+			continue
+		}
+
+		isRelevant := false
+		for _, utxo := range event.Created {
+			if mw.pubkeyStore.Exist(networkType, utxo.Address) {
+				isRelevant = true
+				break
+			}
+		}
+
+		if !isRelevant {
+			for _, spent := range event.Spent {
+				if mw.pubkeyStore.Exist(networkType, spent.Address) {
+					isRelevant = true
+					break
+				}
+			}
+		}
+
+		if isRelevant {
+			mw.seenTxs[event.TxHash+":utxo"] = true
+			newUTXOCount++
+
+			if err := mw.emitter.EmitUTXO(mw.chain.GetName(), event); err != nil {
+				mw.logger.Error("Failed to emit mempool UTXO",
+					"txHash", event.TxHash,
+					"err", err,
+				)
+			} else {
+				mw.logger.Debug("Emitted mempool UTXO",
+					"txHash", event.TxHash,
+					"created", len(event.Created),
+					"spent", len(event.Spent),
+					"status", event.Status,
+				)
+			}
+		}
+	}
+
+	if newTxCount > 0 || newUTXOCount > 0 {
 		mw.logger.Info("Processed mempool transactions",
 			"new_txs", newTxCount,
+			"new_utxos", newUTXOCount,
 			"total_tracked", len(mw.seenTxs),
 		)
 	}
