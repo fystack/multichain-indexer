@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
@@ -176,30 +177,113 @@ func (c *BitcoinClient) GetTransactionWithPrevouts(ctx context.Context, txid str
 		return nil, err
 	}
 
-	// If prevout data already present, return as-is
-	if len(tx.Vin) > 0 && tx.Vin[0].PrevOut != nil {
-		return tx, nil
+	if err := c.ResolvePrevouts(ctx, []*Transaction{tx}, 4); err != nil {
+		return nil, err
+	}
+	return tx, nil
+}
+
+// ResolvePrevouts resolves prevout data for all inputs across multiple transactions
+// using parallel fetching with deduplication. This eliminates the N+1 problem where
+// each input would otherwise require a separate RPC call.
+func (c *BitcoinClient) ResolvePrevouts(ctx context.Context, txs []*Transaction, concurrency int) error {
+	if concurrency <= 0 {
+		concurrency = 8
 	}
 
-	// Resolve prevout for each input (skip coinbase)
-	for i := range tx.Vin {
-		if tx.Vin[i].TxID == "" {
-			continue // Coinbase input
-		}
-
-		prevTx, err := c.GetRawTransaction(ctx, tx.Vin[i].TxID, true)
-		if err != nil {
-			// Log but don't fail - some prevouts may be unavailable
+	// Collect all unique prevout txids we need to fetch
+	type prevoutRef struct {
+		txid string
+		vout uint32
+	}
+	needed := make(map[string]struct{})
+	for _, tx := range txs {
+		if tx.IsCoinbase() {
 			continue
 		}
-
-		voutIdx := tx.Vin[i].Vout
-		if int(voutIdx) < len(prevTx.Vout) {
-			tx.Vin[i].PrevOut = &prevTx.Vout[voutIdx]
+		// Skip if prevouts are already resolved
+		if len(tx.Vin) > 0 && tx.Vin[0].PrevOut != nil {
+			continue
+		}
+		for _, vin := range tx.Vin {
+			if vin.TxID != "" {
+				needed[vin.TxID] = struct{}{}
+			}
 		}
 	}
 
-	return tx, nil
+	if len(needed) == 0 {
+		return nil
+	}
+
+	// Fetch all needed transactions in parallel with bounded concurrency
+	var mu sync.Mutex
+	prevoutCache := make(map[string]*Transaction, len(needed))
+
+	txids := make([]string, 0, len(needed))
+	for txid := range needed {
+		txids = append(txids, txid)
+	}
+
+	jobs := make(chan string, concurrency*2)
+	var wg sync.WaitGroup
+
+	for i := 0; i < concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for txid := range jobs {
+				prevTx, err := c.GetRawTransaction(ctx, txid, true)
+				if err != nil {
+					continue // Skip unavailable prevouts
+				}
+				mu.Lock()
+				prevoutCache[txid] = prevTx
+				mu.Unlock()
+			}
+		}()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, txid := range txids {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- txid:
+			}
+		}
+	}()
+
+	wg.Wait()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Assign resolved prevouts back to inputs
+	for _, tx := range txs {
+		if tx.IsCoinbase() {
+			continue
+		}
+		if len(tx.Vin) > 0 && tx.Vin[0].PrevOut != nil {
+			continue
+		}
+		for i := range tx.Vin {
+			if tx.Vin[i].TxID == "" {
+				continue
+			}
+			prevTx, ok := prevoutCache[tx.Vin[i].TxID]
+			if !ok {
+				continue
+			}
+			voutIdx := tx.Vin[i].Vout
+			if int(voutIdx) < len(prevTx.Vout) {
+				tx.Vin[i].PrevOut = &prevTx.Vout[voutIdx]
+			}
+		}
+	}
+
+	return nil
 }
 
 // GetMempoolEntry returns mempool entry for a specific transaction

@@ -1,6 +1,7 @@
 package blockstore
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,6 +12,12 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 )
+
+// BlockHashEntry represents a block number and its hash for reorg detection.
+type BlockHashEntry struct {
+	BlockNumber uint64 `json:"block_number"`
+	Hash        string `json:"hash"`
+}
 
 const (
 	BlockStates = "block_states"
@@ -35,6 +42,10 @@ func composeCatchupKey(chain string) string {
 	return fmt.Sprintf("%s/%s/%s/", BlockStates, chain, constant.KVPrefixProgressCatchup)
 }
 
+func blockHashesKey(chainName string) string {
+	return fmt.Sprintf("%s/%s/%s", BlockStates, chainName, constant.KVPrefixBlockHash)
+}
+
 func catchupKey(chain string, start, end uint64) string {
 	return fmt.Sprintf("%s/%s/%s/%d-%d", BlockStates, chain, constant.KVPrefixProgressCatchup, start, end)
 }
@@ -55,6 +66,10 @@ type Store interface {
 	SaveCatchupProgress(chain string, start, end, current uint64) error
 	GetCatchupProgress(chain string) ([]CatchupRange, error)
 	DeleteCatchupRange(chain string, start, end uint64) error
+
+	// Block hash persistence for reorg detection across restarts
+	SaveBlockHashes(chainName string, hashes []BlockHashEntry) error
+	GetBlockHashes(chainName string) ([]BlockHashEntry, error)
 
 	Close() error
 }
@@ -241,6 +256,34 @@ func (bs *blockStore) DeleteCatchupRange(chain string, start, end uint64) error 
 		)
 	}
 	return err
+}
+
+// SaveBlockHashes persists block hashes for reorg detection across restarts.
+func (bs *blockStore) SaveBlockHashes(chainName string, hashes []BlockHashEntry) error {
+	if chainName == "" {
+		return errors.New("chain name is required")
+	}
+	data, err := json.Marshal(hashes)
+	if err != nil {
+		return fmt.Errorf("marshal block hashes: %w", err)
+	}
+	return bs.store.Set(blockHashesKey(chainName), string(data))
+}
+
+// GetBlockHashes loads persisted block hashes for reorg detection.
+func (bs *blockStore) GetBlockHashes(chainName string) ([]BlockHashEntry, error) {
+	if chainName == "" {
+		return nil, errors.New("chain name is required")
+	}
+	raw, err := bs.store.Get(blockHashesKey(chainName))
+	if err != nil {
+		return nil, nil // Key not found is not an error
+	}
+	var hashes []BlockHashEntry
+	if err := json.Unmarshal([]byte(raw), &hashes); err != nil {
+		return nil, fmt.Errorf("unmarshal block hashes: %w", err)
+	}
+	return hashes, nil
 }
 
 func (bs *blockStore) Close() error {

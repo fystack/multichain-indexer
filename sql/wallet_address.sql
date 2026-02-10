@@ -17,6 +17,9 @@ CREATE INDEX IF NOT EXISTS idx_wallet_address_type ON wallet_addresses (type);
 CREATE INDEX IF NOT EXISTS idx_wallet_address_standard ON wallet_addresses (standard);
 CREATE INDEX IF NOT EXISTS idx_wallet_address_created_at ON wallet_addresses (created_at);
 
+-- Composite index for bloom filter sync worker queries (WHERE type = ? AND created_at > ?)
+CREATE INDEX IF NOT EXISTS idx_wallet_addresses_type_created ON wallet_addresses (type, created_at);
+
 -- Create enum types if they don't exist
 DO $$ BEGIN
     CREATE TYPE address_type AS ENUM (
