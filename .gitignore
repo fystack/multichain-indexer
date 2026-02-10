@@ -7,4 +7,4 @@ wallet-kv-load
 
 # External dependencies
 sui-apis
-sui-apis.backup
+sui-apis.backup.claude/
