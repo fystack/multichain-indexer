@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -39,8 +40,12 @@ func NewEmitter(queue infra.MessageQueue, subjectPrefix string) Emitter {
 }
 
 func (e *emitter) EmitBlock(chain string, block *types.Block) error {
-	// TODO: implement
-	return nil
+	return e.Emit(IndexerEvent{
+		Type:      "block",
+		Chain:     chain,
+		Data:      block,
+		Timestamp: time.Now().UTC().Unix(),
+	})
 }
 
 func (e *emitter) EmitTransaction(chain string, tx *types.Transaction) error {
@@ -54,8 +59,17 @@ func (e *emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 }
 
 func (e *emitter) EmitError(chain string, err error) error {
-	// TODO: implement
-	return nil
+	payload := map[string]string{}
+	if err != nil {
+		payload["message"] = err.Error()
+	}
+
+	return e.Emit(IndexerEvent{
+		Type:      "error",
+		Chain:     chain,
+		Data:      payload,
+		Timestamp: time.Now().UTC().Unix(),
+	})
 }
 
 func (e *emitter) Emit(event IndexerEvent) error {

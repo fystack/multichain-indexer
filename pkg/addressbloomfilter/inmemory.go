@@ -42,16 +42,33 @@ func NewAddressBloomFilter(cfg Config) WalletAddressBloomFilter {
 }
 
 func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
-	types := []enum.NetworkType{
-		enum.NetworkTypeEVM,
-		enum.NetworkTypeTron,
-		enum.NetworkTypeBtc,
-		enum.NetworkTypeSui,
+	return abf.InitializeWithTypes(ctx, DefaultAddressTypes())
+}
+
+func (abf *addressBloomFilter) InitializeWithTypes(ctx context.Context, addressTypes []enum.NetworkType) error {
+	if len(addressTypes) == 0 {
+		logger.Info("Skip in-memory Bloom filter initialization: no address types selected")
+		return nil
 	}
 
-	for _, addrType := range types {
+	seen := make(map[enum.NetworkType]struct{}, len(addressTypes))
+	uniqueTypes := make([]enum.NetworkType, 0, len(addressTypes))
+	for _, addrType := range addressTypes {
+		if _, ok := seen[addrType]; ok {
+			continue
+		}
+		seen[addrType] = struct{}{}
+		uniqueTypes = append(uniqueTypes, addrType)
+	}
+
+	batchSize := abf.config.BatchSize
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+
+	for _, addrType := range uniqueTypes {
 		offset := 0
-		limit := abf.config.BatchSize
+		limit := batchSize
 		total := 0
 
 		for {

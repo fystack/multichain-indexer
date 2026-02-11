@@ -2,11 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -18,6 +14,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/worker"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -57,7 +54,7 @@ func main() {
 		&cli,
 		kong.Name("transaction-indexer"),
 		kong.Description(
-			"Multi-chain blockchain transaction indexer with support for regular, catchup, manual, and rescanner worker modes.",
+			"Multi-chain blockchain transaction indexer with support for regular, catchup, and manual worker modes.",
 		),
 		kong.UsageOnError(),
 		kong.Vars{
@@ -129,7 +126,6 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	if err != nil {
 		logger.Fatal("Create kvstore failed", "err", err)
 	}
-	defer kvstore.Close()
 
 	logger.Info("Connecting to NATS", "url", services.Nats.URL)
 	natsConn, err := infra.GetNATSConnection(services.Nats, string(cfg.Environment))
@@ -146,23 +142,6 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	transferQueue := transferEventQueueManager.NewMessageQueue("dispatch")
 
 	emitter := events.NewEmitter(transferQueue, services.Nats.SubjectPrefix)
-	defer emitter.Close()
-
-	// start address bloom filter (Initialize is optional)
-	var addressBF addressbloomfilter.WalletAddressBloomFilter
-	if services.Bloomfilter != nil && db != nil {
-		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
-		if err := addressBF.Initialize(ctx); err != nil {
-			logger.Fatal("Address bloom filter init failed", "err", err)
-		}
-		logger.Info("Address bloom filter initialized")
-	} else if services.Bloomfilter != nil {
-		// Create bloom filter instance even without database, but skip initialization
-		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
-		logger.Info("Address bloom filter created (initialization skipped - no database)")
-	} else {
-		logger.Info("Address bloom filter skipped - not configured")
-	}
 
 	// If no chains specified, use all configured chains
 	if len(chains) == 0 {
@@ -183,6 +162,23 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
+	// start address bloom filter (Initialize is optional)
+	var addressBF addressbloomfilter.WalletAddressBloomFilter
+	if services.Bloomfilter != nil && db != nil {
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		bloomAddressTypes := resolveBloomAddressTypes(cfg, chains)
+		if err := addressBF.InitializeWithTypes(ctx, bloomAddressTypes); err != nil {
+			logger.Fatal("Address bloom filter init failed", "err", err)
+		}
+		logger.Info("Address bloom filter initialized", "address_types", bloomAddressTypes)
+	} else if services.Bloomfilter != nil {
+		// Create bloom filter instance even without database, but skip initialization
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		logger.Info("Address bloom filter created (initialization skipped - no database)")
+	} else {
+		logger.Info("Address bloom filter skipped - not configured")
+	}
+
 	// Create manager with all workers using factory
 	managerCfg := worker.ManagerConfig{
 		Chains:        chains,
@@ -200,9 +196,9 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		redisClient,
 		managerCfg,
 	)
-	tonJettonReloadService := worker.NewTonJettonReloadServiceFromManager(manager)
+	tonWalletReloadService := worker.NewTonWalletReloadServiceFromManager(manager)
 
-	healthServer := startHealthServer(cfg.Services.Port, cfg, tonJettonReloadService)
+	httpServer := startHTTPServer(cfg.Services.Port, cfg, tonWalletReloadService)
 
 	// Start all workers
 	logger.Info("Starting all workers")
@@ -213,14 +209,14 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	logger.Info("Shutting down indexer...")
 
-	// Shutdown health server
-	if healthServer != nil {
+	// Shutdown HTTP server
+	if httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := healthServer.Shutdown(ctx); err != nil {
-			logger.Error("Health server shutdown failed", "error", err)
+		if err := httpServer.Shutdown(ctx); err != nil {
+			logger.Error("HTTP server shutdown failed", "error", err)
 		} else {
-			logger.Info("Health server stopped gracefully")
+			logger.Info("HTTP server stopped gracefully")
 		}
 	}
 
@@ -228,127 +224,33 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	logger.Info("✅ Indexer stopped gracefully")
 }
 
-type HealthResponse struct {
-	Status    string    `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Version   string    `json:"version"`
-}
-
-type APIErrorResponse struct {
-	Status    string    `json:"status"`
-	Error     string    `json:"error"`
-	Timestamp time.Time `json:"timestamp"`
-}
-
-type TonJettonReloadResponse struct {
-	Status         string                         `json:"status"`
-	Chain          string                         `json:"chain,omitempty"`
-	Results        []worker.TonJettonReloadResult `json:"results"`
-	TriggeredAtUTC time.Time                      `json:"triggered_at_utc"`
-}
-
-func startHealthServer(
-	port int,
-	cfg *config.Config,
-	tonJettonReloadService *worker.TonJettonReloadService,
-) *http.Server {
-	mux := http.NewServeMux()
-
-	version := cfg.Version
-	if version == "" {
-		version = "1.0.0" // fallback version
-	}
-
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		response := HealthResponse{
-			Status:    "ok",
-			Timestamp: time.Now().UTC(),
-			Version:   version,
-		}
-		writeJSON(w, http.StatusOK, response)
-	})
-
-	mux.HandleFunc("/ton/jettons/reload", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		if tonJettonReloadService == nil {
-			writeErrorJSON(w, http.StatusNotFound, worker.ErrNoTonWorkerConfigured.Error())
-			return
-		}
-
-		req := worker.TonJettonReloadRequest{
-			ChainFilter: r.URL.Query().Get("chain"),
-		}
-
-		results, err := tonJettonReloadService.ReloadTonJettons(r.Context(), req)
-		if err != nil {
-			statusCode := http.StatusInternalServerError
-			if errors.Is(err, worker.ErrTonWorkerNotFound) || errors.Is(err, worker.ErrNoTonWorkerConfigured) {
-				statusCode = http.StatusNotFound
-			}
-			writeErrorJSON(w, statusCode, err.Error())
-			return
-		}
-
-		response := TonJettonReloadResponse{
-			Status:         reloadJettonStatus(results),
-			Chain:          req.ChainFilter,
-			Results:        results,
-			TriggeredAtUTC: time.Now().UTC(),
-		}
-		writeJSON(w, http.StatusOK, response)
-	})
-
-	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
-	}
-
-	go func() {
-		logger.Info(
-			"Health check server started",
-			"port", port,
-			"health_endpoint", "/health",
-			"jetton_reload_endpoint", "/ton/jettons/reload",
-		)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Health server failed to start", "error", err)
-		}
-	}()
-
-	return server
-}
-
-func reloadJettonStatus(results []worker.TonJettonReloadResult) string {
-	for _, result := range results {
-		if result.Error != "" {
-			return "partial_error"
-		}
-	}
-	return "ok"
-}
-
-func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		logger.Error("Failed to encode response", "status", statusCode, "err", err)
-	}
-}
-
-func writeErrorJSON(w http.ResponseWriter, statusCode int, message string) {
-	writeJSON(w, statusCode, APIErrorResponse{
-		Status:    "error",
-		Error:     message,
-		Timestamp: time.Now().UTC(),
-	})
-}
-
 func waitForShutdown() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	<-stop
+}
+
+func resolveBloomAddressTypes(cfg *config.Config, chains []string) []enum.NetworkType {
+	if cfg == nil || len(chains) == 0 {
+		return nil
+	}
+
+	selected := make(map[enum.NetworkType]struct{})
+	for _, chainName := range chains {
+		chainCfg, err := cfg.Chains.GetChain(chainName)
+		if err != nil {
+			continue
+		}
+		selected[chainCfg.Type] = struct{}{}
+	}
+
+	// Keep deterministic order and only load address types supported by bloom usage.
+	ordered := addressbloomfilter.DefaultAddressTypes()
+	result := make([]enum.NetworkType, 0, len(ordered))
+	for _, t := range ordered {
+		if _, ok := selected[t]; ok {
+			result = append(result, t)
+		}
+	}
+	return result
 }

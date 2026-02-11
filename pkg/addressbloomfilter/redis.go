@@ -64,18 +64,34 @@ func (rbf *redisBloomFilter) getKey(addressType enum.NetworkType) string {
 }
 
 func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
+	return rbf.InitializeWithTypes(ctx, DefaultAddressTypes())
+}
+
+func (rbf *redisBloomFilter) InitializeWithTypes(ctx context.Context, addressTypes []enum.NetworkType) error {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()
 
-	types := []enum.NetworkType{
-		enum.NetworkTypeEVM,
-		enum.NetworkTypeTron,
-		enum.NetworkTypeBtc,
-		enum.NetworkTypeSol,
-		enum.NetworkTypeSui,
+	if len(addressTypes) == 0 {
+		logger.Info("Skip Redis Bloom filter initialization: no address types selected")
+		return nil
 	}
 
-	for _, addrType := range types {
+	seen := make(map[enum.NetworkType]struct{}, len(addressTypes))
+	uniqueTypes := make([]enum.NetworkType, 0, len(addressTypes))
+	for _, addrType := range addressTypes {
+		if _, ok := seen[addrType]; ok {
+			continue
+		}
+		seen[addrType] = struct{}{}
+		uniqueTypes = append(uniqueTypes, addrType)
+	}
+
+	batchSize := rbf.batchSize
+	if batchSize <= 0 {
+		batchSize = 1000
+	}
+
+	for _, addrType := range uniqueTypes {
 		key := rbf.getKey(addrType)
 		client := rbf.redisClient.GetClient()
 
@@ -99,7 +115,7 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 		}
 
 		offset := 0
-		limit := rbf.batchSize
+		limit := batchSize
 		total := 0
 
 		for {

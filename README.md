@@ -1,7 +1,7 @@
 # Multi-Chain Transaction Indexer
 
-Production-ready indexer for multiple blockchains with four cooperating workers:
-**Regular (real-time)**, **Catchup (historical)**, **Rescanner (failed/missed blocks)**, **Manual (manual blocks)**.
+Production-ready indexer for multiple blockchains with three cooperating workers:
+**Regular (real-time)**, **Catchup (historical)**, **Manual (manual blocks)**.
 
 This indexer is designed to be used in a multi-chain environment, where each chain is indexed independently and emits events.
 
@@ -31,7 +31,6 @@ flowchart TB
         R[RegularWorker]
         C[CatchupWorker]
         M[ManualWorker]
-        Re[RescannerWorker]
     end
 
     BW[BaseWorker]
@@ -40,7 +39,7 @@ flowchart TB
         direction LR
         KV[(KV Store)]
         NATS[(NATS Events)]
-        FChan[(failedChan)]
+        FQ[(failed_blocks queue)]
     end
 
     Redis[(Redis ZSET)]
@@ -49,15 +48,11 @@ flowchart TB
     R --> BW
     C --> BW
     M --> BW
-    Re --> BW
 
     %% BaseWorker connections
     BW --> KV
     BW --> NATS
-    BW --> FChan
-
-    %% Feedback failedChan -> Rescanner
-    FChan -.-> Re
+    BW --> FQ
 
     %% ManualWorker special connection
     M -.-> Redis
@@ -68,7 +63,6 @@ flowchart TB
 1. **RegularWorker**: real-time indexing, reorg handling, error reporting
 2. **CatchupWorker**: backfills gaps, tracks progress, cleans up ranges
 3. **ManualWorker**: consumes Redis ranges, concurrent-safe backfill
-4. **RescannerWorker**: retries failed blocks, updates KV on success
 
 ---
 
@@ -102,7 +96,7 @@ go build -o indexer cmd/indexer/main.go
 
 - Shared logic for all worker types
 - Rate limiting, logging, bloom filter, KV store integration, infrastructure management
-- Sends error blocks to `failedChan` and stores in `<chain>/failed_blocks/<block>`
+- Sends failed blocks to `failed_blocks:<chain>` queue and stores metadata in KV
 
 ---
 
@@ -120,7 +114,6 @@ go build -o indexer cmd/indexer/main.go
 - Processes historical blocks in ranges `[start,end]`
 - Uses KV `<chain>/catchup_progress/<start>-<end>` to track progress
 - Deletes the key when a range is completed
-- Integrates failed blocks from Rescanner
 
 ---
 
@@ -141,15 +134,6 @@ go build -o indexer cmd/indexer/main.go
   3. Update progress with `SetRangeProcessed`
   4. On full success → `RemoveRange`
   5. On partial timeout → reinsert remaining `[current,end]`
-
----
-
-### **RescannerWorker**
-
-- Re-processes failed blocks from KV `<chain>/failed_blocks/<block>` or `failedChan`
-- Updates KV when retry succeeds
-- Removes blocks after max retry attempts
-- Skips chain head block to reduce reorg risk
 
 ---
 
@@ -238,6 +222,8 @@ nats consumer sub transfer transaction-consumer
 
 ## 🌐 HTTP API Examples
 
+The indexer starts an HTTP server on `services.port` from your config.
+
 ```bash
 # set this to your configured services.port
 export INDEXER_PORT=8080
@@ -249,16 +235,23 @@ export INDEXER_PORT=8080
 curl -s "http://localhost:${INDEXER_PORT}/health" | jq
 ```
 
-### Reload TON Jetton Registry (all TON chains)
+### Reload TON Wallet Cache From KV (all TON chains)
 
 ```bash
-curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/jettons/reload" | jq
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/wallets/reload?source=kv" | jq
 ```
 
-### Reload TON Jetton Registry For One Chain
+### Reload TON Wallet Cache From DB (all TON chains)
 
 ```bash
-curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/jettons/reload?chain=ton_mainnet" | jq
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/wallets/reload?source=db" | jq
+```
+
+### Reload TON Wallet Cache For One Chain
+
+```bash
+curl -s -X POST \
+  "http://localhost:${INDEXER_PORT}/ton/wallets/reload?source=kv&chain=ton_mainnet" | jq
 ```
 
 ---
