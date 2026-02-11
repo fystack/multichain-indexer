@@ -27,6 +27,9 @@ type AccountIndexer interface {
 
 	// IsHealthy checks if the RPC connection is healthy.
 	IsHealthy() bool
+
+	// ReloadJettons refreshes supported jetton metadata at runtime.
+	ReloadJettons(ctx context.Context) (int, error)
 }
 
 // TonAccountIndexer implements AccountIndexer for TON blockchain.
@@ -70,6 +73,24 @@ func (i *TonAccountIndexer) IsHealthy() bool {
 	// The client manages its own connection pool and recovery.
 	// We consider it healthy if it's initialized.
 	return i.client != nil
+}
+
+func (i *TonAccountIndexer) ReloadJettons(ctx context.Context) (int, error) {
+	if i.jettonRegistry == nil {
+		return 0, nil
+	}
+
+	type registryReloader interface {
+		Reload(context.Context) error
+	}
+
+	if reloader, ok := i.jettonRegistry.(registryReloader); ok {
+		if err := reloader.Reload(ctx); err != nil {
+			return 0, fmt.Errorf("reload jetton registry: %w", err)
+		}
+	}
+
+	return len(i.jettonRegistry.List()), nil
 }
 
 // PollAccount fetches new transactions for a single account.

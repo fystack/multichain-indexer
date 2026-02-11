@@ -298,6 +298,7 @@ func buildTonPollingWorker(
 	chainName string,
 	chainCfg config.ChainConfig,
 	kvstore infra.KVStore,
+	redisClient infra.RedisClient,
 	pubkeyStore pubkeystore.Store,
 	db *gorm.DB,
 	emitter events.Emitter,
@@ -332,7 +333,13 @@ func buildTonPollingWorker(
 			Decimals:      j.Decimals,
 		})
 	}
-	jettonRegistry := tonIndexer.NewConfigBasedRegistry(jettons)
+	jettonRegistry := tonIndexer.NewRedisJettonRegistry(chainName, redisClient, jettons)
+	if err := jettonRegistry.Reload(ctx); err != nil {
+		logger.Error("Failed to load jetton registry from redis, using fallback config",
+			"chain", chainName,
+			"err", err,
+		)
+	}
 
 	// Create the account indexer
 	accountIndexer := tonIndexer.NewTonAccountIndexer(
@@ -345,6 +352,7 @@ func buildTonPollingWorker(
 	// Create the polling worker
 	worker := tonWorker.NewTonPollingWorker(
 		ctx,
+		chainName,
 		chainCfg,
 		accountIndexer,
 		cursorStore,
@@ -399,7 +407,7 @@ func CreateManagerWithWorkers(
 		case enum.NetworkTypeSui:
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTon:
-			tonW := buildTonPollingWorker(ctx, chainName, chainCfg, kvstore, pubkeyStore, db, emitter)
+			tonW := buildTonPollingWorker(ctx, chainName, chainCfg, kvstore, redisClient, pubkeyStore, db, emitter)
 			if tonW != nil {
 				manager.AddWorkers(tonW)
 				logger.Info("TON polling worker enabled", "chain", chainName)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -199,8 +200,9 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		redisClient,
 		managerCfg,
 	)
+	tonJettonReloadService := worker.NewTonJettonReloadServiceFromManager(manager)
 
-	healthServer := startHealthServer(cfg.Services.Port, cfg)
+	healthServer := startHealthServer(cfg.Services.Port, cfg, tonJettonReloadService)
 
 	// Start all workers
 	logger.Info("Starting all workers")
@@ -232,7 +234,24 @@ type HealthResponse struct {
 	Version   string    `json:"version"`
 }
 
-func startHealthServer(port int, cfg *config.Config) *http.Server {
+type APIErrorResponse struct {
+	Status    string    `json:"status"`
+	Error     string    `json:"error"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
+type TonJettonReloadResponse struct {
+	Status         string                         `json:"status"`
+	Chain          string                         `json:"chain,omitempty"`
+	Results        []worker.TonJettonReloadResult `json:"results"`
+	TriggeredAtUTC time.Time                      `json:"triggered_at_utc"`
+}
+
+func startHealthServer(
+	port int,
+	cfg *config.Config,
+	tonJettonReloadService *worker.TonJettonReloadService,
+) *http.Server {
 	mux := http.NewServeMux()
 
 	version := cfg.Version
@@ -246,10 +265,41 @@ func startHealthServer(port int, cfg *config.Config) *http.Server {
 			Timestamp: time.Now().UTC(),
 			Version:   version,
 		}
+		writeJSON(w, http.StatusOK, response)
+	})
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+	mux.HandleFunc("/ton/jettons/reload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		if tonJettonReloadService == nil {
+			writeErrorJSON(w, http.StatusNotFound, worker.ErrNoTonWorkerConfigured.Error())
+			return
+		}
+
+		req := worker.TonJettonReloadRequest{
+			ChainFilter: r.URL.Query().Get("chain"),
+		}
+
+		results, err := tonJettonReloadService.ReloadTonJettons(r.Context(), req)
+		if err != nil {
+			statusCode := http.StatusInternalServerError
+			if errors.Is(err, worker.ErrTonWorkerNotFound) || errors.Is(err, worker.ErrNoTonWorkerConfigured) {
+				statusCode = http.StatusNotFound
+			}
+			writeErrorJSON(w, statusCode, err.Error())
+			return
+		}
+
+		response := TonJettonReloadResponse{
+			Status:         reloadJettonStatus(results),
+			Chain:          req.ChainFilter,
+			Results:        results,
+			TriggeredAtUTC: time.Now().UTC(),
+		}
+		writeJSON(w, http.StatusOK, response)
 	})
 
 	server := &http.Server{
@@ -258,13 +308,43 @@ func startHealthServer(port int, cfg *config.Config) *http.Server {
 	}
 
 	go func() {
-		logger.Info("Health check server started", "port", port, "endpoint", "/health")
+		logger.Info(
+			"Health check server started",
+			"port", port,
+			"health_endpoint", "/health",
+			"jetton_reload_endpoint", "/ton/jettons/reload",
+		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Health server failed to start", "error", err)
 		}
 	}()
 
 	return server
+}
+
+func reloadJettonStatus(results []worker.TonJettonReloadResult) string {
+	for _, result := range results {
+		if result.Error != "" {
+			return "partial_error"
+		}
+	}
+	return "ok"
+}
+
+func writeJSON(w http.ResponseWriter, statusCode int, payload any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(payload); err != nil {
+		logger.Error("Failed to encode response", "status", statusCode, "err", err)
+	}
+}
+
+func writeErrorJSON(w http.ResponseWriter, statusCode int, message string) {
+	writeJSON(w, statusCode, APIErrorResponse{
+		Status:    "error",
+		Error:     message,
+		Timestamp: time.Now().UTC(),
+	})
 }
 
 func waitForShutdown() {

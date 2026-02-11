@@ -25,6 +25,7 @@ type TonPollingWorker struct {
 	logger *slog.Logger
 	wg     sync.WaitGroup
 
+	chainName   string
 	config      config.ChainConfig
 	indexer     tonIndexer.AccountIndexer
 	cursorStore tonIndexer.CursorStore
@@ -52,6 +53,7 @@ type WorkerConfig struct {
 // NewTonPollingWorker creates a new TON polling worker.
 func NewTonPollingWorker(
 	ctx context.Context,
+	chainName string,
 	cfg config.ChainConfig,
 	indexer tonIndexer.AccountIndexer,
 	cursorStore tonIndexer.CursorStore,
@@ -81,6 +83,7 @@ func NewTonPollingWorker(
 		ctx:          ctx,
 		cancel:       cancel,
 		logger:       log,
+		chainName:    chainName,
 		config:       cfg,
 		indexer:      indexer,
 		cursorStore:  cursorStore,
@@ -307,6 +310,22 @@ func (w *TonPollingWorker) RemoveAddress(ctx context.Context, address string) er
 // GetNetworkType implements the worker interface.
 func (w *TonPollingWorker) GetNetworkType() enum.NetworkType {
 	return enum.NetworkTypeTon
+}
+
+func (w *TonPollingWorker) GetName() string {
+	if w.chainName != "" {
+		return w.chainName
+	}
+	return w.config.Name
+}
+
+func (w *TonPollingWorker) ReloadJettons(ctx context.Context) (int, error) {
+	count, err := w.indexer.ReloadJettons(ctx)
+	if err != nil {
+		return 0, err
+	}
+	w.logger.Info("Jetton registry reloaded", "chain", w.GetName(), "jetton_count", count)
+	return count, nil
 }
 
 // syncWalletsIfNeeded refreshes the wallet list from DB if sync interval passed.
