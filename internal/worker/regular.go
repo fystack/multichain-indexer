@@ -3,21 +3,14 @@ package worker
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
-	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
-	"github.com/fystack/multichain-indexer/pkg/events"
-	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
-	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
-const (
-	MaxBlockHashSize = 20
-)
+const MaxBlockHashSize = 20
 
 type RegularWorker struct {
 	*BaseWorker
@@ -30,27 +23,8 @@ type BlockHashEntry struct {
 	Hash        string
 }
 
-func NewRegularWorker(
-	ctx context.Context,
-	chain indexer.Indexer,
-	cfg config.ChainConfig,
-	kv infra.KVStore,
-	blockStore blockstore.Store,
-	emitter events.Emitter,
-	pubkeyStore pubkeystore.Store,
-	failedChan chan FailedBlockEvent,
-) *RegularWorker {
-	worker := newWorkerWithMode(
-		ctx,
-		chain,
-		cfg,
-		kv,
-		blockStore,
-		emitter,
-		pubkeyStore,
-		ModeRegular,
-		failedChan,
-	)
+func NewRegularWorker(ctx context.Context, deps WorkerDeps) *RegularWorker {
+	worker := newWorkerWithMode(ctx, deps, ModeRegular)
 	rw := &RegularWorker{BaseWorker: worker}
 	rw.currentBlock = rw.determineStartingBlock()
 	rw.blockHashes = make([]BlockHashEntry, 0, MaxBlockHashSize)
@@ -59,133 +33,70 @@ func NewRegularWorker(
 
 func (rw *RegularWorker) Start() {
 	rw.logger.Info("Starting regular worker",
-		"chain", rw.chain.GetName(),
+		"chain", rw.deps.Chain.GetName(),
 		"start_block", rw.currentBlock,
 	)
 	go rw.run(rw.processRegularBlocks)
 }
 
-// Stop stops the worker and cleans up resources
 func (rw *RegularWorker) Stop() {
-	// Save current block state before stopping
 	if rw.currentBlock > 0 {
-		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), rw.currentBlock)
+		_ = rw.deps.BlockStore.SaveLatestBlock(rw.deps.Chain.GetNetworkInternalCode(), rw.currentBlock)
 	}
 	rw.clearBlockHashes()
-	// Call base worker stop to cancel context and clean up
 	rw.BaseWorker.Stop()
 }
 
 func (rw *RegularWorker) processRegularBlocks() error {
-	rw.logger.Info("Starting tick", "currentBlock", rw.currentBlock)
-
-	latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
+	latest, err := rw.resolveLatestBlock()
 	if err != nil {
 		return fmt.Errorf("get latest block: %w", err)
 	}
 
-	// Bitcoin-specific: Only index confirmed blocks
-	if rw.chain.GetNetworkType() == enum.NetworkTypeBtc {
-		btcIndexer, ok := rw.chain.(*indexer.BitcoinIndexer)
-		if ok {
-			confirmedHeight, err := btcIndexer.GetConfirmedHeight(rw.ctx)
-			if err != nil {
-				return fmt.Errorf("get confirmed height: %w", err)
-			}
-			rw.logger.Info("Got confirmed height for Bitcoin",
-				"latest", latest,
-				"confirmed", confirmedHeight,
-				"current", rw.currentBlock)
-			latest = confirmedHeight
-
-			if rw.currentBlock > latest {
-				rw.logger.Info("Waiting for confirmations",
-					"current", rw.currentBlock,
-					"confirmed_height", latest)
-				time.Sleep(rw.config.PollInterval)
-				return nil
-			}
-		}
-	} else {
-		rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
-	}
-
 	if rw.currentBlock > latest {
-		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)
-		time.Sleep(rw.config.PollInterval)
+		if rw.deps.Chain.GetNetworkType() == enum.NetworkTypeBtc {
+			rw.logger.Info("Waiting for confirmations", "current", rw.currentBlock, "confirmed_height", latest)
+		} else {
+			rw.logger.Info("Waiting for new blocks", "current", rw.currentBlock, "latest", latest)
+		}
 		return nil
 	}
 
-	end := min(rw.currentBlock+uint64(rw.config.Throttle.BatchSize)-1, latest)
-	rw.logger.Info(
-		"Processing range",
-		"chain",
-		rw.chain.GetName(),
-		"start",
-		rw.currentBlock,
-		"end",
-		end,
-		"size",
-		end-rw.currentBlock+1,
+	batchSize := uint64(rw.deps.Config.Throttle.BatchSize)
+	if batchSize == 0 {
+		batchSize = 1
+	}
+	end := min(rw.currentBlock+batchSize-1, latest)
+
+	rw.logger.Info("Processing range",
+		"chain", rw.deps.Chain.GetName(),
+		"start", rw.currentBlock,
+		"end", end,
+		"size", end-rw.currentBlock+1,
 	)
 
-	// Store original range for logging
 	originalStart := rw.currentBlock
 	originalEnd := end
 
-	results, err := rw.chain.GetBlocks(rw.ctx, rw.currentBlock, end, rw.config.Throttle.Parallel)
+	results, err := rw.deps.Chain.GetBlocks(rw.ctx, rw.currentBlock, end, rw.deps.Config.Throttle.Parallel)
 	if err != nil {
 		return fmt.Errorf("get blocks: %w", err)
 	}
 
-	lastSuccess := rw.currentBlock - 1
-	var lastSuccessHash string
-	startTime := time.Now()
-
-	for i, res := range results {
-		if res.Block == nil || res.Error != nil {
-			continue
-		}
-		// cross-batch reorg detection
-		if rw.isReorgCheckRequired() {
-			if reorg, err := rw.detectAndHandleReorg(&res); err != nil {
-				return err
-			} else if reorg {
-				return nil // rollback done, stop this tick
-			}
-		}
-		// intra-batch continuity
-		if i > 0 && rw.isReorgCheckRequired() {
-			if !checkContinuity(results[i-1], res) {
-				rw.logger.Warn("Batch continuity broken, will retry next tick",
-					"prev", results[i-1].Block.Number,
-					"prev_hash", results[i-1].Block.Hash,
-					"curr", res.Block.Number,
-					"curr_parent", res.Block.ParentHash,
-				)
-				break
-			}
-		}
-		if rw.handleBlockResult(res) {
-			lastSuccess = res.Number
-			lastSuccessHash = res.Block.Hash
-		}
+	lastSuccess, lastSuccessHash, reorg, err := rw.processBlockResults(results)
+	if err != nil {
+		return err
+	}
+	if reorg {
+		return nil
 	}
 
-	if lastSuccess >= rw.currentBlock {
-		rw.currentBlock = lastSuccess + 1
-		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
-
-		if lastSuccessHash != "" {
-			rw.addBlockHash(lastSuccess, lastSuccessHash)
-		}
-	}
+	rw.advanceLatestBlock(lastSuccess, lastSuccessHash)
 
 	rw.logger.Info("Processed latest blocks",
-		"chain", rw.chain.GetName(),
+		"chain", rw.deps.Chain.GetName(),
 		"start", originalStart,
 		"end", originalEnd,
-		"elapsed", time.Since(startTime),
 		"last_success", lastSuccess,
 		"expected", originalEnd-originalStart+1,
 		"got", len(results),
@@ -194,42 +105,49 @@ func (rw *RegularWorker) processRegularBlocks() error {
 }
 
 func (rw *RegularWorker) determineStartingBlock() uint64 {
-	chainLatest, err1 := rw.chain.GetLatestBlockNumber(rw.ctx)
-	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
+	chainLatest, err1 := rw.deps.Chain.GetLatestBlockNumber(rw.ctx)
+	kvLatest, err2 := rw.deps.BlockStore.GetLatestBlock(rw.deps.Chain.GetNetworkInternalCode())
 
 	if err1 != nil && err2 != nil {
 		rw.logger.Warn("Cannot get latest block from chain or KV, using config.StartBlock",
-			"chain", rw.chain.GetName(),
-			"startBlock", rw.config.StartBlock,
+			"chain", rw.deps.Chain.GetName(),
+			"start_block", rw.deps.Config.StartBlock,
 		)
-		return uint64(rw.config.StartBlock)
+		return uint64(rw.deps.Config.StartBlock)
 	}
 
 	if err1 != nil && kvLatest > 0 {
 		rw.logger.Warn("Chain RPC failed, resuming from KV latest",
-			"chain", rw.chain.GetName(),
-			"kvLatest", kvLatest,
+			"chain", rw.deps.Chain.GetName(),
+			"kv_latest", kvLatest,
 		)
 		return kvLatest
 	}
 
 	if err2 != nil || kvLatest == 0 {
-		return chainLatest
+		if rw.deps.Config.FromLatest {
+			rw.logger.Info("No KV checkpoint found, starting from latest chain block",
+				"chain", rw.deps.Chain.GetName(),
+				"latest", chainLatest,
+			)
+			return chainLatest
+		}
+
+		rw.logger.Info("No KV checkpoint found, starting from configured start block",
+			"chain", rw.deps.Chain.GetName(),
+			"start_block", rw.deps.Config.StartBlock,
+		)
+		return uint64(rw.deps.Config.StartBlock)
 	}
 
 	if chainLatest > kvLatest {
 		start := kvLatest + 1
 		end := chainLatest
+		ranges := splitCatchupRange(blockstore.CatchupRange{Start: start, End: end, Current: start - 1}, defaultCatchupRangeSize)
 
-		// Split the range into manageable chunks
-		ranges := splitCatchupRange(blockstore.CatchupRange{
-			Start: start, End: end, Current: start - 1,
-		}, MAX_RANGE_SIZE)
-
-		// Save each split range
 		for _, r := range ranges {
-			_ = rw.blockStore.SaveCatchupProgress(
-				rw.chain.GetNetworkInternalCode(),
+			_ = rw.deps.BlockStore.SaveCatchupProgress(
+				rw.deps.Chain.GetNetworkInternalCode(),
 				r.Start,
 				r.End,
 				r.Current,
@@ -237,8 +155,8 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 		}
 
 		rw.logger.Info("Queued catchup ranges",
-			"chain", rw.chain.GetName(),
-			"gap", fmt.Sprintf("%d-%d", start, end),
+			"chain", rw.deps.Chain.GetName(),
+			"gap", formatRange(start, end),
 			"ranges_created", len(ranges),
 		)
 	}
@@ -249,58 +167,49 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, error) {
 	prevNum := res.Block.Number - 1
 	storedHash := rw.getBlockHash(prevNum)
-	if storedHash != "" && storedHash != res.Block.ParentHash {
-		rollbackWindow := uint64(rw.config.ReorgRollbackWindow)
-		if rollbackWindow == 0 {
-			rollbackWindow = constant.DefaultReorgRollbackWindow
-		}
-		reorgStart := uint64(1)
-		if prevNum > rollbackWindow {
-			reorgStart = prevNum - rollbackWindow
-		}
-		rw.logger.Warn("Reorg detected; rolling back",
-			"chain", rw.chain.GetName(),
-			"at_block", prevNum,
-			"expected_parent", storedHash,
-			"actual_parent", res.Block.ParentHash,
-			"rollback_start", reorgStart,
-			"rollback_end", prevNum,
-		)
-
-		// Clear all block hashes on reorg
-		rw.clearBlockHashes()
-
-		if err := rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), reorgStart-1); err != nil {
-			return true, fmt.Errorf("save latest block: %w", err)
-		}
-		rw.currentBlock = reorgStart
-		return true, nil
+	if storedHash == "" || storedHash == res.Block.ParentHash {
+		return false, nil
 	}
-	return false, nil
+
+	rollbackWindow := uint64(rw.deps.Config.ReorgRollbackWindow)
+	if rollbackWindow == 0 {
+		rollbackWindow = constant.DefaultReorgRollbackWindow
+	}
+
+	reorgStart := uint64(1)
+	if prevNum > rollbackWindow {
+		reorgStart = prevNum - rollbackWindow
+	}
+
+	rw.logger.Warn("Reorg detected; rolling back",
+		"chain", rw.deps.Chain.GetName(),
+		"at_block", prevNum,
+		"expected_parent", storedHash,
+		"actual_parent", res.Block.ParentHash,
+		"rollback_start", reorgStart,
+		"rollback_end", prevNum,
+	)
+
+	rw.clearBlockHashes()
+	if err := rw.deps.BlockStore.SaveLatestBlock(rw.deps.Chain.GetNetworkInternalCode(), reorgStart-1); err != nil {
+		return true, fmt.Errorf("save latest block: %w", err)
+	}
+	rw.currentBlock = reorgStart
+	return true, nil
 }
 
 func (rw *RegularWorker) isReorgCheckRequired() bool {
-	networkType := rw.chain.GetNetworkType()
+	networkType := rw.deps.Chain.GetNetworkType()
 	return networkType == enum.NetworkTypeEVM || networkType == enum.NetworkTypeBtc
 }
 
-// addBlockHash adds a block hash to the array, maintaining max size
 func (rw *RegularWorker) addBlockHash(blockNumber uint64, hash string) {
-	entry := BlockHashEntry{
-		BlockNumber: blockNumber,
-		Hash:        hash,
-	}
-
-	// Add to the end
-	rw.blockHashes = append(rw.blockHashes, entry)
-
-	// Remove oldest entries if we exceed max size
+	rw.blockHashes = append(rw.blockHashes, BlockHashEntry{BlockNumber: blockNumber, Hash: hash})
 	if len(rw.blockHashes) > MaxBlockHashSize {
 		rw.blockHashes = rw.blockHashes[len(rw.blockHashes)-MaxBlockHashSize:]
 	}
 }
 
-// getBlockHash retrieves a block hash by block number
 func (rw *RegularWorker) getBlockHash(blockNumber uint64) string {
 	for _, entry := range rw.blockHashes {
 		if entry.BlockNumber == blockNumber {
@@ -310,50 +219,99 @@ func (rw *RegularWorker) getBlockHash(blockNumber uint64) string {
 	return ""
 }
 
-// clearBlockHashes clears all block hashes (used on reorg)
 func (rw *RegularWorker) clearBlockHashes() {
-	rw.blockHashes = rw.blockHashes[:0] // Clear slice but keep capacity
+	rw.blockHashes = rw.blockHashes[:0]
 }
 
 func checkContinuity(prev, curr indexer.BlockResult) bool {
 	return prev.Block.Hash == curr.Block.ParentHash
 }
 
-// splitCatchupRange splits a large catchup range into smaller, manageable chunks
-func splitCatchupRange(r blockstore.CatchupRange, maxSize uint64) []blockstore.CatchupRange {
-	if r.End <= r.Start {
-		return []blockstore.CatchupRange{r}
+func (rw *RegularWorker) resolveLatestBlock() (uint64, error) {
+	latest, err := rw.deps.Chain.GetLatestBlockNumber(rw.ctx)
+	if err != nil {
+		return 0, err
 	}
 
-	totalBlocks := r.End - r.Start + 1
-	if totalBlocks <= maxSize {
-		return []blockstore.CatchupRange{r}
+	if rw.deps.Chain.GetNetworkType() != enum.NetworkTypeBtc {
+		return latest, nil
 	}
 
-	var ranges []blockstore.CatchupRange
-	current := r.Start
-
-	for current <= r.End {
-		end := min(current+maxSize-1, r.End)
-
-		// Create a new range with the same Current position as the original
-		// but adjusted to be within the new range bounds
-		newCurrent := r.Current
-		if newCurrent < current {
-			newCurrent = current - 1
-		} else if newCurrent > end {
-			newCurrent = end
-		}
-
-		ranges = append(ranges, blockstore.CatchupRange{
-			Start:   current,
-			End:     end,
-			Current: newCurrent,
-		})
-
-		current = end + 1
+	btcIndexer, ok := rw.deps.Chain.(*indexer.BitcoinIndexer)
+	if !ok {
+		return latest, nil
 	}
 
-	return ranges
+	confirmedHeight, err := btcIndexer.GetConfirmedHeight(rw.ctx)
+	if err != nil {
+		return 0, fmt.Errorf("get confirmed height: %w", err)
+	}
+
+	rw.logger.Info("Using Bitcoin confirmed height",
+		"latest", latest,
+		"confirmed", confirmedHeight,
+		"current", rw.currentBlock,
+	)
+	return confirmedHeight, nil
 }
 
+func (rw *RegularWorker) processBlockResults(results []indexer.BlockResult) (uint64, string, bool, error) {
+	lastSuccess := rw.currentBlock - 1
+	lastSuccessHash := ""
+	reorgCheck := rw.isReorgCheckRequired()
+
+	for i, res := range results {
+		if res.Block == nil || res.Error != nil {
+			continue
+		}
+
+		if reorgCheck {
+			reorg, err := rw.detectAndHandleReorg(&res)
+			if err != nil {
+				return lastSuccess, lastSuccessHash, false, err
+			}
+			if reorg {
+				return lastSuccess, lastSuccessHash, true, nil
+			}
+		}
+
+		if i > 0 && reorgCheck {
+			prev := results[i-1]
+			if prev.Block == nil || prev.Error != nil {
+				rw.logger.Warn("Previous block in batch is invalid, retrying next tick",
+					"prev_index", i-1,
+					"curr", res.Block.Number,
+				)
+				break
+			}
+			if !checkContinuity(prev, res) {
+				rw.logger.Warn("Batch continuity broken, retrying next tick",
+					"prev", prev.Block.Number,
+					"prev_hash", prev.Block.Hash,
+					"curr", res.Block.Number,
+					"curr_parent", res.Block.ParentHash,
+				)
+				break
+			}
+		}
+
+		if rw.handleBlockResult(res) {
+			lastSuccess = res.Number
+			lastSuccessHash = res.Block.Hash
+		}
+	}
+
+	return lastSuccess, lastSuccessHash, false, nil
+}
+
+func (rw *RegularWorker) advanceLatestBlock(lastSuccess uint64, lastSuccessHash string) {
+	if lastSuccess < rw.currentBlock {
+		return
+	}
+
+	rw.currentBlock = lastSuccess + 1
+	_ = rw.deps.BlockStore.SaveLatestBlock(rw.deps.Chain.GetNetworkInternalCode(), lastSuccess)
+	if lastSuccessHash != "" {
+		rw.addBlockHash(lastSuccess, lastSuccessHash)
+	}
+}

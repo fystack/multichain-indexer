@@ -416,17 +416,6 @@ func (w *TonPollingWorker) ReloadWalletsFromDB(_ context.Context) (int, error) {
 	return w.replaceWalletCache(cleaned), nil
 }
 
-// ReloadJettons refreshes TON jetton registry from Redis (with config fallback).
-func (w *TonPollingWorker) ReloadJettons(ctx context.Context) (int, error) {
-	count, err := w.indexer.ReloadJettons(ctx)
-	if err != nil {
-		return 0, err
-	}
-
-	w.logger.Info("Jetton registry reloaded", "chain", w.chainName, "jetton_count", count)
-	return count, nil
-}
-
 func (w *TonPollingWorker) loadWalletAddressesFromDB() ([]string, error) {
 	const batchSize = 1000
 
