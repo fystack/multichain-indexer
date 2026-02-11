@@ -14,11 +14,10 @@ type Services struct {
 }
 
 type WorkerConfig struct {
-	Regular   WorkerModeConfig `yaml:"regular"`
-	Rescanner WorkerModeConfig `yaml:"rescanner"`
-	Manual    WorkerModeConfig `yaml:"manual"`
-	Catchup   WorkerModeConfig `yaml:"catchup"`
-	Mempool   WorkerModeConfig `yaml:"mempool"`
+	Regular WorkerModeConfig `yaml:"regular"`
+	Manual  WorkerModeConfig `yaml:"manual"`
+	Catchup WorkerModeConfig `yaml:"catchup"`
+	Mempool WorkerModeConfig `yaml:"mempool"`
 }
 
 type WorkerModeConfig struct {

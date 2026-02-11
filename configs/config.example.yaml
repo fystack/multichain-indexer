@@ -185,8 +185,6 @@ services:
       enabled: false
     catchup:
       enabled: false
-    rescanner:
-      enabled: true
     regular:
       enabled: true
     mempool:

@@ -2,7 +2,10 @@ package worker
 
 import (
 	"context"
+	"fmt"
+	"sort"
 
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -12,71 +15,66 @@ import (
 )
 
 type Manager struct {
-	ctx         context.Context
 	workers     []Worker
 	kvstore     infra.KVStore
 	blockStore  blockstore.Store
 	emitter     events.Emitter
 	pubkeyStore pubkeystore.Store
-	failedChan  chan FailedBlockEvent
 }
 
 func NewManager(
-	ctx context.Context,
 	kvstore infra.KVStore,
 	blockStore blockstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
-	failedChan chan FailedBlockEvent,
 ) *Manager {
 	return &Manager{
-		ctx:         ctx,
 		kvstore:     kvstore,
 		blockStore:  blockStore,
 		emitter:     emitter,
 		pubkeyStore: pubkeyStore,
-		failedChan:  failedChan,
 	}
 }
 
-// Start launches all injected workers
+// Start launches all injected workers.
 func (m *Manager) Start() {
 	for _, w := range m.workers {
 		w.Start()
 	}
 }
 
-// Stop shuts down all workers + resources
+// Stop shuts down all workers + resources.
 func (m *Manager) Stop() {
-	// Stop all workers
 	for _, w := range m.workers {
 		if w != nil {
 			w.Stop()
 		}
 	}
 
-	// Close resources
-	m.closeResource("emitter", m.emitter, func() error { m.emitter.Close(); return nil })
-	m.closeResource("block store", m.blockStore, m.blockStore.Close)
-	m.closeResource("pubkey store", m.pubkeyStore, m.pubkeyStore.Close)
-	m.closeResource("KV store", m.kvstore, m.kvstore.Close)
+	if m.emitter != nil {
+		m.emitter.Close()
+	}
+	if m.blockStore != nil {
+		if err := m.blockStore.Close(); err != nil {
+			logger.Error("Failed to close block store", "err", err)
+		}
+	}
+	if m.pubkeyStore != nil {
+		if err := m.pubkeyStore.Close(); err != nil {
+			logger.Error("Failed to close pubkey store", "err", err)
+		}
+	}
+	if m.kvstore != nil {
+		if err := m.kvstore.Close(); err != nil {
+			logger.Error("Failed to close KV store", "err", err)
+		}
+	}
 
-	// Close all rate limiters
 	ratelimiter.CloseAllRateLimiters()
-
 	logger.Info("Manager stopped")
 }
 
-// closeResource is a helper to close resources with consistent error handling
-func (m *Manager) closeResource(name string, resource interface{}, closer func() error) {
-	if resource != nil {
-		if err := closer(); err != nil {
-			logger.Error("Failed to close "+name, "err", err)
-		}
-	}
-}
-
-// Inject workers into manager
+// AddWorkers injects workers into manager.
 func (m *Manager) AddWorkers(workers ...Worker) {
 	m.workers = append(m.workers, workers...)
 }
@@ -86,4 +84,73 @@ func (m *Manager) Workers() []Worker {
 	out := make([]Worker, 0, len(m.workers))
 	out = append(out, m.workers...)
 	return out
+}
+
+// TonWalletReloadService handles runtime wallet cache reload for TON workers.
+type TonWalletReloadService struct {
+	reloaders []TonWalletReloader
+}
+
+func NewTonWalletReloadService(workers []Worker) *TonWalletReloadService {
+	reloaders := make([]TonWalletReloader, 0)
+	for _, w := range workers {
+		reloader, ok := w.(TonWalletReloader)
+		if !ok || reloader.GetNetworkType() != enum.NetworkTypeTon {
+			continue
+		}
+		reloaders = append(reloaders, reloader)
+	}
+
+	return &TonWalletReloadService{reloaders: reloaders}
+}
+
+func NewTonWalletReloadServiceFromManager(m *Manager) *TonWalletReloadService {
+	if m == nil {
+		return &TonWalletReloadService{}
+	}
+	return NewTonWalletReloadService(m.Workers())
+}
+
+func (s *TonWalletReloadService) ReloadTonWallets(
+	ctx context.Context,
+	req TonWalletReloadRequest,
+) ([]TonWalletReloadResult, error) {
+	source := req.Source.Normalize()
+	results := make([]TonWalletReloadResult, 0)
+
+	for _, reloader := range s.reloaders {
+		chainName := reloader.GetName()
+		if req.ChainFilter != "" && req.ChainFilter != chainName {
+			continue
+		}
+
+		item := TonWalletReloadResult{Chain: chainName}
+		var (
+			count int
+			err   error
+		)
+		switch source {
+		case WalletReloadSourceDB:
+			count, err = reloader.ReloadWalletsFromDB(ctx)
+		default:
+			count, err = reloader.ReloadWalletsFromKV(ctx)
+		}
+
+		if err != nil {
+			item.Error = err.Error()
+		} else {
+			item.ReloadedWallets = count
+		}
+		results = append(results, item)
+	}
+
+	if len(results) == 0 {
+		if req.ChainFilter != "" {
+			return nil, fmt.Errorf("%w: %s", ErrTonWorkerNotFound, req.ChainFilter)
+		}
+		return nil, ErrNoTonWorkerConfigured
+	}
+
+	sort.Slice(results, func(i, j int) bool { return results[i].Chain < results[j].Chain })
+	return results, nil
 }

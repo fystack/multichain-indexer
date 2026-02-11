@@ -1,3 +1,6 @@
+//go:build legacyworkers
+// +build legacyworkers
+
 package worker
 
 import (
@@ -13,45 +16,42 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
-// MempoolWorker handles 0-confirmation transaction tracking for Bitcoin
-// Polls the mempool for pending transactions and emits them to NATS
+// MempoolWorker handles 0-confirmation transaction tracking for Bitcoin.
 type MempoolWorker struct {
 	*BaseWorker
-	seenTxs      map[string]bool // Track seen transactions to avoid duplicates
-	pollInterval time.Duration   // How often to poll mempool
+	seenTxs      map[string]bool
+	pollInterval time.Duration
 	btcIndexer   *indexer.BitcoinIndexer
 }
 
-// NewMempoolWorker creates a new mempool worker for Bitcoin chains
+// NewMempoolWorker creates a new mempool worker for Bitcoin chains.
 func NewMempoolWorker(
 	ctx context.Context,
 	chain indexer.Indexer,
 	cfg config.ChainConfig,
-	kv infra.KVStore,
+	_ infra.KVStore,
 	blockStore blockstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
-	failedChan chan FailedBlockEvent,
+	redisClient infra.RedisClient,
 ) *MempoolWorker {
-	worker := newWorkerWithMode(
-		ctx,
-		chain,
-		cfg,
-		kv,
-		blockStore,
-		emitter,
-		pubkeyStore,
-		ModeMempool,
-		failedChan,
-	)
+	deps := WorkerDeps{
+		Chain:        chain,
+		Config:       cfg,
+		BlockStore:   blockStore,
+		PubkeyStore:  pubkeyStore,
+		Emitter:      emitter,
+		FailureQueue: NewRedisFailureQueue(redisClient),
+		Redis:        redisClient,
+	}
 
-	// Cast to Bitcoin indexer (mempool is Bitcoin-specific)
+	worker := newWorkerWithMode(ctx, deps, ModeMempool)
+
 	btcIndexer, ok := chain.(*indexer.BitcoinIndexer)
 	if !ok {
 		panic(fmt.Sprintf("MempoolWorker requires BitcoinIndexer, got %T", chain))
 	}
 
-	// Use configured poll interval, or default to 30 seconds
 	pollInterval := cfg.PollInterval
 	if pollInterval == 0 {
 		pollInterval = 30 * time.Second
@@ -65,83 +65,53 @@ func NewMempoolWorker(
 	}
 }
 
-// Start begins the mempool polling loop
 func (mw *MempoolWorker) Start() {
 	mw.logger.Info("Starting mempool worker",
-		"chain", mw.chain.GetName(),
+		"chain", mw.deps.Chain.GetName(),
 		"poll_interval", mw.pollInterval,
 	)
 	go mw.run(mw.processMempool)
 }
 
-// Stop stops the mempool worker
 func (mw *MempoolWorker) Stop() {
-	mw.logger.Info("Stopping mempool worker", "chain", mw.chain.GetName())
+	mw.logger.Info("Stopping mempool worker", "chain", mw.deps.Chain.GetName())
 	mw.BaseWorker.Stop()
 }
 
-// processMempool polls the mempool for new transactions
 func (mw *MempoolWorker) processMempool() error {
-	mw.logger.Debug("Polling mempool", "chain", mw.chain.GetName())
-
-	// Get mempool transactions (already filtered by monitored addresses in indexer)
 	transactions, err := mw.btcIndexer.GetMempoolTransactions(mw.ctx)
 	if err != nil {
 		mw.logger.Error("Failed to get mempool transactions", "err", err)
 		return err
 	}
 
-	// Track and emit new transactions (only TO monitored addresses - deposits)
 	newTxCount := 0
-	networkType := mw.chain.GetNetworkType()
+	networkType := mw.deps.Chain.GetNetworkType()
 
 	for _, tx := range transactions {
-		// Only emit transactions where TO address is monitored (incoming deposits)
-		// Outgoing transactions are handled by the withdrawal flow
-		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
+		toMonitored := tx.ToAddress != "" && mw.deps.PubkeyStore.Exist(networkType, tx.ToAddress)
 		if !toMonitored {
 			continue
 		}
 
-		// Create unique key for deduplication (txHash + toAddress for UTXO model)
 		txKey := tx.TxHash + ":" + tx.ToAddress
 		if mw.seenTxs[txKey] {
 			continue
 		}
 
-		// Mark as seen
 		mw.seenTxs[txKey] = true
 		newTxCount++
 
-		// Emit transaction to NATS
-		if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
-			mw.logger.Error("Failed to emit mempool transaction",
-				"txHash", tx.TxHash,
-				"direction", "incoming",
-				"err", err,
-			)
-		} else {
-			mw.logger.Debug("Emitted mempool transaction",
-				"txHash", tx.TxHash,
-				"direction", "incoming",
-				"from", tx.FromAddress,
-				"to", tx.ToAddress,
-				"amount", tx.Amount,
-				"status", tx.Status,
-			)
+		if err := mw.deps.Emitter.EmitTransaction(mw.deps.Chain.GetName(), &tx); err != nil {
+			mw.logger.Error("Failed to emit mempool transaction", "txHash", tx.TxHash, "err", err)
 		}
 	}
 
 	if newTxCount > 0 {
-		mw.logger.Info("Processed mempool transactions",
-			"new_txs", newTxCount,
-			"total_tracked", len(mw.seenTxs),
-		)
+		mw.logger.Info("Processed mempool transactions", "new_txs", newTxCount, "total_tracked", len(mw.seenTxs))
 	}
 
-	// Cleanup: Remove old transactions from tracking (keep last 10k)
 	if len(mw.seenTxs) > 10000 {
-		// Clear half the map (simple approach)
 		count := 0
 		for txKey := range mw.seenTxs {
 			delete(mw.seenTxs, txKey)
@@ -150,15 +120,12 @@ func (mw *MempoolWorker) processMempool() error {
 				break
 			}
 		}
-		mw.logger.Debug("Cleaned up old mempool transactions", "removed", count)
 	}
 
-	// Sleep until next poll interval
 	select {
 	case <-mw.ctx.Done():
 		return mw.ctx.Err()
 	case <-time.After(mw.pollInterval):
-		// Continue to next iteration
 	}
 
 	return nil
