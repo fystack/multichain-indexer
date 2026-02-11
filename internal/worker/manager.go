@@ -91,6 +91,11 @@ type TonWalletReloadService struct {
 	reloaders []TonWalletReloader
 }
 
+// TonJettonReloadService handles runtime jetton registry reload for TON workers.
+type TonJettonReloadService struct {
+	reloaders []TonJettonReloader
+}
+
 func NewTonWalletReloadService(workers []Worker) *TonWalletReloadService {
 	reloaders := make([]TonWalletReloader, 0)
 	for _, w := range workers {
@@ -109,6 +114,25 @@ func NewTonWalletReloadServiceFromManager(m *Manager) *TonWalletReloadService {
 		return &TonWalletReloadService{}
 	}
 	return NewTonWalletReloadService(m.Workers())
+}
+
+func NewTonJettonReloadService(workers []Worker) *TonJettonReloadService {
+	reloaders := make([]TonJettonReloader, 0)
+	for _, w := range workers {
+		reloader, ok := w.(TonJettonReloader)
+		if !ok || reloader.GetNetworkType() != enum.NetworkTypeTon {
+			continue
+		}
+		reloaders = append(reloaders, reloader)
+	}
+	return &TonJettonReloadService{reloaders: reloaders}
+}
+
+func NewTonJettonReloadServiceFromManager(m *Manager) *TonJettonReloadService {
+	if m == nil {
+		return &TonJettonReloadService{}
+	}
+	return NewTonJettonReloadService(m.Workers())
 }
 
 func (s *TonWalletReloadService) ReloadTonWallets(
@@ -140,6 +164,39 @@ func (s *TonWalletReloadService) ReloadTonWallets(
 			item.Error = err.Error()
 		} else {
 			item.ReloadedWallets = count
+		}
+		results = append(results, item)
+	}
+
+	if len(results) == 0 {
+		if req.ChainFilter != "" {
+			return nil, fmt.Errorf("%w: %s", ErrTonWorkerNotFound, req.ChainFilter)
+		}
+		return nil, ErrNoTonWorkerConfigured
+	}
+
+	sort.Slice(results, func(i, j int) bool { return results[i].Chain < results[j].Chain })
+	return results, nil
+}
+
+func (s *TonJettonReloadService) ReloadTonJettons(
+	ctx context.Context,
+	req TonJettonReloadRequest,
+) ([]TonJettonReloadResult, error) {
+	results := make([]TonJettonReloadResult, 0)
+
+	for _, reloader := range s.reloaders {
+		chainName := reloader.GetName()
+		if req.ChainFilter != "" && req.ChainFilter != chainName {
+			continue
+		}
+
+		item := TonJettonReloadResult{Chain: chainName}
+		count, err := reloader.ReloadJettons(ctx)
+		if err != nil {
+			item.Error = err.Error()
+		} else {
+			item.ReloadedJettons = count
 		}
 		results = append(results, item)
 	}

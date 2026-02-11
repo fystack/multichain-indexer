@@ -197,8 +197,9 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		managerCfg,
 	)
 	tonWalletReloadService := worker.NewTonWalletReloadServiceFromManager(manager)
+	tonJettonReloadService := worker.NewTonJettonReloadServiceFromManager(manager)
 
-	httpServer := startHTTPServer(cfg.Services.Port, cfg, tonWalletReloadService)
+	httpServer := startHTTPServer(cfg.Services.Port, cfg, tonWalletReloadService, tonJettonReloadService)
 
 	// Start all workers
 	logger.Info("Starting all workers")

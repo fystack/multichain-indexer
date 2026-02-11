@@ -34,21 +34,35 @@ type TonWalletReloadResponse struct {
 	SupportedSources []worker.WalletReloadSource    `json:"supported_sources"`
 }
 
+type TonJettonReloadResponse struct {
+	Status         string                         `json:"status"`
+	Chain          string                         `json:"chain,omitempty"`
+	Results        []worker.TonJettonReloadResult `json:"results"`
+	TriggeredAtUTC time.Time                      `json:"triggered_at_utc"`
+}
+
 type IndexerHTTPHandler struct {
 	version                string
 	tonWalletReloadService *worker.TonWalletReloadService
+	tonJettonReloadService *worker.TonJettonReloadService
 }
 
-func NewIndexerHTTPHandler(version string, tonWalletReloadService *worker.TonWalletReloadService) *IndexerHTTPHandler {
+func NewIndexerHTTPHandler(
+	version string,
+	tonWalletReloadService *worker.TonWalletReloadService,
+	tonJettonReloadService *worker.TonJettonReloadService,
+) *IndexerHTTPHandler {
 	return &IndexerHTTPHandler{
 		version:                version,
 		tonWalletReloadService: tonWalletReloadService,
+		tonJettonReloadService: tonJettonReloadService,
 	}
 }
 
 func (h *IndexerHTTPHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/health", h.HandleHealth)
 	mux.HandleFunc("/ton/wallets/reload", h.HandleTonWalletReload)
+	mux.HandleFunc("/ton/jettons/reload", h.HandleTonJettonReload)
 }
 
 func (h *IndexerHTTPHandler) HandleHealth(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +97,7 @@ func (h *IndexerHTTPHandler) HandleTonWalletReload(w http.ResponseWriter, r *htt
 	}
 
 	response := TonWalletReloadResponse{
-		Status:           reloadStatus(results),
+		Status:           reloadWalletStatus(results),
 		Source:           req.Source.Normalize(),
 		Chain:            req.ChainFilter,
 		Results:          results,
@@ -108,7 +122,41 @@ func (h *IndexerHTTPHandler) parseTonWalletReloadRequest(r *http.Request) (worke
 	}, nil
 }
 
-func reloadStatus(results []worker.TonWalletReloadResult) string {
+func (h *IndexerHTTPHandler) HandleTonJettonReload(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	if h.tonJettonReloadService == nil {
+		writeErrorJSON(w, http.StatusNotFound, worker.ErrNoTonWorkerConfigured.Error())
+		return
+	}
+
+	req := worker.TonJettonReloadRequest{
+		ChainFilter: strings.TrimSpace(r.URL.Query().Get("chain")),
+	}
+
+	results, err := h.tonJettonReloadService.ReloadTonJettons(r.Context(), req)
+	if err != nil {
+		statusCode := http.StatusInternalServerError
+		if errors.Is(err, worker.ErrTonWorkerNotFound) || errors.Is(err, worker.ErrNoTonWorkerConfigured) {
+			statusCode = http.StatusNotFound
+		}
+		writeErrorJSON(w, statusCode, err.Error())
+		return
+	}
+
+	response := TonJettonReloadResponse{
+		Status:         reloadJettonStatus(results),
+		Chain:          req.ChainFilter,
+		Results:        results,
+		TriggeredAtUTC: time.Now().UTC(),
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func reloadWalletStatus(results []worker.TonWalletReloadResult) string {
 	for _, result := range results {
 		if result.Error != "" {
 			return "partial_error"
@@ -117,7 +165,21 @@ func reloadStatus(results []worker.TonWalletReloadResult) string {
 	return "ok"
 }
 
-func startHTTPServer(port int, cfg *config.Config, tonWalletReloadService *worker.TonWalletReloadService) *http.Server {
+func reloadJettonStatus(results []worker.TonJettonReloadResult) string {
+	for _, result := range results {
+		if result.Error != "" {
+			return "partial_error"
+		}
+	}
+	return "ok"
+}
+
+func startHTTPServer(
+	port int,
+	cfg *config.Config,
+	tonWalletReloadService *worker.TonWalletReloadService,
+	tonJettonReloadService *worker.TonJettonReloadService,
+) *http.Server {
 	mux := http.NewServeMux()
 
 	version := cfg.Version
@@ -125,7 +187,7 @@ func startHTTPServer(port int, cfg *config.Config, tonWalletReloadService *worke
 		version = "1.0.0" // fallback version
 	}
 
-	handler := NewIndexerHTTPHandler(version, tonWalletReloadService)
+	handler := NewIndexerHTTPHandler(version, tonWalletReloadService, tonJettonReloadService)
 	handler.Register(mux)
 
 	server := &http.Server{
@@ -134,7 +196,13 @@ func startHTTPServer(port int, cfg *config.Config, tonWalletReloadService *worke
 	}
 
 	go func() {
-		logger.Info("Indexer HTTP server started", "port", port, "health_endpoint", "/health", "reload_endpoint", "/ton/wallets/reload")
+		logger.Info(
+			"Indexer HTTP server started",
+			"port", port,
+			"health_endpoint", "/health",
+			"wallet_reload_endpoint", "/ton/wallets/reload",
+			"jetton_reload_endpoint", "/ton/jettons/reload",
+		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("HTTP server failed to start", "error", err)
 		}

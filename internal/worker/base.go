@@ -70,6 +70,16 @@ type TonWalletReloadResult struct {
 	Error           string `json:"error,omitempty"`
 }
 
+type TonJettonReloadRequest struct {
+	ChainFilter string
+}
+
+type TonJettonReloadResult struct {
+	Chain           string `json:"chain"`
+	ReloadedJettons int    `json:"reloaded_jettons"`
+	Error           string `json:"error,omitempty"`
+}
+
 // TonWalletReloader is implemented by TON workers that support runtime wallet cache reload.
 type TonWalletReloader interface {
 	Worker
@@ -77,6 +87,14 @@ type TonWalletReloader interface {
 	GetNetworkType() enum.NetworkType
 	ReloadWalletsFromKV(ctx context.Context) (int, error)
 	ReloadWalletsFromDB(ctx context.Context) (int, error)
+}
+
+// TonJettonReloader is implemented by TON workers that support runtime jetton registry reload.
+type TonJettonReloader interface {
+	Worker
+	GetName() string
+	GetNetworkType() enum.NetworkType
+	ReloadJettons(ctx context.Context) (int, error)
 }
 
 // WorkerDeps groups shared dependencies used by block-based workers.

@@ -254,6 +254,19 @@ curl -s -X POST \
   "http://localhost:${INDEXER_PORT}/ton/wallets/reload?source=kv&chain=ton_mainnet" | jq
 ```
 
+### Reload TON Jetton Registry (from Redis + fallback config)
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/jettons/reload" | jq
+```
+
+### Reload TON Jetton Registry For One Chain
+
+```bash
+curl -s -X POST \
+  "http://localhost:${INDEXER_PORT}/ton/jettons/reload?chain=ton_mainnet" | jq
+```
+
 ---
 
 ## 📝 Example `configs/config.yaml` (chains section)
