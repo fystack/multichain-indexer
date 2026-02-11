@@ -93,11 +93,6 @@ func (r *ConfigBasedRegistry) List() []JettonInfo {
 	return result
 }
 
-// Reload is a no-op for config-backed registry.
-func (r *ConfigBasedRegistry) Reload(_ context.Context) error {
-	return nil
-}
-
 // RedisJettonRegistry loads supported jettons from Redis and keeps an in-memory snapshot.
 // Key format:
 // - ton/jettons/<chain>/masters: JSON []JettonInfo

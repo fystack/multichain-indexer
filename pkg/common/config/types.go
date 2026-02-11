@@ -37,7 +37,7 @@ type ChainConfig struct {
 	Name                string           `yaml:"-"`
 	NetworkId           string           `yaml:"network_id"`
 	InternalCode        string           `yaml:"internal_code"`
-	Type                enum.NetworkType `yaml:"type"                  validate:"required,oneof=tron evm btc sol sui ton"`
+	Type                enum.NetworkType `yaml:"type"                  validate:"required"`
 	FromLatest          bool             `yaml:"from_latest"`
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`

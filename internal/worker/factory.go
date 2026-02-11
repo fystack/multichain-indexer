@@ -299,7 +299,6 @@ func buildTonPollingWorker(
 	chainCfg config.ChainConfig,
 	kvstore infra.KVStore,
 	redisClient infra.RedisClient,
-	pubkeyStore pubkeystore.Store,
 	db *gorm.DB,
 	emitter events.Emitter,
 ) Worker {
@@ -356,8 +355,8 @@ func buildTonPollingWorker(
 		chainCfg,
 		accountIndexer,
 		cursorStore,
-		pubkeyStore,
 		db,
+		kvstore,
 		emitter,
 		tonWorker.WorkerConfig{
 			Concurrency:  chainCfg.Throttle.Concurrency,
@@ -407,7 +406,7 @@ func CreateManagerWithWorkers(
 		case enum.NetworkTypeSui:
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTon:
-			tonW := buildTonPollingWorker(ctx, chainName, chainCfg, kvstore, redisClient, pubkeyStore, db, emitter)
+			tonW := buildTonPollingWorker(ctx, chainName, chainCfg, kvstore, redisClient, db, emitter)
 			if tonW != nil {
 				manager.AddWorkers(tonW)
 				logger.Info("TON polling worker enabled", "chain", chainName)

@@ -8,10 +8,6 @@ import (
 )
 
 type TonAPI interface {
-	// GetAccountState returns the current state of an account.
-	// Returns nil Account.State if account doesn't exist (not deployed).
-	GetAccountState(ctx context.Context, addr *address.Address) (*tlb.Account, error)
-
 	// ListTransactions returns transactions for an account.
 	// - limit: max transactions to return (typically 10-50)
 	// - lastLT: logical time cursor (0 for initial fetch from beginning)

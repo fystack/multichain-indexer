@@ -2,6 +2,7 @@ package ton
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -12,11 +13,13 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/events"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/model"
 	"github.com/fystack/multichain-indexer/pkg/retry"
-	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 	"gorm.io/gorm"
 )
+
+const walletListKeyFormat = "ton/wallets/%s"
 
 // TonPollingWorker polls multiple TON accounts for transactions.
 type TonPollingWorker struct {
@@ -29,15 +32,14 @@ type TonPollingWorker struct {
 	config      config.ChainConfig
 	indexer     tonIndexer.AccountIndexer
 	cursorStore tonIndexer.CursorStore
-	pubkeyStore pubkeystore.Store
 	db          *gorm.DB
+	kvstore     infra.KVStore
 	emitter     events.Emitter
 
 	// Cache
-	wallets      []string
-	walletsMutex sync.RWMutex
-	lastSyncTime time.Time
-	syncInterval time.Duration
+	wallets            []string
+	walletsInitialized bool
+	walletsMutex       sync.RWMutex
 
 	// Worker configuration
 	concurrency  int
@@ -57,8 +59,8 @@ func NewTonPollingWorker(
 	cfg config.ChainConfig,
 	indexer tonIndexer.AccountIndexer,
 	cursorStore tonIndexer.CursorStore,
-	pubkeyStore pubkeystore.Store,
 	db *gorm.DB,
+	kvstore infra.KVStore,
 	emitter events.Emitter,
 	workerCfg WorkerConfig,
 ) *TonPollingWorker {
@@ -87,12 +89,11 @@ func NewTonPollingWorker(
 		config:       cfg,
 		indexer:      indexer,
 		cursorStore:  cursorStore,
-		pubkeyStore:  pubkeyStore,
 		db:           db,
+		kvstore:      kvstore,
 		emitter:      emitter,
 		concurrency:  concurrency,
 		pollInterval: pollInterval,
-		syncInterval: time.Minute, // Sync from DB every minute
 	}
 }
 
@@ -136,47 +137,51 @@ func (w *TonPollingWorker) run() {
 	}
 }
 
-// pollAllAccounts polls all tracked TON addresses from the database.
+// pollAllAccounts polls all tracked TON addresses from in-memory cache.
 func (w *TonPollingWorker) pollAllAccounts() {
-	// Sync addresses from DB if needed
-	w.syncWalletsIfNeeded()
+	if err := w.ensureWalletsLoaded(); err != nil {
+		w.logger.Error("Failed to ensure wallet list", "err", err)
+		return
+	}
 
-	w.walletsMutex.RLock()
-	addresses := make([]string, len(w.wallets))
-	copy(addresses, w.wallets)
-	w.walletsMutex.RUnlock()
+	addresses := w.snapshotWallets()
 
 	if len(addresses) == 0 {
-		// Only log periodically if needed, or debug
 		w.logger.Debug("No TON addresses to poll")
 		return
 	}
 
 	w.logger.Info("Starting poll cycle", "address_count", len(addresses))
 
-	// Create work channel
 	workChan := make(chan string, len(addresses))
 	for _, addr := range addresses {
 		workChan <- addr
 	}
 	close(workChan)
 
-	// Start worker goroutines
 	var wg sync.WaitGroup
 	for i := 0; i < w.concurrency; i++ {
 		wg.Add(1)
-		go func(workerID int) {
+		go func() {
 			defer wg.Done()
-			w.pollWorker(workerID, workChan)
-		}(i)
+			w.pollWorker(workChan)
+		}()
 	}
 
 	wg.Wait()
 	w.logger.Debug("Poll cycle complete", "address_count", len(addresses))
 }
 
+func (w *TonPollingWorker) snapshotWallets() []string {
+	w.walletsMutex.RLock()
+	defer w.walletsMutex.RUnlock()
+	out := make([]string, len(w.wallets))
+	copy(out, w.wallets)
+	return out
+}
+
 // pollWorker processes addresses from the work channel.
-func (w *TonPollingWorker) pollWorker(workerID int, addresses <-chan string) {
+func (w *TonPollingWorker) pollWorker(addresses <-chan string) {
 	for addr := range addresses {
 		select {
 		case <-w.ctx.Done():
@@ -191,73 +196,39 @@ func (w *TonPollingWorker) pollWorker(workerID int, addresses <-chan string) {
 func (w *TonPollingWorker) pollAccount(address string) {
 	log := w.logger.With("address", address)
 
-	// Get existing cursor
 	cursor, err := w.cursorStore.Get(w.ctx, address)
 	if err != nil {
 		log.Error("Failed to get cursor", "err", err)
 		return
 	}
-
-	// If no cursor exists, initialize one
 	if cursor == nil {
 		cursor = &tonIndexer.AccountCursor{Address: address}
 	}
 
-	// Check context before starting
 	if w.ctx.Err() != nil {
 		return
 	}
 
-	// Poll with retry
-	var txs []types.Transaction
-	var newCursor *tonIndexer.AccountCursor
-
-	err = retry.Exponential(func() error {
-		// Check context cancellation - don't retry on shutdown
-		if w.ctx.Err() != nil {
-			return nil // Return nil to exit retry loop cleanly
-		}
-
-		result, c, pollErr := w.indexer.PollAccount(w.ctx, address, cursor)
-		if pollErr != nil {
-			// Check if error is due to context cancellation
-			if w.ctx.Err() != nil {
-				return nil // Exit retry cleanly on shutdown
-			}
-			return pollErr
-		}
-		txs = result
-		newCursor = c
-		return nil
-	}, retry.ExponentialConfig{
-		InitialInterval: 2 * time.Second,
-		MaxElapsedTime:  30 * time.Second,
-		OnRetry: func(err error, next time.Duration) {
-			// Only log if context is still active
-			if w.ctx.Err() == nil {
-				log.Debug("Retrying poll", "err", err, "next_retry", next)
-			}
-		},
-	})
-
-	// Exit if context was cancelled
-	if w.ctx.Err() != nil {
-		return
-	}
-
+	txs, newCursor, err := w.pollAccountWithRetry(address, cursor, log)
 	if err != nil {
 		log.Error("Failed to poll account after retries", "err", err)
 		return
 	}
+	if w.ctx.Err() != nil {
+		return
+	}
 
-	// Process transactions
+	if newCursor != nil {
+		if err := w.cursorStore.Save(w.ctx, newCursor); err != nil {
+			log.Error("Failed to save cursor", "err", err)
+		}
+	}
+
 	if len(txs) == 0 {
 		return
 	}
 
 	log.Info("Found transactions", "count", len(txs))
-
-	// Emit each transaction to NATS
 	for i := range txs {
 		tx := &txs[i]
 		log.Info("Emitting matched transaction",
@@ -274,20 +245,58 @@ func (w *TonPollingWorker) pollAccount(address string) {
 			log.Debug("Emitted transaction", "tx_hash", tx.TxHash)
 		}
 	}
+}
 
-	// Update cursor after successful processing
-	if newCursor != nil {
-		if err := w.cursorStore.Save(w.ctx, newCursor); err != nil {
-			log.Error("Failed to save cursor", "err", err)
+func (w *TonPollingWorker) pollAccountWithRetry(
+	address string,
+	cursor *tonIndexer.AccountCursor,
+	log *slog.Logger,
+) ([]types.Transaction, *tonIndexer.AccountCursor, error) {
+	var (
+		txs       []types.Transaction
+		newCursor *tonIndexer.AccountCursor
+	)
+
+	err := retry.Exponential(func() error {
+		if w.ctx.Err() != nil {
+			return nil
 		}
+
+		result, c, pollErr := w.indexer.PollAccount(w.ctx, address, cursor)
+		if pollErr != nil {
+			if w.ctx.Err() != nil {
+				return nil
+			}
+			return pollErr
+		}
+		txs = result
+		newCursor = c
+		return nil
+	}, retry.ExponentialConfig{
+		InitialInterval: 2 * time.Second,
+		MaxElapsedTime:  30 * time.Second,
+		OnRetry: func(err error, next time.Duration) {
+			if w.ctx.Err() == nil {
+				log.Debug("Retrying poll", "err", err, "next_retry", next)
+			}
+		},
+	})
+	if w.ctx.Err() != nil {
+		return nil, nil, nil
 	}
+	return txs, newCursor, err
 }
 
 // AddAddress registers a new address for tracking.
 // This initializes the cursor and starts polling the address.
 func (w *TonPollingWorker) AddAddress(ctx context.Context, address string) error {
+	normalizedAddress := tonIndexer.NormalizeTONAddressRaw(address)
+	if normalizedAddress == "" {
+		return fmt.Errorf("invalid TON address: %s", address)
+	}
+
 	// Check if cursor already exists
-	existing, err := w.cursorStore.Get(ctx, address)
+	existing, err := w.cursorStore.Get(ctx, normalizedAddress)
 	if err != nil {
 		return err
 	}
@@ -298,12 +307,16 @@ func (w *TonPollingWorker) AddAddress(ctx context.Context, address string) error
 	}
 
 	// Create initial cursor
-	cursor := &tonIndexer.AccountCursor{Address: address}
+	cursor := &tonIndexer.AccountCursor{Address: normalizedAddress}
 	return w.cursorStore.Save(ctx, cursor)
 }
 
 // RemoveAddress stops tracking an address.
 func (w *TonPollingWorker) RemoveAddress(ctx context.Context, address string) error {
+	normalizedAddress := tonIndexer.NormalizeTONAddressRaw(address)
+	if normalizedAddress != "" {
+		return w.cursorStore.Delete(ctx, normalizedAddress)
+	}
 	return w.cursorStore.Delete(ctx, address)
 }
 
@@ -313,95 +326,134 @@ func (w *TonPollingWorker) GetNetworkType() enum.NetworkType {
 }
 
 func (w *TonPollingWorker) GetName() string {
-	if w.chainName != "" {
-		return w.chainName
-	}
-	return w.config.Name
+	return w.chainName
 }
 
+func (w *TonPollingWorker) walletListKey() string {
+	return fmt.Sprintf(walletListKeyFormat, w.chainName)
+}
+
+func (w *TonPollingWorker) ensureWalletsLoaded() error {
+	w.walletsMutex.RLock()
+	initialized := w.walletsInitialized
+	w.walletsMutex.RUnlock()
+
+	if initialized {
+		return nil
+	}
+
+	if _, err := w.ReloadWalletsFromKV(w.ctx); err != nil {
+		return err
+	}
+
+	w.walletsMutex.RLock()
+	hasWallets := len(w.wallets) > 0
+	w.walletsMutex.RUnlock()
+	if hasWallets {
+		return nil
+	}
+
+	// KV empty fallback: sync once from DB to bootstrap.
+	if w.db == nil {
+		return nil
+	}
+	_, err := w.ReloadWalletsFromDB(w.ctx)
+	return err
+}
+
+func (w *TonPollingWorker) replaceWalletCache(addresses []string) int {
+	w.walletsMutex.Lock()
+	oldSize := len(w.wallets)
+	w.wallets = addresses
+	w.walletsInitialized = true
+	w.walletsMutex.Unlock()
+
+	w.logger.Info("Wallet cache updated",
+		"old_size", oldSize,
+		"new_size", len(addresses),
+	)
+	return len(addresses)
+}
+
+// ReloadWalletsFromKV refreshes in-memory wallets from KV store.
+func (w *TonPollingWorker) ReloadWalletsFromKV(_ context.Context) (int, error) {
+	if w.kvstore == nil {
+		return 0, fmt.Errorf("kvstore is not configured")
+	}
+
+	var addresses []string
+	found, err := w.kvstore.GetAny(w.walletListKey(), &addresses)
+	if err != nil {
+		return 0, fmt.Errorf("get wallet list from kv: %w", err)
+	}
+	if !found {
+		w.replaceWalletCache(nil)
+		return 0, nil
+	}
+
+	return w.replaceWalletCache(tonIndexer.NormalizeTONAddressList(addresses)), nil
+}
+
+// ReloadWalletsFromDB reloads wallets from database and persists them to KV store.
+func (w *TonPollingWorker) ReloadWalletsFromDB(_ context.Context) (int, error) {
+	if w.db == nil {
+		return 0, fmt.Errorf("database is not configured")
+	}
+	if w.kvstore == nil {
+		return 0, fmt.Errorf("kvstore is not configured")
+	}
+
+	allAddresses, err := w.loadWalletAddressesFromDB()
+	if err != nil {
+		return 0, err
+	}
+
+	cleaned := tonIndexer.NormalizeTONAddressList(allAddresses)
+	if err := w.kvstore.SetAny(w.walletListKey(), cleaned); err != nil {
+		return 0, fmt.Errorf("persist wallet list to kv: %w", err)
+	}
+
+	return w.replaceWalletCache(cleaned), nil
+}
+
+// ReloadJettons refreshes TON jetton registry from Redis (with config fallback).
 func (w *TonPollingWorker) ReloadJettons(ctx context.Context) (int, error) {
 	count, err := w.indexer.ReloadJettons(ctx)
 	if err != nil {
 		return 0, err
 	}
-	w.logger.Info("Jetton registry reloaded", "chain", w.GetName(), "jetton_count", count)
+
+	w.logger.Info("Jetton registry reloaded", "chain", w.chainName, "jetton_count", count)
 	return count, nil
 }
 
-// syncWalletsIfNeeded refreshes the wallet list from DB if sync interval passed.
-// Uses pagination to efficiently handle large numbers of wallets (>10K).
-// Before fetching everything, it checks the count to avoid redundant work.
-func (w *TonPollingWorker) syncWalletsIfNeeded() {
-	if time.Since(w.lastSyncTime) < w.syncInterval {
-		return
-	}
-
-	// 1. Quickly check the count in DB
-	var dbCount int64
-	err := w.db.Model(&model.WalletAddress{}).
-		Where("type = ?", enum.NetworkTypeTon).
-		Count(&dbCount).Error
-	if err != nil {
-		w.logger.Error("Failed to count wallets in DB", "err", err)
-		return
-	}
-
-	w.walletsMutex.RLock()
-	cachedCount := int64(len(w.wallets))
-	w.walletsMutex.RUnlock()
-
-	// If count matches and we're not empty, skip the expensive full fetch
-	if dbCount == cachedCount && cachedCount > 0 {
-		w.lastSyncTime = time.Now()
-		return
-	}
-
-	// 2. Count changed or list is empty, perform full sync
+func (w *TonPollingWorker) loadWalletAddressesFromDB() ([]string, error) {
 	const batchSize = 1000
-	var allAddresses []string
-	offset := 0
 
+	allAddresses := make([]string, 0, batchSize)
+	offset := 0
 	for {
 		var wallets []model.WalletAddress
-		// Paginated query for TON wallets only selecting address field
 		err := w.db.Select("address").
 			Where("type = ?", enum.NetworkTypeTon).
 			Order("id").
 			Limit(batchSize).
 			Offset(offset).
 			Find(&wallets).Error
-
 		if err != nil {
-			w.logger.Error("Failed to fetch wallets from DB", "err", err, "offset", offset)
-			return
+			return nil, fmt.Errorf("fetch wallets from db (offset=%d): %w", offset, err)
 		}
-
-		// No more results
 		if len(wallets) == 0 {
 			break
 		}
-
-		// Collect addresses
 		for _, wallet := range wallets {
 			allAddresses = append(allAddresses, wallet.Address)
 		}
-
-		// If we got fewer than batchSize, we're done
 		if len(wallets) < batchSize {
 			break
 		}
-
 		offset += batchSize
 	}
 
-	w.walletsMutex.Lock()
-	oldSize := len(w.wallets)
-	w.wallets = allAddresses
-	w.lastSyncTime = time.Now()
-	w.walletsMutex.Unlock()
-
-	w.logger.Info("Synced wallets from DB",
-		"old_size", oldSize,
-		"new_size", len(allAddresses),
-	)
+	return allAddresses, nil
 }

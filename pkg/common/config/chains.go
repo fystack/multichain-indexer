@@ -47,6 +47,9 @@ func (c Chains) OverrideFromLatest(names []string) {
 // ApplyDefaults merges global defaults into all chain configs.
 func (c Chains) ApplyDefaults(def Defaults) error {
 	for name, chain := range c {
+		if !chain.FromLatest {
+			chain.FromLatest = def.FromLatest
+		}
 		if chain.PollInterval == 0 {
 			chain.PollInterval = def.PollInterval
 		}

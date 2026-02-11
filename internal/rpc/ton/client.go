@@ -75,23 +75,6 @@ func (c *Client) getMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error
 	return master, nil
 }
 
-// GetAccountState returns the current state of an account.
-func (c *Client) GetAccountState(ctx context.Context, addr *address.Address) (*tlb.Account, error) {
-	// Get the current masterchain block for consistency
-	master, err := c.getMasterchainInfo(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get masterchain info: %w", err)
-	}
-
-	// Get the account state at the current block
-	account, err := c.api.GetAccount(ctx, master, addr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get account state: %w", err)
-	}
-
-	return account, nil
-}
-
 // ListTransactions returns transactions for an account.
 // Transactions are returned in reverse chronological order (newest first).
 // Use lastLT=0 and lastHash=nil for initial fetch from the account's latest transaction.
