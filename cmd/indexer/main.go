@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -200,9 +201,10 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		redisClient,
 		managerCfg,
 	)
+	tonWalletReloadService := worker.NewTonWalletReloadServiceFromManager(manager)
 	tonJettonReloadService := worker.NewTonJettonReloadServiceFromManager(manager)
 
-	healthServer := startHealthServer(cfg.Services.Port, cfg, tonJettonReloadService)
+	healthServer := startHealthServer(cfg.Services.Port, cfg, tonWalletReloadService, tonJettonReloadService)
 
 	// Start all workers
 	logger.Info("Starting all workers")
@@ -240,6 +242,15 @@ type APIErrorResponse struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+type TonWalletReloadResponse struct {
+	Status           string                         `json:"status"`
+	Source           worker.WalletReloadSource      `json:"source"`
+	Chain            string                         `json:"chain,omitempty"`
+	Results          []worker.TonWalletReloadResult `json:"results"`
+	TriggeredAtUTC   time.Time                      `json:"triggered_at_utc"`
+	SupportedSources []worker.WalletReloadSource    `json:"supported_sources"`
+}
+
 type TonJettonReloadResponse struct {
 	Status         string                         `json:"status"`
 	Chain          string                         `json:"chain,omitempty"`
@@ -250,6 +261,7 @@ type TonJettonReloadResponse struct {
 func startHealthServer(
 	port int,
 	cfg *config.Config,
+	tonWalletReloadService *worker.TonWalletReloadService,
 	tonJettonReloadService *worker.TonJettonReloadService,
 ) *http.Server {
 	mux := http.NewServeMux()
@@ -264,6 +276,49 @@ func startHealthServer(
 			Status:    "ok",
 			Timestamp: time.Now().UTC(),
 			Version:   version,
+		}
+		writeJSON(w, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("/ton/wallets/reload", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+
+		if tonWalletReloadService == nil {
+			writeErrorJSON(w, http.StatusNotFound, worker.ErrNoTonWorkerConfigured.Error())
+			return
+		}
+
+		source := worker.WalletReloadSource(r.URL.Query().Get("source")).Normalize()
+		if !source.IsValid() {
+			writeErrorJSON(w, http.StatusBadRequest, "invalid source (supported: kv, db)")
+			return
+		}
+
+		req := worker.TonWalletReloadRequest{
+			Source:      source,
+			ChainFilter: strings.TrimSpace(r.URL.Query().Get("chain")),
+		}
+
+		results, err := tonWalletReloadService.ReloadTonWallets(r.Context(), req)
+		if err != nil {
+			statusCode := http.StatusInternalServerError
+			if errors.Is(err, worker.ErrTonWorkerNotFound) || errors.Is(err, worker.ErrNoTonWorkerConfigured) {
+				statusCode = http.StatusNotFound
+			}
+			writeErrorJSON(w, statusCode, err.Error())
+			return
+		}
+
+		response := TonWalletReloadResponse{
+			Status:           reloadWalletStatus(results),
+			Source:           source,
+			Chain:            req.ChainFilter,
+			Results:          results,
+			TriggeredAtUTC:   time.Now().UTC(),
+			SupportedSources: []worker.WalletReloadSource{worker.WalletReloadSourceKV, worker.WalletReloadSourceDB},
 		}
 		writeJSON(w, http.StatusOK, response)
 	})
@@ -312,6 +367,7 @@ func startHealthServer(
 			"Health check server started",
 			"port", port,
 			"health_endpoint", "/health",
+			"wallet_reload_endpoint", "/ton/wallets/reload",
 			"jetton_reload_endpoint", "/ton/jettons/reload",
 		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -320,6 +376,15 @@ func startHealthServer(
 	}()
 
 	return server
+}
+
+func reloadWalletStatus(results []worker.TonWalletReloadResult) string {
+	for _, result := range results {
+		if result.Error != "" {
+			return "partial_error"
+		}
+	}
+	return "ok"
 }
 
 func reloadJettonStatus(results []worker.TonJettonReloadResult) string {
