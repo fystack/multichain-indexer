@@ -14,4 +14,10 @@ type TonAPI interface {
 	// - lastHash: transaction hash cursor (nil for initial fetch)
 	// Returns transactions in reverse chronological order (newest first).
 	ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lastLT uint64, lastHash []byte) ([]*tlb.Transaction, error)
+
+	// GetLatestMasterchainSeqno returns the latest observed masterchain sequence number.
+	GetLatestMasterchainSeqno(ctx context.Context) (uint64, error)
+
+	// ResolveJettonMasterAddress resolves a jetton wallet address to its master contract address.
+	ResolveJettonMasterAddress(ctx context.Context, jettonWallet string) (string, error)
 }

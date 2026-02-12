@@ -2,7 +2,9 @@ package ton
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -79,6 +81,10 @@ func (c *Client) getMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error
 // Transactions are returned in reverse chronological order (newest first).
 // Use lastLT=0 and lastHash=nil for initial fetch from the account's latest transaction.
 func (c *Client) ListTransactions(ctx context.Context, addr *address.Address, limit uint32, lastLT uint64, lastHash []byte) ([]*tlb.Transaction, error) {
+	if limit == 0 {
+		limit = 1
+	}
+
 	// Get the current masterchain block for consistency
 	master, err := c.getMasterchainInfo(ctx)
 	if err != nil {
@@ -101,21 +107,101 @@ func (c *Client) ListTransactions(ctx context.Context, addr *address.Address, li
 		return nil, nil
 	}
 
-	// Fetch transactions from the LATEST, going backwards
-	txs, err := c.api.ListTransactions(ctx, addr, limit, account.LastTxLT, account.LastTxHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list transactions: %w", err)
-	}
+	// Page backwards from account tip until we reach the saved cursor.
+	var (
+		allNewTxs []*tlb.Transaction
+		fetchLT   = account.LastTxLT
+		fetchHash = account.LastTxHash
+	)
 
-	// Filter to only return transactions NEWER than our cursor
-	var newTxs []*tlb.Transaction
-	for _, tx := range txs {
-		if tx.LT > lastLT {
-			newTxs = append(newTxs, tx)
+	for {
+		txs, listErr := c.api.ListTransactions(ctx, addr, limit, fetchLT, fetchHash)
+		if listErr != nil {
+			if errors.Is(listErr, ton.ErrNoTransactionsWereFound) && len(allNewTxs) > 0 {
+				break
+			}
+			return nil, fmt.Errorf("failed to list transactions: %w", listErr)
 		}
+		if len(txs) == 0 {
+			break
+		}
+
+		oldest := txs[0]
+		for _, tx := range txs {
+			if tx.LT > lastLT {
+				allNewTxs = append(allNewTxs, tx)
+			}
+			if tx.LT < oldest.LT {
+				oldest = tx
+			}
+		}
+
+		// Reached already-processed range.
+		if oldest.LT <= lastLT {
+			break
+		}
+		// No more history.
+		if oldest.PrevTxLT == 0 || len(oldest.PrevTxHash) == 0 {
+			break
+		}
+
+		fetchLT = oldest.PrevTxLT
+		fetchHash = oldest.PrevTxHash
 	}
 
-	return newTxs, nil
+	// Keep existing contract used by indexer: newest first.
+	sort.Slice(allNewTxs, func(i, j int) bool {
+		return allNewTxs[i].LT > allNewTxs[j].LT
+	})
+
+	return allNewTxs, nil
+}
+
+func (c *Client) GetLatestMasterchainSeqno(ctx context.Context) (uint64, error) {
+	master, err := c.getMasterchainInfo(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get masterchain info: %w", err)
+	}
+	return uint64(master.SeqNo), nil
+}
+
+func (c *Client) ResolveJettonMasterAddress(ctx context.Context, jettonWallet string) (string, error) {
+	walletAddr, err := parseTONAddressAny(jettonWallet)
+	if err != nil {
+		return "", fmt.Errorf("invalid jetton wallet address: %w", err)
+	}
+
+	master, err := c.getMasterchainInfo(ctx)
+	if err != nil {
+		return "", fmt.Errorf("failed to get masterchain info: %w", err)
+	}
+
+	res, err := c.api.WaitForBlock(master.SeqNo).RunGetMethod(ctx, master, walletAddr, "get_wallet_data")
+	if err != nil {
+		return "", fmt.Errorf("run get_wallet_data: %w", err)
+	}
+
+	masterSlice, err := res.Slice(2)
+	if err != nil {
+		return "", fmt.Errorf("parse get_wallet_data master address: %w", err)
+	}
+
+	masterAddr, err := masterSlice.LoadAddr()
+	if err != nil {
+		return "", fmt.Errorf("load master address from stack: %w", err)
+	}
+	if masterAddr == nil {
+		return "", fmt.Errorf("jetton master address is nil")
+	}
+
+	return masterAddr.StringRaw(), nil
+}
+
+func parseTONAddressAny(addr string) (*address.Address, error) {
+	if raw, err := address.ParseRawAddr(addr); err == nil {
+		return raw, nil
+	}
+	return address.ParseAddr(addr)
 }
 
 func (c *Client) Close() error {
