@@ -176,6 +176,26 @@ chains:
         symbol: "USDT"
         decimals: 6
 
+  ton_testnet:
+    network_id: "ton_testnet"
+    internal_code: "TON_TESTNET"
+    type: "ton"
+    start_block: 0
+    poll_interval: "4s"
+    nodes:
+      - url: "https://ton.org/testnet-global-config.json"
+    client:
+      timeout: "15s"
+    throttle:
+      rps: 10
+      burst: 20
+      batch_size: 1
+      concurrency: 4
+    jettons:
+      - master_address: "0:1de7d5cc59be344d17f1a93274a2dad44ea0fc66ec4b1e10bc4f8d35039f8aaf"
+        symbol: "USDT"
+        decimals: 6
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
