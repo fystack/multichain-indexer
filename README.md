@@ -236,6 +236,33 @@ nats consumer sub transfer transaction-consumer
 
 ---
 
+## 🌐 HTTP API Examples
+
+```bash
+# set this to your configured services.port
+export INDEXER_PORT=8080
+```
+
+### Health Check
+
+```bash
+curl -s "http://localhost:${INDEXER_PORT}/health" | jq
+```
+
+### Reload TON Jetton Registry (all TON chains)
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/jettons/reload" | jq
+```
+
+### Reload TON Jetton Registry For One Chain
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/jettons/reload?chain=ton_mainnet" | jq
+```
+
+---
+
 ## 📝 Example `configs/config.yaml` (chains section)
 
 ```yaml

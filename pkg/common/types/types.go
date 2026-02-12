@@ -20,18 +20,20 @@ type Block struct {
 }
 
 type Transaction struct {
-	TxHash        string          `json:"txHash"`
-	NetworkId     string          `json:"networkId"`
-	BlockNumber   uint64          `json:"blockNumber"` // 0 for mempool transactions
-	FromAddress   string          `json:"fromAddress"`
-	ToAddress     string          `json:"toAddress"`
-	AssetAddress  string          `json:"assetAddress"`
-	Amount        string          `json:"amount"`
-	Type          constant.TxType `json:"type"`
-	TxFee         decimal.Decimal `json:"txFee"`
-	Timestamp     uint64          `json:"timestamp"`
-	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
-	Status        string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
+	TxHash           string          `json:"txHash"`
+	NetworkId        string          `json:"networkId"`
+	BlockNumber      uint64          `json:"blockNumber"` // 0 for mempool transactions
+	LogicalTime      uint64          `json:"logicalTime,omitempty"`
+	MasterchainSeqno uint64          `json:"masterchainSeqno,omitempty"`
+	FromAddress      string          `json:"fromAddress"`
+	ToAddress        string          `json:"toAddress"`
+	AssetAddress     string          `json:"assetAddress"`
+	Amount           string          `json:"amount"`
+	Type             constant.TxType `json:"type"`
+	TxFee            decimal.Decimal `json:"txFee"`
+	Timestamp        uint64          `json:"timestamp"`
+	Confirmations    uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
+	Status           string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
@@ -48,10 +50,12 @@ func (t *Transaction) UnmarshalBinary(data []byte) error {
 
 func (t Transaction) String() string {
 	return fmt.Sprintf(
-		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d, Confirmations: %d, Status: %s}",
+		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, LogicalTime: %d, MasterchainSeqno: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d, Confirmations: %d, Status: %s}",
 		t.TxHash,
 		t.NetworkId,
 		t.BlockNumber,
+		t.LogicalTime,
+		t.MasterchainSeqno,
 		t.FromAddress,
 		t.ToAddress,
 		t.AssetAddress,

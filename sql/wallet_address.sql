@@ -56,4 +56,7 @@ COMMENT ON COLUMN wallet_addresses.standard IS 'The token standard (erc20, erc72
 -- Insert sample data
 INSERT INTO wallet_addresses (address, type, standard) VALUES
 ('TAWdqnuYCNU3dKsi7pR8d7sDkx1Evb2giV', 'tron', 'trc20'),
-('TT1j2adMBb6bF2K8C2LX1QkkmSXHjiaAfw', 'tron', 'trc20');
+('TT1j2adMBb6bF2K8C2LX1QkkmSXHjiaAfw', 'tron', 'trc20'),
+('Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vF', 'ton', 'native'),
+('EQDKHZ7e70CzqdvZCC83Z4WVR8POC_ZB0J1Y4zo88G-zCXmC', 'ton', 'native'),
+('EQBeab7D38RIwypegbN7YZgQzwDbb8QfMMwY8ouJc3qPl91M', 'ton', 'native');
