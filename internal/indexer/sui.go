@@ -220,7 +220,7 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNumber, blockTs uint64) types.Transaction {
 	t := types.Transaction{
 		TxHash:      execTx.GetDigest(),
-		NetworkId:   s.cfg.InternalCode,
+		NetworkId:   s.cfg.NetworkId,
 		BlockNumber: blockNumber,
 		Timestamp:   blockTs,
 	}
