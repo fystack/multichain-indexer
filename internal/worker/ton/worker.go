@@ -38,6 +38,7 @@ type TonPollingWorker struct {
 
 	// Cache
 	wallets            []string
+	walletSet          map[string]struct{}
 	walletsInitialized bool
 	walletsMutex       sync.RWMutex
 
@@ -231,10 +232,20 @@ func (w *TonPollingWorker) pollAccount(address string) {
 	log.Info("Found transactions", "count", len(txs))
 	for i := range txs {
 		tx := &txs[i]
+		if w.shouldSkipTrackedInternalTransfer(address, tx) {
+			log.Debug("Skipping duplicate tracked-wallet transfer from receiver-side poll",
+				"from", tx.FromAddress,
+				"to", tx.ToAddress,
+				"txhash", tx.TxHash,
+			)
+			continue
+		}
+
 		log.Info("Emitting matched transaction",
 			"type", tx.Type,
 			"from", tx.FromAddress,
 			"to", tx.ToAddress,
+			"asset_address", tx.AssetAddress,
 			"amount", tx.Amount,
 			"fee", tx.TxFee.String(),
 			"txhash", tx.TxHash,
@@ -362,9 +373,15 @@ func (w *TonPollingWorker) ensureWalletsLoaded() error {
 }
 
 func (w *TonPollingWorker) replaceWalletCache(addresses []string) int {
+	walletSet := make(map[string]struct{}, len(addresses))
+	for _, addr := range addresses {
+		walletSet[addr] = struct{}{}
+	}
+
 	w.walletsMutex.Lock()
 	oldSize := len(w.wallets)
 	w.wallets = addresses
+	w.walletSet = walletSet
 	w.walletsInitialized = true
 	w.walletsMutex.Unlock()
 
@@ -373,6 +390,39 @@ func (w *TonPollingWorker) replaceWalletCache(addresses []string) int {
 		"new_size", len(addresses),
 	)
 	return len(addresses)
+}
+
+func (w *TonPollingWorker) isTrackedWallet(address string) bool {
+	normalized := tonIndexer.NormalizeTONAddressRaw(address)
+	if normalized == "" {
+		return false
+	}
+
+	w.walletsMutex.RLock()
+	_, ok := w.walletSet[normalized]
+	w.walletsMutex.RUnlock()
+	return ok
+}
+
+func (w *TonPollingWorker) shouldSkipTrackedInternalTransfer(polledAddress string, tx *types.Transaction) bool {
+	from := tonIndexer.NormalizeTONAddressRaw(tx.FromAddress)
+	to := tonIndexer.NormalizeTONAddressRaw(tx.ToAddress)
+	if from == "" || to == "" {
+		return false
+	}
+
+	// Keep only one side when both sender and receiver are tracked.
+	// Sender-side poll has polledAddress == from.
+	if !w.isTrackedWallet(from) || !w.isTrackedWallet(to) {
+		return false
+	}
+
+	polled := tonIndexer.NormalizeTONAddressRaw(polledAddress)
+	if polled == "" {
+		return false
+	}
+
+	return polled != from
 }
 
 // ReloadWalletsFromKV refreshes in-memory wallets from KV store.

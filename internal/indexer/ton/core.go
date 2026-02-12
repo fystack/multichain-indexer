@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"sync"
 
 	tonRpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -46,6 +48,8 @@ type TonAccountIndexer struct {
 	config         config.ChainConfig
 	client         tonRpc.TonAPI
 	jettonRegistry JettonRegistry
+	jettonMasterMu sync.RWMutex
+	jettonMasters  map[string]string // jetton wallet -> jetton master
 
 	// Transaction limit per poll
 	txLimit uint32
@@ -68,6 +72,7 @@ func NewTonAccountIndexer(
 		config:         cfg,
 		client:         client,
 		jettonRegistry: jettonRegistry,
+		jettonMasters:  make(map[string]string),
 		txLimit:        txLimit,
 	}
 }
@@ -129,6 +134,8 @@ func (i *TonAccountIndexer) PollAccount(ctx context.Context, addrStr string, cur
 
 	parsedTxs := make([]types.Transaction, 0, len(txs))
 	newCursor := ensureCursor(cursor, addrStr)
+	var latestSeqno uint64
+	var latestSeqnoFetched bool
 
 	// TON API returns newest first, so process backwards (oldest to newest).
 	for j := len(txs) - 1; j >= 0; j-- {
@@ -144,10 +151,80 @@ func (i *TonAccountIndexer) PollAccount(ctx context.Context, addrStr string, cur
 			continue
 		}
 
-		parsedTxs = append(parsedTxs, i.parseMatchedTransactions(tx, normalizedAddress)...)
+		matchedTxs := i.parseMatchedTransactions(tx, normalizedAddress)
+		if len(matchedTxs) == 0 {
+			continue
+		}
+		i.resolveJettonAssetAddresses(ctx, matchedTxs)
+
+		if !latestSeqnoFetched {
+			latestSeqno, err = i.client.GetLatestMasterchainSeqno(ctx)
+			if err != nil {
+				return nil, cursor, fmt.Errorf("failed to get latest masterchain seqno: %w", err)
+			}
+			latestSeqnoFetched = true
+		}
+
+		for idx := range matchedTxs {
+			matchedTxs[idx].BlockNumber = latestSeqno
+			matchedTxs[idx].MasterchainSeqno = latestSeqno
+		}
+
+		parsedTxs = append(parsedTxs, matchedTxs...)
 	}
 
 	return parsedTxs, newCursor, nil
+}
+
+func (i *TonAccountIndexer) resolveJettonAssetAddresses(ctx context.Context, txs []types.Transaction) {
+	for idx := range txs {
+		tx := &txs[idx]
+		if tx.Type != constant.TxTypeTokenTransfer || tx.AssetAddress == "" {
+			continue
+		}
+
+		walletAddress := tx.AssetAddress
+		if i.jettonRegistry != nil {
+			if info, ok := i.jettonRegistry.GetInfo(walletAddress); ok {
+				tx.AssetAddress = info.MasterAddress
+				continue
+			}
+			if info, ok := i.jettonRegistry.GetInfoByWallet(walletAddress); ok {
+				tx.AssetAddress = info.MasterAddress
+				i.cacheJettonMaster(walletAddress, info.MasterAddress)
+				continue
+			}
+		}
+
+		if cachedMaster, ok := i.getCachedJettonMaster(walletAddress); ok {
+			tx.AssetAddress = cachedMaster
+			continue
+		}
+
+		resolvedMaster, err := i.client.ResolveJettonMasterAddress(ctx, walletAddress)
+		if err != nil || resolvedMaster == "" {
+			continue
+		}
+
+		i.cacheJettonMaster(walletAddress, resolvedMaster)
+		tx.AssetAddress = resolvedMaster
+		if i.jettonRegistry != nil {
+			i.jettonRegistry.RegisterWallet(walletAddress, resolvedMaster)
+		}
+	}
+}
+
+func (i *TonAccountIndexer) getCachedJettonMaster(walletAddress string) (string, bool) {
+	i.jettonMasterMu.RLock()
+	defer i.jettonMasterMu.RUnlock()
+	master, ok := i.jettonMasters[walletAddress]
+	return master, ok
+}
+
+func (i *TonAccountIndexer) cacheJettonMaster(walletAddress, masterAddress string) {
+	i.jettonMasterMu.Lock()
+	defer i.jettonMasterMu.Unlock()
+	i.jettonMasters[walletAddress] = masterAddress
 }
 
 func decodeCursorForRPC(cursor *AccountCursor) (uint64, []byte, error) {
