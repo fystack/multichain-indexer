@@ -66,7 +66,11 @@ func (r *ConfigBasedRegistry) GetInfoByWallet(walletAddress string) (*JettonInfo
 		return nil, false
 	}
 
-	return r.GetInfo(masterAddr)
+	if info, ok := r.GetInfo(masterAddr); ok {
+		return info, true
+	}
+	// Fallback: return master address even when token metadata is not preconfigured.
+	return &JettonInfo{MasterAddress: masterAddr}, true
 }
 
 // RegisterWallet associates a Jetton wallet with its master address.
@@ -75,10 +79,7 @@ func (r *ConfigBasedRegistry) RegisterWallet(walletAddress, masterAddress string
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Only register if the master is in our supported list
-	if _, ok := r.jettons[masterAddress]; ok {
-		r.walletToMaster[walletAddress] = masterAddress
-	}
+	r.walletToMaster[walletAddress] = masterAddress
 }
 
 // List returns all supported Jettons.
@@ -225,18 +226,34 @@ func (r *RedisJettonRegistry) GetInfoByWallet(walletAddress string) (*JettonInfo
 	info, ok := r.jettons[masterAddress]
 	r.mu.RUnlock()
 	if !ok {
-		return nil, false
+		// Fallback: return master address even when token metadata is not in masters list.
+		return &JettonInfo{MasterAddress: masterAddress}, true
 	}
 	return &info, true
 }
 
 func (r *RedisJettonRegistry) RegisterWallet(walletAddress, masterAddress string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, ok := r.jettons[masterAddress]; ok {
-		r.walletToMaster[walletAddress] = masterAddress
+	if strings.TrimSpace(walletAddress) == "" || strings.TrimSpace(masterAddress) == "" {
+		return
 	}
+
+	r.mu.Lock()
+	r.walletToMaster[walletAddress] = masterAddress
+	snapshot := make(map[string]string, len(r.walletToMaster))
+	for k, v := range r.walletToMaster {
+		snapshot[k] = v
+	}
+	r.mu.Unlock()
+
+	if r.redis == nil {
+		return
+	}
+
+	payload, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	_ = r.redis.Set(r.walletMappingKey(), string(payload), 0)
 }
 
 func (r *RedisJettonRegistry) List() []JettonInfo {
