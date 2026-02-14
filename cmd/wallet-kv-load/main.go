@@ -74,6 +74,7 @@ func (c *RunCmd) Run() error {
 		enum.NetworkTypeTron,
 		enum.NetworkTypeEVM,
 		enum.NetworkTypeBtc,
+		enum.NetworkTypeApt,
 	}
 
 	for _, t := range candidateTypes {
