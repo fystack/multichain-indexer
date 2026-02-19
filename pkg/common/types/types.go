@@ -12,11 +12,27 @@ import (
 )
 
 type Block struct {
-	Number       uint64        `json:"number"`
-	Hash         string        `json:"hash"`
-	ParentHash   string        `json:"parent_hash"`
-	Timestamp    uint64        `json:"timestamp"`
-	Transactions []Transaction `json:"transactions"`
+	Number       uint64                 `json:"number"`
+	Hash         string                 `json:"hash"`
+	ParentHash   string                 `json:"parent_hash"`
+	Timestamp    uint64                 `json:"timestamp"`
+	Transactions []Transaction          `json:"transactions"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+}
+
+func (b *Block) SetMetadata(key string, value interface{}) {
+	if b.Metadata == nil {
+		b.Metadata = make(map[string]interface{})
+	}
+	b.Metadata[key] = value
+}
+
+func (b *Block) GetMetadata(key string) (interface{}, bool) {
+	if b.Metadata == nil {
+		return nil, false
+	}
+	val, ok := b.Metadata[key]
+	return val, ok
 }
 
 type Transaction struct {

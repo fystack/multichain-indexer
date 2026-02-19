@@ -140,6 +140,7 @@ func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 	for _, res := range results {
 		if mw.handleBlockResult(res) {
 			lastSuccess = res.Number
+			mw.CacheBlock(res.Block)
 		}
 	}
 

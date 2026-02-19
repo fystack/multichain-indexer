@@ -21,6 +21,7 @@ type IndexerEvent struct {
 type Emitter interface {
 	EmitBlock(chain string, block *types.Block) error
 	EmitTransaction(chain string, tx *types.Transaction) error
+	EmitUTXO(chain string, utxo *types.UTXOEvent) error
 	EmitError(chain string, err error) error
 	Emit(event IndexerEvent) error
 	Close()
@@ -28,12 +29,14 @@ type Emitter interface {
 
 type emitter struct {
 	queue         infra.MessageQueue
+	utxoQueue     infra.MessageQueue
 	subjectPrefix string
 }
 
-func NewEmitter(queue infra.MessageQueue, subjectPrefix string) Emitter {
+func NewEmitter(queue infra.MessageQueue, utxoQueue infra.MessageQueue, subjectPrefix string) Emitter {
 	return &emitter{
 		queue:         queue,
+		utxoQueue:     utxoQueue,
 		subjectPrefix: subjectPrefix,
 	}
 }
@@ -50,6 +53,16 @@ func (e *emitter) EmitTransaction(chain string, tx *types.Transaction) error {
 	}
 	return e.queue.Enqueue(infra.TransferEventTopicQueue, txBytes, &infra.EnqueueOptions{
 		IdempotententKey: tx.Hash(),
+	})
+}
+
+func (e *emitter) EmitUTXO(chain string, utxo *types.UTXOEvent) error {
+	utxoBytes, err := utxo.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return e.utxoQueue.Enqueue(infra.UTXOEventTopicQueue, utxoBytes, &infra.EnqueueOptions{
+		IdempotententKey: utxo.Hash(),
 	})
 }
 
@@ -70,5 +83,8 @@ func (e *emitter) Emit(event IndexerEvent) error {
 func (e *emitter) Close() {
 	if e.queue != nil {
 		e.queue.Close()
+	}
+	if e.utxoQueue != nil {
+		e.utxoQueue.Close()
 	}
 }
