@@ -264,6 +264,7 @@ func (cw *CatchupWorker) processRange(r blockstore.CatchupRange, workerID int) e
 			}
 			if cw.handleBlockResult(res) && res.Number > batchSuccess {
 				batchSuccess = res.Number
+				cw.CacheBlock(res.Block)
 			}
 		}
 
