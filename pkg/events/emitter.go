@@ -29,12 +29,14 @@ type Emitter interface {
 
 type emitter struct {
 	queue         infra.MessageQueue
+	utxoQueue     infra.MessageQueue
 	subjectPrefix string
 }
 
-func NewEmitter(queue infra.MessageQueue, subjectPrefix string) Emitter {
+func NewEmitter(queue infra.MessageQueue, utxoQueue infra.MessageQueue, subjectPrefix string) Emitter {
 	return &emitter{
 		queue:         queue,
+		utxoQueue:     utxoQueue,
 		subjectPrefix: subjectPrefix,
 	}
 }
@@ -59,7 +61,7 @@ func (e *emitter) EmitUTXO(chain string, utxo *types.UTXOEvent) error {
 	if err != nil {
 		return err
 	}
-	return e.queue.Enqueue(infra.UTXOEventTopicQueue, utxoBytes, &infra.EnqueueOptions{
+	return e.utxoQueue.Enqueue(infra.UTXOEventTopicQueue, utxoBytes, &infra.EnqueueOptions{
 		IdempotententKey: utxo.Hash(),
 	})
 }
@@ -81,5 +83,8 @@ func (e *emitter) Emit(event IndexerEvent) error {
 func (e *emitter) Close() {
 	if e.queue != nil {
 		e.queue.Close()
+	}
+	if e.utxoQueue != nil {
+		e.utxoQueue.Close()
 	}
 }

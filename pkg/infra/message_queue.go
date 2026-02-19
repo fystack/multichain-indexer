@@ -13,7 +13,7 @@ import (
 
 const (
 	TransferEventTopicQueue = "transfer.event.dispatch"
-	UTXOEventTopicQueue     = "transfer.utxo.dispatch"
+	UTXOEventTopicQueue     = "utxo.event.dispatch"
 )
 
 var (
