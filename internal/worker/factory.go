@@ -5,12 +5,16 @@ import (
 	"strconv"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	tonIndexer "github.com/fystack/multichain-indexer/internal/indexer/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
+	"github.com/fystack/multichain-indexer/internal/rpc/cosmos"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
+	tonRpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
+	tonWorker "github.com/fystack/multichain-indexer/internal/worker/ton"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -288,6 +292,119 @@ func buildSuiIndexer(
 	return indexer.NewSuiIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildCosmosIndexer constructs a Cosmos indexer with failover and providers.
+func buildCosmosIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[cosmos.CosmosAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := cosmos.NewCosmosClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: rpc.ClientTypeREST,
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewCosmosIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
+// buildTonPollingWorker constructs a TON polling worker with failover.
+// TON uses account-based polling instead of block-based indexing.
+func buildTonPollingWorker(
+	ctx context.Context,
+	chainName string,
+	chainCfg config.ChainConfig,
+	kvstore infra.KVStore,
+	redisClient infra.RedisClient,
+	db *gorm.DB,
+	emitter events.Emitter,
+) Worker {
+	var client tonRpc.TonAPI
+
+	if len(chainCfg.Nodes) > 0 {
+		configURL := chainCfg.Nodes[0].URL
+
+		var err error // shadow assignment
+		client, err = tonRpc.NewClient(ctx, tonRpc.ClientConfig{
+			ConfigURL: configURL,
+		})
+
+		if err != nil {
+			logger.Error("Failed to create TON client with global config", "url", configURL, "err", err)
+			// Proceed with nil client, IsHealthy() will return false
+		}
+	} else {
+		logger.Error("No nodes configured for TON chain", "chain", chainName)
+	}
+
+	// Create cursor store backed by KVStore
+	cursorStore := tonIndexer.NewCursorStore(kvstore)
+
+	// Create Jetton registry
+	var jettons []tonIndexer.JettonInfo
+	for _, j := range chainCfg.Jettons {
+		jettons = append(jettons, tonIndexer.JettonInfo{
+			MasterAddress: j.MasterAddress,
+			Symbol:        j.Symbol,
+			Decimals:      j.Decimals,
+		})
+	}
+	jettonRegistry := tonIndexer.NewRedisJettonRegistry(chainName, redisClient, jettons)
+	if err := jettonRegistry.Reload(ctx); err != nil {
+		logger.Error("Failed to load jetton registry from redis, using fallback config",
+			"chain", chainName,
+			"err", err,
+		)
+	}
+
+	// Create the account indexer
+	accountIndexer := tonIndexer.NewTonAccountIndexer(
+		chainName,
+		chainCfg,
+		client,
+		jettonRegistry,
+	)
+
+	// Create the polling worker
+	worker := tonWorker.NewTonPollingWorker(
+		ctx,
+		chainName,
+		chainCfg,
+		accountIndexer,
+		cursorStore,
+		db,
+		kvstore,
+		emitter,
+		tonWorker.WorkerConfig{
+			Concurrency:  chainCfg.Throttle.Concurrency,
+			PollInterval: chainCfg.PollInterval,
+		},
+	)
+	return worker
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -327,6 +444,15 @@ func CreateManagerWithWorkers(
 			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSui:
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeCosmos:
+			idxr = buildCosmosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeTon:
+			tonW := buildTonPollingWorker(ctx, chainName, chainCfg, kvstore, redisClient, db, emitter)
+			if tonW != nil {
+				manager.AddWorkers(tonW)
+				logger.Info("TON polling worker enabled", "chain", chainName)
+			}
+			continue
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}

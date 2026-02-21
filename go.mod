@@ -22,6 +22,7 @@ require (
 	github.com/shopspring/decimal v1.4.0
 	github.com/stretchr/testify v1.11.1
 	github.com/tyler-smith/go-bip39 v1.1.0
+	github.com/xssnick/tonutils-go v1.15.5
 	golang.org/x/crypto v0.44.0
 	golang.org/x/sync v0.18.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251029180050-ab9386a59fda
@@ -34,6 +35,7 @@ require (
 replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.16
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/bits-and-blooms/bitset v1.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
