@@ -1,12 +1,41 @@
--- Create wallet_address table
+-- Remove enum constraints (if old schema existed)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'wallet_addresses'
+          AND column_name = 'type'
+          AND udt_name = 'address_type'
+    ) THEN
+        ALTER TABLE wallet_addresses
+            ALTER COLUMN type TYPE VARCHAR(64) USING type::text;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'wallet_addresses'
+          AND column_name = 'standard'
+          AND udt_name = 'address_standard'
+    ) THEN
+        ALTER TABLE wallet_addresses
+            ALTER COLUMN standard TYPE VARCHAR(64) USING standard::text;
+    END IF;
+END $$;
+
+DROP TYPE IF EXISTS address_type;
+DROP TYPE IF EXISTS address_standard;
+
+-- Create wallet_address table without enum constraints
 CREATE TABLE IF NOT EXISTS wallet_addresses (
     id BIGSERIAL PRIMARY KEY,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     deleted_at TIMESTAMP WITH TIME ZONE,
     address VARCHAR(255) NOT NULL,
-    type address_type NOT NULL,
-    standard address_standard
+    type VARCHAR(64) NOT NULL,
+    standard VARCHAR(64)
 );
 
 -- Create unique index on address
@@ -17,41 +46,11 @@ CREATE INDEX IF NOT EXISTS idx_wallet_address_type ON wallet_addresses (type);
 CREATE INDEX IF NOT EXISTS idx_wallet_address_standard ON wallet_addresses (standard);
 CREATE INDEX IF NOT EXISTS idx_wallet_address_created_at ON wallet_addresses (created_at);
 
--- Create enum types if they don't exist
-DO $$ BEGIN
-    CREATE TYPE address_type AS ENUM (
-        'evm',
-        'btc',
-        'sol',
-        'aptos',
-        'tron'
-    );
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
-DO $$ BEGIN
-    CREATE TYPE address_standard AS ENUM (
-        'erc20',
-        'erc721',
-        'erc1155',
-        'native',
-        'spl',
-        'trc20',
-        'trc721',
-        'btc_p2pkh',
-        'btc_p2sh',
-        'btc_bech32'
-    );
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-
 -- Add comments for documentation
 COMMENT ON TABLE wallet_addresses IS 'Stores wallet addresses for different blockchain networks';
 COMMENT ON COLUMN wallet_addresses.address IS 'The wallet address string';
-COMMENT ON COLUMN wallet_addresses.type IS 'The blockchain network type (evm, bitcoin, solana, tron)';
-COMMENT ON COLUMN wallet_addresses.standard IS 'The token standard (erc20, erc721, etc.)';
+COMMENT ON COLUMN wallet_addresses.type IS 'The blockchain network type (free text, no enum constraint)';
+COMMENT ON COLUMN wallet_addresses.standard IS 'The token standard (free text, no enum constraint)';
 
 -- Insert sample data
 INSERT INTO wallet_addresses (address, type, standard) VALUES
@@ -59,4 +58,5 @@ INSERT INTO wallet_addresses (address, type, standard) VALUES
 ('TT1j2adMBb6bF2K8C2LX1QkkmSXHjiaAfw', 'tron', 'trc20'),
 ('Ef8zMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM0vF', 'ton', 'native'),
 ('EQDKHZ7e70CzqdvZCC83Z4WVR8POC_ZB0J1Y4zo88G-zCXmC', 'ton', 'native'),
-('EQBeab7D38RIwypegbN7YZgQzwDbb8QfMMwY8ouJc3qPl91M', 'ton', 'native');
+('EQBeab7D38RIwypegbN7YZgQzwDbb8QfMMwY8ouJc3qPl91M', 'ton', 'native')
+ON CONFLICT (address) DO NOTHING;

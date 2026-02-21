@@ -19,13 +19,14 @@ const (
 )
 
 const (
-	NetworkTypeEVM  NetworkType = "evm"
-	NetworkTypeTron NetworkType = "tron"
-	NetworkTypeBtc  NetworkType = "btc"
-	NetworkTypeSol  NetworkType = "sol"
-	NetworkTypeApt  NetworkType = "apt"
-	NetworkTypeSui  NetworkType = "sui"
-	NetworkTypeTon  NetworkType = "ton"
+	NetworkTypeEVM    NetworkType = "evm"
+	NetworkTypeTron   NetworkType = "tron"
+	NetworkTypeBtc    NetworkType = "btc"
+	NetworkTypeSol    NetworkType = "sol"
+	NetworkTypeApt    NetworkType = "apt"
+	NetworkTypeSui    NetworkType = "sui"
+	NetworkTypeTon    NetworkType = "ton"
+	NetworkTypeCosmos NetworkType = "cosmos"
 )
 
 const (

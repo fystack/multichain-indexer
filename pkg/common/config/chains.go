@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"dario.cat/mergo"
 )
@@ -47,6 +48,12 @@ func (c Chains) OverrideFromLatest(names []string) {
 // ApplyDefaults merges global defaults into all chain configs.
 func (c Chains) ApplyDefaults(def Defaults) error {
 	for name, chain := range c {
+		if strings.TrimSpace(chain.NetworkId) == "" {
+			chain.NetworkId = name
+		}
+		if strings.TrimSpace(chain.InternalCode) == "" {
+			chain.InternalCode = strings.ToUpper(name)
+		}
 		if !chain.FromLatest {
 			chain.FromLatest = def.FromLatest
 		}

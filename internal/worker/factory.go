@@ -8,6 +8,7 @@ import (
 	tonIndexer "github.com/fystack/multichain-indexer/internal/indexer/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
+	"github.com/fystack/multichain-indexer/internal/rpc/cosmos"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
@@ -291,6 +292,44 @@ func buildSuiIndexer(
 	return indexer.NewSuiIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildCosmosIndexer constructs a Cosmos indexer with failover and providers.
+func buildCosmosIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[cosmos.CosmosAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := cosmos.NewCosmosClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: rpc.ClientTypeREST,
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewCosmosIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
 // buildTonPollingWorker constructs a TON polling worker with failover.
 // TON uses account-based polling instead of block-based indexing.
 func buildTonPollingWorker(
@@ -405,6 +444,8 @@ func CreateManagerWithWorkers(
 			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSui:
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeCosmos:
+			idxr = buildCosmosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTon:
 			tonW := buildTonPollingWorker(ctx, chainName, chainCfg, kvstore, redisClient, db, emitter)
 			if tonW != nil {

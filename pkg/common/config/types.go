@@ -37,6 +37,7 @@ type ChainConfig struct {
 	Name                string           `yaml:"-"`
 	NetworkId           string           `yaml:"network_id"`
 	InternalCode        string           `yaml:"internal_code"`
+	NativeDenom         string           `yaml:"native_denom"`
 	Type                enum.NetworkType `yaml:"type"                  validate:"required"`
 	FromLatest          bool             `yaml:"from_latest"`
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`

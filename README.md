@@ -19,6 +19,7 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 - Bitcoin
 - Solana
 - Sui
+- Cosmos (Osmosis, Celestia, Cosmos Hub)
 
 ---
 
@@ -304,6 +305,22 @@ chains:
       throttle:
         rps: 5
         burst: 8
+
+  cosmoshub_mainnet:
+    type: "cosmos"
+    network_id: "cosmoshub-4"
+    native_denom: "uatom"
+    nodes:
+      - url: "https://rpc.cosmos.directory/cosmoshub"
+      - url: "https://cosmos-rpc.publicnode.com"
+    poll_interval: "5s"
+    client:
+      timeout: "20s"
+      max_retries: 3
+      retry_delay: "2s"
+    throttle:
+      rps: 20
+      burst: 40
 ```
 
 ## 📡 Consuming Transaction Events
