@@ -171,10 +171,6 @@ chains:
     throttle:
       concurrency: 10
       batch_size: 50
-    jettons:
-      - master_address: "EQCxE6mUtQJKFnGfaROTgt1lZbDiiX1Gw83iAV82Cn_0opUb" # USDT
-        symbol: "USDT"
-        decimals: 6
 
   ton_testnet:
     network_id: "ton_testnet"
@@ -191,11 +187,7 @@ chains:
       burst: 20
       batch_size: 1
       concurrency: 4
-    jettons:
-      - master_address: "0:1de7d5cc59be344d17f1a93274a2dad44ea0fc66ec4b1e10bc4f8d35039f8aaf"
-        symbol: "USDT"
-        decimals: 6
-
+      
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port

@@ -46,13 +46,6 @@ type ChainConfig struct {
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`
-	Jettons             []JettonConfig   `yaml:"jettons"`
-}
-
-type JettonConfig struct {
-	MasterAddress string `yaml:"master_address"`
-	Symbol        string `yaml:"symbol"`
-	Decimals      int    `yaml:"decimals"`
 }
 
 type ClientConfig struct {
