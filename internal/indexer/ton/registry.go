@@ -2,19 +2,24 @@ package ton
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/redis/go-redis/v9"
 )
 
 const (
-	jettonMasterListKeyFormat    = "ton/jettons/%s/masters"
-	jettonWalletMappingKeyFormat = "ton/jettons/%s/wallet_to_master"
+	assetCacheKeyPatternFormat = "assetcache:%s:*"
+	redisScanCount             = int64(200)
+	walletMappingTTL           = 24 * time.Hour
+	walletPruneInterval        = 5 * time.Minute
 )
 
 // ConfigBasedRegistry implements JettonRegistry with a static list of Jettons.
@@ -94,102 +99,140 @@ func (r *ConfigBasedRegistry) List() []JettonInfo {
 	return result
 }
 
-// RedisJettonRegistry loads supported jettons from Redis and keeps an in-memory snapshot.
+// RedisJettonRegistry loads supported jettons from Redis asset cache and keeps an in-memory snapshot.
 // Key format:
-// - ton/jettons/<chain>/masters: JSON []JettonInfo
-// - ton/jettons/<chain>/wallet_to_master: JSON map[string]string
+// - assetcache:<network_code>:<asset_code> (source of supported jettons)
+// Wallet-to-master mapping is runtime in-memory only.
 type RedisJettonRegistry struct {
-	redis     infra.RedisClient
-	chainName string
-
-	fallbackJettons []JettonInfo
+	redis       infra.RedisClient
+	networkCode string
 
 	mu             sync.RWMutex
 	jettons        map[string]JettonInfo
 	walletToMaster map[string]string
+	walletSeenAt   map[string]time.Time
+	lastPruneAt    time.Time
 }
 
-func NewRedisJettonRegistry(chainName string, redisClient infra.RedisClient, fallback []JettonInfo) *RedisJettonRegistry {
+func NewRedisJettonRegistry(networkCode string, redisClient infra.RedisClient) *RedisJettonRegistry {
 	reg := &RedisJettonRegistry{
-		redis:           redisClient,
-		chainName:       chainName,
-		fallbackJettons: append([]JettonInfo(nil), fallback...),
-		jettons:         make(map[string]JettonInfo),
-		walletToMaster:  make(map[string]string),
+		redis:          redisClient,
+		networkCode:    strings.TrimSpace(networkCode),
+		jettons:        make(map[string]JettonInfo),
+		walletToMaster: make(map[string]string),
+		walletSeenAt:   make(map[string]time.Time),
 	}
-	reg.applyFallback()
 	return reg
 }
 
-func (r *RedisJettonRegistry) applyFallback() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	r.jettons = make(map[string]JettonInfo, len(r.fallbackJettons))
-	r.walletToMaster = make(map[string]string)
-	for _, j := range r.fallbackJettons {
-		if j.MasterAddress == "" {
-			continue
-		}
-		r.jettons[j.MasterAddress] = j
-	}
-}
-
-func (r *RedisJettonRegistry) mastersKey() string {
-	return fmt.Sprintf(jettonMasterListKeyFormat, r.chainName)
-}
-
-func (r *RedisJettonRegistry) walletMappingKey() string {
-	return fmt.Sprintf(jettonWalletMappingKeyFormat, r.chainName)
-}
-
 // Reload refreshes the registry snapshot from Redis.
-func (r *RedisJettonRegistry) Reload(_ context.Context) error {
+func (r *RedisJettonRegistry) Reload(ctx context.Context) error {
 	if r.redis == nil {
-		r.applyFallback()
+		r.mu.Lock()
+		r.jettons = make(map[string]JettonInfo)
+		r.walletToMaster = make(map[string]string)
+		r.walletSeenAt = make(map[string]time.Time)
+		r.lastPruneAt = time.Time{}
+		r.mu.Unlock()
 		return nil
 	}
-
-	nextJettons := make(map[string]JettonInfo, len(r.fallbackJettons))
-	for _, j := range r.fallbackJettons {
-		if j.MasterAddress == "" {
-			continue
-		}
-		nextJettons[j.MasterAddress] = j
+	if ctx == nil {
+		ctx = context.Background()
 	}
+
+	nextJettons := make(map[string]JettonInfo)
 	nextWallets := make(map[string]string)
+	nextSeenAt := make(map[string]time.Time)
+	r.mu.RLock()
+	maps.Copy(nextWallets, r.walletToMaster)
+	maps.Copy(nextSeenAt, r.walletSeenAt)
+	lastPruneAt := r.lastPruneAt
+	r.mu.RUnlock()
 
-	masterRaw, err := r.redis.Get(r.mastersKey())
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("get jetton masters from redis: %w", err)
-	}
-	if err == nil && strings.TrimSpace(masterRaw) != "" {
-		var masters []JettonInfo
-		if unmarshalErr := json.Unmarshal([]byte(masterRaw), &masters); unmarshalErr != nil {
-			return fmt.Errorf("unmarshal jetton masters: %w", unmarshalErr)
-		}
-		for _, j := range masters {
-			if j.MasterAddress == "" {
-				continue
-			}
-			nextJettons[j.MasterAddress] = j
-		}
-	}
-
-	walletRaw, err := r.redis.Get(r.walletMappingKey())
-	if err != nil && !errors.Is(err, redis.Nil) {
-		return fmt.Errorf("get jetton wallet mapping from redis: %w", err)
-	}
-	if err == nil && strings.TrimSpace(walletRaw) != "" {
-		if unmarshalErr := json.Unmarshal([]byte(walletRaw), &nextWallets); unmarshalErr != nil {
-			return fmt.Errorf("unmarshal jetton wallet mapping: %w", unmarshalErr)
-		}
+	if err := r.loadJettonsFromAssetCache(ctx, nextJettons); err != nil {
+		return err
 	}
 
 	r.mu.Lock()
 	r.jettons = nextJettons
 	r.walletToMaster = nextWallets
+	r.walletSeenAt = nextSeenAt
+	r.lastPruneAt = lastPruneAt
+	r.pruneExpiredLocked(time.Now())
 	r.mu.Unlock()
+	return nil
+}
+
+func (r *RedisJettonRegistry) loadJettonsFromAssetCache(
+	ctx context.Context,
+	nextJettons map[string]JettonInfo,
+) error {
+	client := r.redis.GetClient()
+	if client == nil {
+		return fmt.Errorf("redis client is nil")
+	}
+
+	pattern := fmt.Sprintf(assetCacheKeyPatternFormat, r.networkCode)
+	if err := r.scanAssetCachePattern(ctx, client, pattern, nextJettons); err != nil {
+		return fmt.Errorf("load asset cache by network code %q: %w", r.networkCode, err)
+	}
+
+	return nil
+}
+
+func (r *RedisJettonRegistry) scanAssetCachePattern(
+	ctx context.Context,
+	client *redis.Client,
+	pattern string,
+	nextJettons map[string]JettonInfo,
+) error {
+	var cursor uint64
+	for {
+		keys, nextCursor, err := client.Scan(ctx, cursor, pattern, redisScanCount).Result()
+		if err != nil {
+			return fmt.Errorf("scan keys by pattern %q: %w", pattern, err)
+		}
+
+		for _, key := range keys {
+			masterAddress, err := extractAssetCodeFromKey(key)
+			if err != nil {
+				continue
+			}
+			if strings.EqualFold(masterAddress, "native") {
+				continue
+			}
+
+			raw, err := client.Get(ctx, key).Result()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					continue
+				}
+				return fmt.Errorf("get asset cache %q: %w", key, err)
+			}
+
+			meta, ok := parseAssetCacheMetadata(raw)
+			if !ok || meta.IsNativeAsset {
+				continue
+			}
+
+			normalizedMaster := NormalizeTONAddressRaw(masterAddress)
+			if normalizedMaster == "" {
+				continue
+			}
+
+			nextJettons[normalizedMaster] = JettonInfo{
+				MasterAddress: normalizedMaster,
+				Symbol:        meta.Symbol,
+				Decimals:      meta.Decimals,
+			}
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
 	return nil
 }
 
@@ -217,14 +260,17 @@ func (r *RedisJettonRegistry) GetInfo(masterAddress string) (*JettonInfo, bool) 
 }
 
 func (r *RedisJettonRegistry) GetInfoByWallet(walletAddress string) (*JettonInfo, bool) {
-	r.mu.RLock()
+	now := time.Now()
+	r.mu.Lock()
+	r.pruneExpiredLocked(now)
 	masterAddress, ok := r.walletToMaster[walletAddress]
 	if !ok {
-		r.mu.RUnlock()
+		r.mu.Unlock()
 		return nil, false
 	}
+	r.walletSeenAt[walletAddress] = now
 	info, ok := r.jettons[masterAddress]
-	r.mu.RUnlock()
+	r.mu.Unlock()
 	if !ok {
 		// Fallback: return master address even when token metadata is not in masters list.
 		return &JettonInfo{MasterAddress: masterAddress}, true
@@ -236,24 +282,16 @@ func (r *RedisJettonRegistry) RegisterWallet(walletAddress, masterAddress string
 	if strings.TrimSpace(walletAddress) == "" || strings.TrimSpace(masterAddress) == "" {
 		return
 	}
+	if normalizedMaster := NormalizeTONAddressRaw(masterAddress); normalizedMaster != "" {
+		masterAddress = normalizedMaster
+	}
 
+	now := time.Now()
 	r.mu.Lock()
+	r.pruneExpiredLocked(now)
 	r.walletToMaster[walletAddress] = masterAddress
-	snapshot := make(map[string]string, len(r.walletToMaster))
-	for k, v := range r.walletToMaster {
-		snapshot[k] = v
-	}
+	r.walletSeenAt[walletAddress] = now
 	r.mu.Unlock()
-
-	if r.redis == nil {
-		return
-	}
-
-	payload, err := json.Marshal(snapshot)
-	if err != nil {
-		return
-	}
-	_ = r.redis.Set(r.walletMappingKey(), string(payload), 0)
 }
 
 func (r *RedisJettonRegistry) List() []JettonInfo {
@@ -265,4 +303,100 @@ func (r *RedisJettonRegistry) List() []JettonInfo {
 		result = append(result, j)
 	}
 	return result
+}
+
+type assetCacheMetadata struct {
+	AssetID       string `json:"asset_id"`
+	Symbol        string `json:"symbol"`
+	Decimals      int    `json:"decimals"`
+	IsNativeAsset bool   `json:"is_native_asset"`
+}
+
+func extractAssetCodeFromKey(key string) (string, error) {
+	parts := strings.Split(key, ":")
+	if len(parts) < 3 || parts[0] != "assetcache" {
+		return "", fmt.Errorf("invalid asset cache key: %s", key)
+	}
+	return strings.Join(parts[2:], ":"), nil
+}
+
+func parseAssetCacheMetadata(raw string) (*assetCacheMetadata, bool) {
+	return parseAssetCacheMetadataBytes([]byte(strings.TrimSpace(raw)))
+}
+
+func parseAssetCacheMetadataBytes(payload []byte) (*assetCacheMetadata, bool) {
+	payload = []byte(strings.TrimSpace(string(payload)))
+	if len(payload) == 0 {
+		return nil, false
+	}
+
+	meta := &assetCacheMetadata{}
+	if err := json.Unmarshal(payload, meta); err == nil {
+		if isValidAssetCacheMetadata(meta) {
+			return meta, true
+		}
+		return nil, false
+	}
+
+	var wrapped string
+	if err := json.Unmarshal(payload, &wrapped); err == nil {
+		return parseAssetCacheMetadataBytes([]byte(wrapped))
+	}
+
+	if decoded, ok := decodeBase64(payload); ok {
+		return parseAssetCacheMetadataBytes(decoded)
+	}
+
+	return nil, false
+}
+
+func isValidAssetCacheMetadata(meta *assetCacheMetadata) bool {
+	if meta == nil {
+		return false
+	}
+	// Keep parser strict enough to avoid treating arbitrary JSON as asset metadata.
+	return strings.TrimSpace(meta.Symbol) != "" || strings.TrimSpace(meta.AssetID) != ""
+}
+
+func decodeBase64(payload []byte) ([]byte, bool) {
+	text := strings.TrimSpace(string(payload))
+	if text == "" {
+		return nil, false
+	}
+
+	encodings := []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	}
+
+	for _, enc := range encodings {
+		decoded, err := enc.DecodeString(text)
+		if err != nil || len(decoded) == 0 {
+			continue
+		}
+		return decoded, true
+	}
+	return nil, false
+}
+
+func (r *RedisJettonRegistry) pruneExpiredLocked(now time.Time) {
+	if !r.lastPruneAt.IsZero() && now.Sub(r.lastPruneAt) < walletPruneInterval {
+		return
+	}
+	r.lastPruneAt = now
+
+	if len(r.walletToMaster) == 0 {
+		return
+	}
+
+	expireBefore := now.Add(-walletMappingTTL)
+	for wallet, seenAt := range r.walletSeenAt {
+		if seenAt.After(expireBefore) {
+			continue
+		}
+		delete(r.walletSeenAt, wallet)
+		delete(r.walletToMaster, wallet)
+	}
 }

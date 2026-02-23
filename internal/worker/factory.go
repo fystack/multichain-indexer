@@ -323,20 +323,20 @@ func buildTonPollingWorker(
 	// Create cursor store backed by KVStore
 	cursorStore := tonIndexer.NewCursorStore(kvstore)
 
-	// Create Jetton registry
-	var jettons []tonIndexer.JettonInfo
-	for _, j := range chainCfg.Jettons {
-		jettons = append(jettons, tonIndexer.JettonInfo{
-			MasterAddress: j.MasterAddress,
-			Symbol:        j.Symbol,
-			Decimals:      j.Decimals,
-		})
-	}
-	jettonRegistry := tonIndexer.NewRedisJettonRegistry(chainName, redisClient, jettons)
+	// Create Jetton registry from asset cache in Redis.
+	jettonRegistry := tonIndexer.NewRedisJettonRegistry(
+		chainName,
+		redisClient,
+	)
 	if err := jettonRegistry.Reload(ctx); err != nil {
-		logger.Error("Failed to load jetton registry from redis, using fallback config",
+		logger.Error("Failed to load jetton registry from redis asset cache",
 			"chain", chainName,
 			"err", err,
+		)
+	} else {
+		logger.Info("TON jettons loaded from asset cache",
+			"chain", chainName,
+			"jetton_count", len(jettonRegistry.List()),
 		)
 	}
 

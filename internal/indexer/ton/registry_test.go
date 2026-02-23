@@ -1,6 +1,8 @@
 package ton
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -56,17 +58,63 @@ func TestConfigBasedRegistryGetInfoByWalletFallback(t *testing.T) {
 	assert.Equal(t, "master-1", info.MasterAddress)
 }
 
-func TestRedisJettonRegistryRegisterWalletPersistsAndFallback(t *testing.T) {
+func TestRedisJettonRegistryRegisterWalletLookupByWallet(t *testing.T) {
 	redisClient := &mockRedisClient{data: make(map[string]string)}
-	reg := NewRedisJettonRegistry("ton_testnet", redisClient, nil)
+	reg := NewRedisJettonRegistry("ton_testnet", redisClient)
 
 	reg.RegisterWallet("wallet-1", "master-1")
 
 	info, ok := reg.GetInfoByWallet("wallet-1")
 	assert.True(t, ok)
 	assert.Equal(t, "master-1", info.MasterAddress)
+}
 
-	raw, exists := redisClient.data[reg.walletMappingKey()]
-	assert.True(t, exists)
-	assert.Contains(t, raw, "\"wallet-1\":\"master-1\"")
+func TestParseAssetCacheMetadata_Base64JSON(t *testing.T) {
+	payload := map[string]any{
+		"asset_id":        "asset-1",
+		"symbol":          "USDT",
+		"decimals":        6,
+		"is_native_asset": false,
+	}
+	rawJSON, err := json.Marshal(payload)
+	assert.NoError(t, err)
+
+	encoded := base64.StdEncoding.EncodeToString(rawJSON)
+	meta, ok := parseAssetCacheMetadata(encoded)
+	assert.True(t, ok)
+	assert.Equal(t, "asset-1", meta.AssetID)
+	assert.Equal(t, "USDT", meta.Symbol)
+	assert.Equal(t, 6, meta.Decimals)
+	assert.False(t, meta.IsNativeAsset)
+}
+
+func TestParseAssetCacheMetadata_QuotedBase64(t *testing.T) {
+	payload := map[string]any{
+		"asset_id":        "asset-2",
+		"symbol":          "JET",
+		"decimals":        9,
+		"is_native_asset": false,
+	}
+	rawJSON, err := json.Marshal(payload)
+	assert.NoError(t, err)
+	encoded := base64.StdEncoding.EncodeToString(rawJSON)
+
+	wrapped, err := json.Marshal(encoded)
+	assert.NoError(t, err)
+
+	meta, ok := parseAssetCacheMetadata(string(wrapped))
+	assert.True(t, ok)
+	assert.Equal(t, "asset-2", meta.AssetID)
+	assert.Equal(t, "JET", meta.Symbol)
+	assert.Equal(t, 9, meta.Decimals)
+	assert.False(t, meta.IsNativeAsset)
+}
+
+func TestRedisJettonRegistryRegisterWalletInMemoryOnly(t *testing.T) {
+	redisClient := &mockRedisClient{data: make(map[string]string)}
+	reg := NewRedisJettonRegistry("ton_mainnet", redisClient)
+
+	reg.RegisterWallet("wallet-1", "master-1")
+
+	assert.Empty(t, redisClient.data)
 }
