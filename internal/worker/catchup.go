@@ -69,7 +69,34 @@ func (cw *CatchupWorker) Start() {
 		"total_blocks", totalBlocks,
 		"parallel_workers", CATCHUP_WORKERS,
 	)
-	go cw.run(cw.processCatchupBlocksParallel)
+	go cw.runCatchup()
+}
+
+// runCatchup is a tight loop that processes catchup ranges without PollInterval delays.
+// Unlike the base run() method, it exits once all ranges are processed.
+func (cw *CatchupWorker) runCatchup() {
+	for {
+		select {
+		case <-cw.ctx.Done():
+			cw.logger.Info("Context done, stopping catchup worker loop")
+			return
+		default:
+		}
+
+		if err := cw.processCatchupBlocksParallel(); err != nil {
+			cw.logger.Error("Catchup job error", "err", err)
+			_ = cw.emitter.EmitError(cw.chain.GetName(), err)
+			continue
+		}
+
+		// If no ranges remain, catchup is done
+		if len(cw.blockRanges) == 0 {
+			cw.logger.Info("Catchup completed, no more ranges to process",
+				"chain", cw.chain.GetName(),
+			)
+			return
+		}
+	}
 }
 
 func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
