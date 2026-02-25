@@ -210,34 +210,37 @@ func (bw *BaseWorker) emitUTXOs(block *types.Block) {
 	addressType := bw.chain.GetNetworkType()
 	for i := range events {
 		event := &events[i]
-		isRelevant := false
 
+		// Filter to only include UTXOs where the address is in the pubkey store
+		var filteredCreated []types.UTXO
 		for _, utxo := range event.Created {
 			if bw.pubkeyStore.Exist(addressType, utxo.Address) {
-				isRelevant = true
-				break
+				filteredCreated = append(filteredCreated, utxo)
 			}
 		}
 
-		if !isRelevant {
-			for _, spent := range event.Spent {
-				if bw.pubkeyStore.Exist(addressType, spent.Address) {
-					isRelevant = true
-					break
-				}
+		var filteredSpent []types.SpentUTXO
+		for _, spent := range event.Spent {
+			if bw.pubkeyStore.Exist(addressType, spent.Address) {
+				filteredSpent = append(filteredSpent, spent)
 			}
 		}
 
-		if isRelevant {
-			bw.logger.Info("Emitting UTXO event",
-				"chain", bw.chain.GetName(),
-				"txhash", event.TxHash,
-				"created", len(event.Created),
-				"spent", len(event.Spent),
-				"status", event.Status,
-				"confirmations", event.Confirmations,
-			)
-			_ = bw.emitter.EmitUTXO(bw.chain.GetName(), event)
+		if len(filteredCreated) == 0 && len(filteredSpent) == 0 {
+			continue
 		}
+
+		event.Created = filteredCreated
+		event.Spent = filteredSpent
+
+		bw.logger.Info("Emitting UTXO event",
+			"chain", bw.chain.GetName(),
+			"txhash", event.TxHash,
+			"created", len(event.Created),
+			"spent", len(event.Spent),
+			"status", event.Status,
+			"confirmations", event.Confirmations,
+		)
+		_ = bw.emitter.EmitUTXO(bw.chain.GetName(), event)
 	}
 }
