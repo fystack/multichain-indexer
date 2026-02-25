@@ -138,13 +138,17 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	defer natsConn.Close()
 	logger.Info("NATS connection established")
 
-	transferEventQueueManager := infra.NewNATsMessageQueueManager("transfer", []string{
+	eventQueueManager := infra.NewNATsMessageQueueManager("transfer", []string{
 		"transfer.event.*",
 	}, natsConn)
+	eventQueue := eventQueueManager.NewMessageQueue("dispatch")
 
-	transferQueue := transferEventQueueManager.NewMessageQueue("dispatch")
+	utxoQueueManager := infra.NewNATsMessageQueueManager("utxo", []string{
+		"utxo.event.*",
+	}, natsConn)
+	utxoQueue := utxoQueueManager.NewMessageQueue("dispatch")
 
-	emitter := events.NewEmitter(transferQueue, services.Nats.SubjectPrefix)
+	emitter := events.NewEmitter(eventQueue, utxoQueue, services.Nats.SubjectPrefix)
 	defer emitter.Close()
 
 	// start address bloom filter (Initialize is optional)
