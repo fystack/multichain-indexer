@@ -35,7 +35,7 @@ func NewTronClient(
 
 // GetBlockNumber returns the current block number
 func (t *Client) GetBlockNumber(ctx context.Context) (uint64, error) {
-	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/getnowblock", nil, nil)
+	data, err := t.Do(ctx, http.MethodPost, "/wallet/getnowblock", nil, nil)
 	if err != nil {
 		return 0, fmt.Errorf("getNowBlock failed: %w", err)
 	}
@@ -57,7 +57,7 @@ func (t *Client) GetBlockByNumber(
 		"id_or_num": blockNumber,
 		"detail":    detail,
 	}
-	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/getblock", body, nil)
+	data, err := t.Do(ctx, http.MethodPost, "/wallet/getblock", body, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getBlockByNumber failed: %w", err)
 	}
@@ -76,7 +76,7 @@ func (t *Client) BatchGetTransactionReceiptsByBlockNum(
 	data, err := t.Do(
 		ctx,
 		http.MethodPost,
-		"/walletsolidity/gettransactioninfobyblocknum",
+		"/wallet/gettransactioninfobyblocknum",
 		body,
 		nil,
 	)
@@ -93,7 +93,7 @@ func (t *Client) BatchGetTransactionReceiptsByBlockNum(
 // GetTransactionInfo gets detailed transaction info including fees
 func (t *Client) GetTransactionInfo(ctx context.Context, txHash string) (*TxnInfo, error) {
 	body := map[string]any{"value": txHash}
-	data, err := t.Do(ctx, http.MethodPost, "/walletsolidity/gettransactioninfobyid", body, nil)
+	data, err := t.Do(ctx, http.MethodPost, "/wallet/gettransactioninfobyid", body, nil)
 	if err != nil {
 		return nil, fmt.Errorf("getTransactionInfoById failed: %w", err)
 	}
