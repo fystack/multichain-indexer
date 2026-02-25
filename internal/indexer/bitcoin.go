@@ -73,8 +73,8 @@ func (b *BitcoinIndexer) GetBlock(ctx context.Context, number uint64) (*types.Bl
 	var btcBlock *bitcoin.Block
 
 	err := b.failover.ExecuteWithRetry(ctx, func(c bitcoin.BitcoinAPI) error {
-		// Verbosity 2 = full transaction details (prevout may or may not be included)
-		block, err := c.GetBlockByHeight(ctx, number, 2)
+		// Verbosity 3 = full transaction details with prevout data included (Bitcoin Core 25+)
+		block, err := c.GetBlockByHeight(ctx, number, 3)
 		if err != nil {
 			return err
 		}
