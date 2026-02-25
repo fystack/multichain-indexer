@@ -32,6 +32,7 @@ type Transaction struct {
 	Timestamp     uint64          `json:"timestamp"`
 	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
 	Status        string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
+	Direction     string          `json:"direction,omitempty"` // "in" or "out" - set when emitting dual events for sweep transactions
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
