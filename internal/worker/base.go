@@ -175,6 +175,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
 				"chain", bw.chain.GetName(),
+				"type", tx.Type,
 				"addressType", addressType,
 				"txhash", tx.TxHash,
 				"status", tx.Status,

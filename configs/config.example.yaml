@@ -228,26 +228,6 @@ chains:
       batch_size: 20
       concurrency: 4
 
-  celestia_mainnet:
-    network_id: "celestia"
-    internal_code: "TIA_MAINNET"
-    native_denom: "utia"
-    type: "cosmos"
-    start_block: 0
-    poll_interval: "5s"
-    nodes:
-      - url: "https://rpc-celestia.01node.com"
-      - url: "https://celestia-rpc.publicnode.com"
-    client:
-      timeout: "20s"
-      max_retries: 3
-      retry_delay: "2s"
-    throttle:
-      rps: 20
-      burst: 40
-      batch_size: 20
-      concurrency: 4
-
   ton_mainnet:
     network_id: "ton"
     internal_code: "TON_MAINNET"

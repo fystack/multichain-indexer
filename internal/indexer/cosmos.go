@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -27,6 +28,7 @@ var cosmosCoinRegexp = regexp.MustCompile(`^([0-9]+)([a-zA-Z0-9/._:-]+)$`)
 const (
 	cosmosNativeDenomOsmosis = "uosmo"
 	cosmosNativeDenomAtom    = "uatom"
+	cosmosIBCDenomPrefix     = "ibc/"
 
 	cosmosNetworkHintOsmosis = "osmosis"
 	cosmosNetworkHintOsmo    = "osmo"
@@ -35,6 +37,8 @@ const (
 	cosmosNetworkHintCosmos  = "cosmos"
 	cosmosNetworkHintHubWord = "hub"
 	cosmosNetworkHintCosmos1 = "cosmos1"
+
+	cosmosIBCTransferMsgAction = "/ibc.applications.transfer.v1.MsgTransfer"
 )
 
 type CosmosIndexer struct {
@@ -315,9 +319,46 @@ type cosmosTransfer struct {
 	recipient string
 	amount    string
 	denom     string
+	source    cosmosTransferSource
 }
 
+type cosmosTransferSource uint8
+
+const (
+	cosmosTransferSourceBank cosmosTransferSource = iota + 1
+	cosmosTransferSourceCW20
+	cosmosTransferSourcePacketRecv
+)
+
 func extractCosmosTransfers(events []cosmos.Event) []cosmosTransfer {
+	transfers := make([]cosmosTransfer, 0)
+	ibcMsgTransferIndexes := extractCosmosIBCMsgTransferIndexes(events)
+	hasIBCTransferEvent := hasCosmosEventType(events, "ibc_transfer")
+	skipSourceIBCTransfers := hasCosmosEventType(events, "send_packet") && !hasCosmosEventType(events, "recv_packet")
+	ibcSourceDenoms := extractCosmosSourceIBCDenoms(events)
+
+	transfers = append(
+		transfers,
+		extractCosmosBankTransfers(
+			events,
+			ibcMsgTransferIndexes,
+			hasIBCTransferEvent,
+			skipSourceIBCTransfers,
+			ibcSourceDenoms,
+		)...,
+	)
+	transfers = append(transfers, extractCosmosCW20Transfers(events)...)
+	transfers = append(transfers, extractCosmosRecvPacketTransfers(events)...)
+	return dedupCosmosTransfers(transfers)
+}
+
+func extractCosmosBankTransfers(
+	events []cosmos.Event,
+	ibcMsgTransferIndexes map[string]struct{},
+	hasIBCTransferEvent bool,
+	skipSourceIBCTransfers bool,
+	ibcSourceDenoms map[string]struct{},
+) []cosmosTransfer {
 	transfers := make([]cosmosTransfer, 0)
 
 	for _, event := range events {
@@ -329,6 +370,7 @@ func extractCosmosTransfers(events []cosmos.Event) []cosmosTransfer {
 			senders    []string
 			recipients []string
 			amounts    []string
+			msgIndexes = make(map[string]struct{})
 		)
 
 		for _, attr := range event.Attributes {
@@ -345,6 +387,8 @@ func extractCosmosTransfers(events []cosmos.Event) []cosmosTransfer {
 				recipients = append(recipients, value)
 			case "amount":
 				amounts = append(amounts, value)
+			case "msg_index":
+				msgIndexes[value] = struct{}{}
 			}
 		}
 
@@ -352,17 +396,554 @@ func extractCosmosTransfers(events []cosmos.Event) []cosmosTransfer {
 		for i := 0; i < count; i++ {
 			coins := parseCosmosCoins(amounts[i])
 			for _, coin := range coins {
+				if shouldSkipIBCSourceTransferCoin(
+					msgIndexes,
+					ibcMsgTransferIndexes,
+					hasIBCTransferEvent,
+					skipSourceIBCTransfers,
+					coin.Denom,
+					ibcSourceDenoms,
+				) {
+					continue
+				}
 				transfers = append(transfers, cosmosTransfer{
 					sender:    senders[i],
 					recipient: recipients[i],
 					amount:    coin.Amount,
 					denom:     coin.Denom,
+					source:    cosmosTransferSourceBank,
 				})
 			}
 		}
 	}
 
 	return transfers
+}
+
+type cosmosPacketData struct {
+	Amount   string `json:"amount"`
+	Denom    string `json:"denom"`
+	Receiver string `json:"receiver"`
+	Sender   string `json:"sender"`
+}
+
+func extractCosmosRecvPacketTransfers(events []cosmos.Event) []cosmosTransfer {
+	transfers := make([]cosmosTransfer, 0)
+	ackByMsgIndex := extractCosmosAckStatusByMsgIndex(events)
+
+	for _, event := range events {
+		if event.Type != "recv_packet" {
+			continue
+		}
+
+		packetDataRaw := ""
+		packetDataHex := ""
+		msgIndex := ""
+		packetSrcPort := ""
+		packetSrcChannel := ""
+		packetDstPort := ""
+		packetDstChannel := ""
+
+		for _, attr := range event.Attributes {
+			key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+			value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+			if value == "" {
+				continue
+			}
+
+			switch key {
+			case "packet_data":
+				packetDataRaw = value
+			case "packet_data_hex":
+				packetDataHex = value
+			case "packet_src_port":
+				packetSrcPort = value
+			case "packet_src_channel":
+				packetSrcChannel = value
+			case "packet_dst_port":
+				packetDstPort = value
+			case "packet_dst_channel":
+				packetDstChannel = value
+			case "msg_index":
+				msgIndex = value
+			}
+		}
+
+		packetData, ok := parseCosmosPacketData(packetDataRaw, packetDataHex)
+		if !ok {
+			continue
+		}
+
+		denom := strings.TrimSpace(packetData.Denom)
+		if ackSuccess, exists := ackByMsgIndex[msgIndex]; exists && !ackSuccess {
+			continue
+		}
+		denom = deriveCosmosRecvDenomFromPacket(
+			denom,
+			packetSrcPort,
+			packetSrcChannel,
+			packetDstPort,
+			packetDstChannel,
+		)
+
+		transfer := cosmosTransfer{
+			sender:    strings.TrimSpace(packetData.Sender),
+			recipient: strings.TrimSpace(packetData.Receiver),
+			amount:    strings.TrimSpace(packetData.Amount),
+			denom:     denom,
+			source:    cosmosTransferSourcePacketRecv,
+		}
+		if transfer.sender == "" || transfer.recipient == "" || transfer.amount == "" || transfer.denom == "" {
+			continue
+		}
+
+		transfers = append(transfers, transfer)
+	}
+
+	return transfers
+}
+
+func extractCosmosIBCMsgTransferIndexes(events []cosmos.Event) map[string]struct{} {
+	msgIndexes := make(map[string]struct{})
+	for _, event := range events {
+		if event.Type != "message" {
+			continue
+		}
+
+		action := ""
+		msgIndex := ""
+		for _, attr := range event.Attributes {
+			key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+			value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+			if value == "" {
+				continue
+			}
+			switch key {
+			case "action":
+				action = value
+			case "msg_index":
+				msgIndex = value
+			}
+		}
+
+		if action == cosmosIBCTransferMsgAction && msgIndex != "" {
+			msgIndexes[msgIndex] = struct{}{}
+		}
+	}
+	return msgIndexes
+}
+
+func extractCosmosCW20Transfers(events []cosmos.Event) []cosmosTransfer {
+	transfers := make([]cosmosTransfer, 0)
+
+	for _, event := range events {
+		if event.Type != "wasm" && !strings.HasPrefix(event.Type, "wasm-") {
+			continue
+		}
+
+		contractAddress := ""
+		action := ""
+		from := ""
+		to := ""
+		amount := ""
+
+		for _, attr := range event.Attributes {
+			key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+			value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+			if value == "" {
+				continue
+			}
+
+			switch key {
+			case "_contract_address", "contract_address":
+				contractAddress = value
+			case "action":
+				action = strings.ToLower(value)
+			case "from", "owner":
+				from = value
+			case "sender":
+				// Keep sender as fallback only; explicit "from"/"owner" takes precedence.
+				if from == "" {
+					from = value
+				}
+			case "to", "recipient", "receiver":
+				to = value
+			case "amount", "value":
+				amount = value
+			}
+		}
+
+		amount = strings.TrimSpace(amount)
+		if contractAddress == "" || from == "" || to == "" || !isCosmosUintString(amount) {
+			continue
+		}
+		if action != "" && !isCW20TransferAction(action) {
+			continue
+		}
+
+		transfers = append(transfers, cosmosTransfer{
+			sender:    from,
+			recipient: to,
+			amount:    amount,
+			denom:     contractAddress,
+			source:    cosmosTransferSourceCW20,
+		})
+	}
+
+	return transfers
+}
+
+func isCW20TransferAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "transfer", "transfer_from":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCosmosUintString(v string) bool {
+	if v == "" {
+		return false
+	}
+	for _, r := range v {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func shouldSkipIBCSourceTransferCoin(
+	msgIndexes map[string]struct{},
+	ibcMsgTransferIndexes map[string]struct{},
+	hasIBCTransferEvent bool,
+	skipSourceIBCTransfers bool,
+	coinDenom string,
+	ibcSourceDenoms map[string]struct{},
+) bool {
+	if !skipSourceIBCTransfers {
+		return false
+	}
+
+	coinDenomKey := normalizeCosmosDenom(coinDenom)
+	if len(ibcSourceDenoms) > 0 {
+		if _, ok := ibcSourceDenoms[coinDenomKey]; !ok {
+			return false
+		}
+	} else if !hasIBCTransferEvent {
+		return false
+	}
+
+	if len(ibcMsgTransferIndexes) == 0 {
+		return hasIBCTransferEvent
+	}
+
+	for msgIndex := range msgIndexes {
+		if _, ok := ibcMsgTransferIndexes[msgIndex]; ok {
+			return true
+		}
+	}
+
+	// Some chains omit msg_index in transfer events; if IBC transfer markers exist in
+	// the same tx and this event has no index, treat it as source-side noise.
+	if len(msgIndexes) == 0 && hasIBCTransferEvent {
+		return true
+	}
+
+	return false
+}
+
+func hasCosmosEventType(events []cosmos.Event, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func extractCosmosSourceIBCDenoms(events []cosmos.Event) map[string]struct{} {
+	denoms := make(map[string]struct{})
+
+	for _, event := range events {
+		switch event.Type {
+		case "ibc_transfer":
+			transferDenom := ""
+			amountRaw := ""
+			for _, attr := range event.Attributes {
+				key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+				value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+				if value == "" {
+					continue
+				}
+
+				switch key {
+				case "denom":
+					transferDenom = value
+				case "amount":
+					amountRaw = value
+				}
+			}
+
+			if transferDenom != "" {
+				denoms[normalizeCosmosDenom(transferDenom)] = struct{}{}
+				continue
+			}
+
+			for _, coin := range parseCosmosCoins(amountRaw) {
+				denoms[normalizeCosmosDenom(coin.Denom)] = struct{}{}
+			}
+		case "send_packet":
+			packetDataRaw := ""
+			packetDataHex := ""
+			for _, attr := range event.Attributes {
+				key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+				value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+				if value == "" {
+					continue
+				}
+
+				switch key {
+				case "packet_data":
+					packetDataRaw = value
+				case "packet_data_hex":
+					packetDataHex = value
+				}
+			}
+
+			packetData, ok := parseCosmosPacketData(packetDataRaw, packetDataHex)
+			if !ok {
+				continue
+			}
+
+			if packetData.Denom != "" {
+				denoms[normalizeCosmosDenom(packetData.Denom)] = struct{}{}
+			}
+		}
+	}
+
+	return denoms
+}
+
+func normalizeCosmosDenom(denom string) string {
+	return strings.ToLower(strings.TrimSpace(denom))
+}
+
+func extractCosmosAckStatusByMsgIndex(events []cosmos.Event) map[string]bool {
+	ackByMsgIndex := make(map[string]bool)
+
+	for _, event := range events {
+		if event.Type != "write_acknowledgement" {
+			continue
+		}
+
+		msgIndex := ""
+		packetAckRaw := ""
+		packetAckHex := ""
+
+		for _, attr := range event.Attributes {
+			key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+			value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+			if value == "" {
+				continue
+			}
+
+			switch key {
+			case "msg_index":
+				msgIndex = value
+			case "packet_ack":
+				packetAckRaw = value
+			case "packet_ack_hex":
+				packetAckHex = value
+			}
+		}
+
+		if msgIndex == "" {
+			continue
+		}
+
+		if success, ok := parseCosmosPacketAckSuccess(packetAckRaw, packetAckHex); ok {
+			ackByMsgIndex[msgIndex] = success
+		}
+	}
+
+	return ackByMsgIndex
+}
+
+func parseCosmosPacketData(rawJSON, rawHex string) (cosmosPacketData, bool) {
+	rawJSON = strings.TrimSpace(rawJSON)
+	if rawJSON == "" && rawHex != "" {
+		decoded, err := hex.DecodeString(strings.TrimSpace(rawHex))
+		if err == nil {
+			rawJSON = string(decoded)
+		}
+	}
+
+	if rawJSON == "" {
+		return cosmosPacketData{}, false
+	}
+
+	var data cosmosPacketData
+	if err := json.Unmarshal([]byte(rawJSON), &data); err != nil {
+		return cosmosPacketData{}, false
+	}
+
+	return data, true
+}
+
+func parseCosmosPacketAckSuccess(rawAck, rawAckHex string) (bool, bool) {
+	rawAck = strings.TrimSpace(rawAck)
+	if rawAck == "" && rawAckHex != "" {
+		decoded, err := hex.DecodeString(strings.TrimSpace(rawAckHex))
+		if err == nil {
+			rawAck = string(decoded)
+		}
+	}
+	if rawAck == "" {
+		return false, false
+	}
+
+	var packetAck map[string]any
+	if err := json.Unmarshal([]byte(rawAck), &packetAck); err == nil {
+		if _, hasError := packetAck["error"]; hasError {
+			return false, true
+		}
+		if _, hasResult := packetAck["result"]; hasResult {
+			return true, true
+		}
+	}
+
+	lower := strings.ToLower(rawAck)
+	if strings.Contains(lower, `"error"`) {
+		return false, true
+	}
+	if strings.Contains(lower, `"result"`) {
+		return true, true
+	}
+	return false, false
+}
+
+func deriveCosmosRecvDenomFromPacket(
+	packetDenom string,
+	packetSrcPort string,
+	packetSrcChannel string,
+	packetDstPort string,
+	packetDstChannel string,
+) string {
+	packetDenom = strings.TrimSpace(packetDenom)
+	if packetDenom == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(packetDenom), cosmosIBCDenomPrefix) {
+		return packetDenom
+	}
+
+	trace := packetDenom
+	sourcePort := strings.TrimSpace(packetSrcPort)
+	sourceChannel := strings.TrimSpace(packetSrcChannel)
+	sourcePrefix := ""
+	if sourcePort != "" && sourceChannel != "" {
+		sourcePrefix = sourcePort + "/" + sourceChannel + "/"
+	}
+
+	if sourcePrefix != "" && strings.HasPrefix(trace, sourcePrefix) {
+		trace = strings.TrimPrefix(trace, sourcePrefix)
+	} else {
+		dstPort := strings.TrimSpace(packetDstPort)
+		dstChannel := strings.TrimSpace(packetDstChannel)
+		if dstPort != "" && dstChannel != "" {
+			trace = dstPort + "/" + dstChannel + "/" + trace
+		}
+	}
+
+	if !strings.Contains(trace, "/") {
+		return trace
+	}
+
+	sum := sha256.Sum256([]byte(trace))
+	return cosmosIBCDenomPrefix + strings.ToUpper(hex.EncodeToString(sum[:]))
+}
+
+func dedupCosmosTransfers(transfers []cosmosTransfer) []cosmosTransfer {
+	deduped := make([]cosmosTransfer, 0, len(transfers))
+	seenByExactKey := make(map[string]int)
+	seenByFlowKey := make(map[string]int)
+	seenByIBCReceivePair := make(map[string]int)
+
+	for _, transfer := range transfers {
+		exactKey := strings.ToLower(transfer.sender) + "|" +
+			strings.ToLower(transfer.recipient) + "|" +
+			transfer.amount + "|" +
+			transfer.denom
+
+		if idx, exists := seenByExactKey[exactKey]; exists {
+			if cosmosTransferSourcePriority(transfer.source) > cosmosTransferSourcePriority(deduped[idx].source) {
+				deduped[idx] = transfer
+			}
+			continue
+		}
+
+		// For IBC receive txs, chains often emit both:
+		// - bank transfer: escrow/module -> receiver
+		// - recv_packet: source sender -> receiver
+		// They represent the same credit flow and should be emitted once.
+		flowKey := strings.ToLower(transfer.recipient) + "|" + transfer.amount + "|" + transfer.denom
+		if idx, exists := seenByFlowKey[flowKey]; exists {
+			prev := deduped[idx]
+			if cosmosTransferSourcePriority(transfer.source) > cosmosTransferSourcePriority(prev.source) {
+				delete(seenByExactKey, strings.ToLower(prev.sender)+"|"+strings.ToLower(prev.recipient)+"|"+prev.amount+"|"+prev.denom)
+				deduped[idx] = transfer
+				seenByExactKey[exactKey] = idx
+			}
+			continue
+		}
+
+		// Additional dedup for destination-side IBC receive, where one tx may contain:
+		// - bank transfer (escrow/module -> user)
+		// - recv_packet transfer (source user -> user)
+		// Their denoms can differ (e.g. base denom vs packet denom trace), so match by
+		// recipient+amount and keep recv_packet as canonical.
+		ibcPairKey := strings.ToLower(transfer.recipient) + "|" + transfer.amount
+		if idx, exists := seenByIBCReceivePair[ibcPairKey]; exists {
+			prev := deduped[idx]
+			if isCosmosIBCReceiveDuplicatePair(prev.source, transfer.source) {
+				if cosmosTransferSourcePriority(transfer.source) > cosmosTransferSourcePriority(prev.source) {
+					delete(seenByExactKey, strings.ToLower(prev.sender)+"|"+strings.ToLower(prev.recipient)+"|"+prev.amount+"|"+prev.denom)
+					delete(seenByFlowKey, strings.ToLower(prev.recipient)+"|"+prev.amount+"|"+prev.denom)
+					deduped[idx] = transfer
+					seenByExactKey[exactKey] = idx
+					seenByFlowKey[flowKey] = idx
+				}
+				continue
+			}
+		}
+
+		seenByExactKey[exactKey] = len(deduped)
+		seenByFlowKey[flowKey] = len(deduped)
+		seenByIBCReceivePair[ibcPairKey] = len(deduped)
+		deduped = append(deduped, transfer)
+	}
+
+	return deduped
+}
+
+func isCosmosIBCReceiveDuplicatePair(sourceA, sourceB cosmosTransferSource) bool {
+	return (sourceA == cosmosTransferSourceBank && sourceB == cosmosTransferSourcePacketRecv) ||
+		(sourceA == cosmosTransferSourcePacketRecv && sourceB == cosmosTransferSourceBank)
+}
+
+func cosmosTransferSourcePriority(source cosmosTransferSource) int {
+	switch source {
+	case cosmosTransferSourcePacketRecv:
+		return 4
+	case cosmosTransferSourceCW20:
+		return 2
+	case cosmosTransferSourceBank:
+		return 1
+	default:
+		return 0
+	}
 }
 
 type cosmosCoin struct {
@@ -395,13 +976,23 @@ func parseCosmosCoins(raw string) []cosmosCoin {
 }
 
 func extractCosmosFee(events []cosmos.Event) decimal.Decimal {
+	if fee, ok := extractCosmosFeeFromEvent(events, "tx", "fee"); ok {
+		return fee
+	}
+	if fee, ok := extractCosmosFeeFromEvent(events, "fee_pay", "fee"); ok {
+		return fee
+	}
+	return decimal.Zero
+}
+
+func extractCosmosFeeFromEvent(events []cosmos.Event, eventType, feeKey string) (decimal.Decimal, bool) {
 	for _, event := range events {
-		if event.Type != "tx" {
+		if event.Type != eventType {
 			continue
 		}
 		for _, attr := range event.Attributes {
 			key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
-			if key != "fee" {
+			if key != feeKey {
 				continue
 			}
 
@@ -417,12 +1008,11 @@ func extractCosmosFee(events []cosmos.Event) decimal.Decimal {
 
 			fee, err := decimal.NewFromString(coins[0].Amount)
 			if err == nil {
-				return fee
+				return fee, true
 			}
 		}
 	}
-
-	return decimal.Zero
+	return decimal.Zero, false
 }
 
 func decodeCosmosEventValue(raw string) string {
