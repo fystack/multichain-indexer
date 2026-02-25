@@ -429,35 +429,34 @@ func (b *BitcoinIndexer) GetConfirmedHeight(ctx context.Context) (uint64, error)
 }
 
 // GetMempoolTransactions fetches and processes transactions from the mempool
-// Returns transactions and UTXO events involving monitored addresses with 0 confirmations
-func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Transaction, []types.UTXOEvent, error) {
+// Returns transactions involving monitored addresses with 0 confirmations
+func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Transaction, error) {
 	provider, err := b.failover.GetBestProvider()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get bitcoin provider: %w", err)
+		return nil, fmt.Errorf("failed to get bitcoin provider: %w", err)
 	}
 
 	btcClient, ok := provider.Client.(*bitcoin.BitcoinClient)
 	if !ok {
-		return nil, nil, fmt.Errorf("invalid client type")
+		return nil, fmt.Errorf("invalid client type")
 	}
 
 	latestBlock, err := b.GetLatestBlockNumber(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get latest block: %w", err)
+		return nil, fmt.Errorf("failed to get latest block: %w", err)
 	}
 
 	result, err := btcClient.GetRawMempool(ctx, false)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get mempool: %w", err)
+		return nil, fmt.Errorf("failed to get mempool: %w", err)
 	}
 
 	txids, ok := result.([]string)
 	if !ok {
-		return nil, nil, fmt.Errorf("unexpected mempool format")
+		return nil, fmt.Errorf("unexpected mempool format")
 	}
 
 	var allTransfers []types.Transaction
-	var allUTXOEvents []types.UTXOEvent
 	currentTime := uint64(time.Now().Unix())
 
 	for _, txid := range txids {
@@ -468,14 +467,7 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 
 		transfers := b.extractTransfersFromTx(tx, 0, currentTime, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
-
-		if b.config.IndexUTXO {
-			utxoEvent := b.extractUTXOEvent(tx, 0, "", currentTime, latestBlock)
-			if utxoEvent != nil {
-				allUTXOEvents = append(allUTXOEvents, *utxoEvent)
-			}
-		}
 	}
 
-	return allTransfers, allUTXOEvents, nil
+	return allTransfers, nil
 }
