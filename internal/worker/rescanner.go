@@ -205,7 +205,6 @@ func (rw *RescannerWorker) processBatch(blocks []uint64) error {
 		if rw.handleBlockResult(res) {
 			success++
 			toRemove = append(toRemove, res.Number)
-			rw.CacheBlock(res.Block)
 		} else {
 			rw.incrementRetry(res.Number)
 		}

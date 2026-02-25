@@ -18,9 +18,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
-// maxBlockCacheSize is the maximum number of blocks to cache for orphan event emission during reorgs
-const maxBlockCacheSize = 100
-
 // BaseWorker holds the common state and logic shared by all worker types.
 type BaseWorker struct {
 	ctx    context.Context
@@ -35,9 +32,6 @@ type BaseWorker struct {
 	pubkeyStore pubkeystore.Store
 	emitter     events.Emitter
 	failedChan  chan FailedBlockEvent
-
-	// blockCache stores recent blocks for orphan event emission during reorgs
-	blockCache map[uint64]*types.Block
 }
 
 // Stop stops the worker and cleans up internal resources
@@ -76,7 +70,6 @@ func newWorkerWithMode(
 		pubkeyStore: pubkeyStore,
 		emitter:     emitter,
 		failedChan:  failedChan,
-		blockCache:  make(map[uint64]*types.Block),
 	}
 }
 
@@ -245,93 +238,6 @@ func (bw *BaseWorker) emitUTXOs(block *types.Block) {
 				"confirmations", event.Confirmations,
 			)
 			_ = bw.emitter.EmitUTXO(bw.chain.GetName(), event)
-		}
-	}
-}
-
-// CacheBlock adds a block to the cache, maintaining size limit.
-// Should be called by all workers after successfully processing a block.
-func (bw *BaseWorker) CacheBlock(block *types.Block) {
-	if block == nil {
-		return
-	}
-
-	bw.blockCache[block.Number] = block
-
-	// Clean up old entries if cache exceeds max size
-	if uint64(len(bw.blockCache)) > maxBlockCacheSize {
-		var minBlock uint64 = ^uint64(0) // Max uint64
-		for num := range bw.blockCache {
-			if num < minBlock {
-				minBlock = num
-			}
-		}
-		if minBlock != ^uint64(0) {
-			delete(bw.blockCache, minBlock)
-		}
-	}
-}
-
-// ClearBlockCache clears all cached blocks.
-// Should be called after a reorg is handled.
-func (bw *BaseWorker) ClearBlockCache() {
-	for k := range bw.blockCache {
-		delete(bw.blockCache, k)
-	}
-}
-
-// EmitOrphanUTXOs emits UTXO events with orphaned status for blocks in the rollback range.
-// This allows consumers to rollback their UTXO state.
-func (bw *BaseWorker) EmitOrphanUTXOs(startBlock, endBlock uint64) {
-	if !bw.config.IndexUTXO {
-		return
-	}
-
-	for blockNum := startBlock; blockNum <= endBlock; blockNum++ {
-		block, ok := bw.blockCache[blockNum]
-		if !ok {
-			bw.logger.Debug("Block not in cache, skipping orphan emission",
-				"chain", bw.chain.GetName(),
-				"block", blockNum,
-			)
-			continue
-		}
-
-		utxoEvents, ok := block.GetMetadata("utxo_events")
-		if !ok {
-			continue
-		}
-
-		events, ok := utxoEvents.([]types.UTXOEvent)
-		if !ok {
-			bw.logger.Error("Invalid UTXO events type in block metadata",
-				"chain", bw.chain.GetName(),
-				"block", blockNum,
-			)
-			continue
-		}
-
-		for i := range events {
-			event := &events[i]
-			event.Status = types.StatusOrphaned
-			event.Confirmations = 0
-
-			bw.logger.Info("Emitting orphaned UTXO event",
-				"chain", bw.chain.GetName(),
-				"block", blockNum,
-				"txHash", event.TxHash,
-				"created", len(event.Created),
-				"spent", len(event.Spent),
-			)
-
-			if err := bw.emitter.EmitUTXO(bw.chain.GetName(), event); err != nil {
-				bw.logger.Error("Failed to emit orphaned UTXO event",
-					"chain", bw.chain.GetName(),
-					"block", blockNum,
-					"txHash", event.TxHash,
-					"err", err,
-				)
-			}
 		}
 	}
 }

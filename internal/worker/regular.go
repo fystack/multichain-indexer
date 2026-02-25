@@ -72,7 +72,6 @@ func (rw *RegularWorker) Stop() {
 		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), rw.currentBlock)
 	}
 	rw.clearBlockHashes()
-	rw.ClearBlockCache()
 	// Call base worker stop to cancel context and clean up
 	rw.BaseWorker.Stop()
 }
@@ -170,7 +169,6 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		if rw.handleBlockResult(res) {
 			lastSuccess = res.Number
 			lastSuccessHash = res.Block.Hash
-			rw.CacheBlock(res.Block)
 		}
 	}
 
@@ -269,12 +267,8 @@ func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, e
 			"rollback_end", prevNum,
 		)
 
-		// Emit orphan UTXO events for blocks being rolled back
-		rw.EmitOrphanUTXOs(reorgStart, prevNum)
-
-		// Clear all block hashes and cache on reorg
+		// Clear all block hashes on reorg
 		rw.clearBlockHashes()
-		rw.ClearBlockCache()
 
 		if err := rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), reorgStart-1); err != nil {
 			return true, fmt.Errorf("save latest block: %w", err)
