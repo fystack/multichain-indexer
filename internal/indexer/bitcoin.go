@@ -89,9 +89,10 @@ func (b *BitcoinIndexer) GetBlock(ctx context.Context, number uint64) (*types.Bl
 	return b.convertBlockWithPrevoutResolution(ctx, btcBlock)
 }
 
-// convertBlockWithPrevoutResolution converts a block and resolves prevout data for transactions
+// convertBlockWithPrevoutResolution converts a block and resolves prevout data for transactions.
+// Uses batch prevout resolution to avoid N+1 RPC calls per transaction.
 func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, btcBlock *bitcoin.Block) (*types.Block, error) {
-	var allTransfers []types.Transaction
+	allTransfers := make([]types.Transaction, 0, len(btcBlock.Tx)*2)
 
 	// Calculate latest block height from confirmations
 	latestBlock := btcBlock.Height
@@ -99,36 +100,34 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 		latestBlock = btcBlock.Height + btcBlock.Confirmations - 1
 	}
 
-	// Get a client for prevout resolution
-	provider, _ := b.failover.GetBestProvider()
-	var btcClient *bitcoin.BitcoinClient
-	if provider != nil {
-		btcClient, _ = provider.Client.(*bitcoin.BitcoinClient)
-	}
-
+	// Collect all non-coinbase transactions that need prevout resolution
+	var needResolution []*bitcoin.Transaction
 	for i := range btcBlock.Tx {
 		tx := &btcBlock.Tx[i]
-
-		// Skip coinbase transactions
 		if tx.IsCoinbase() {
 			continue
 		}
-
-		// Try to resolve prevout data for FROM address if not already present
-		if btcClient != nil && len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil {
-			if tx.Vin[0].TxID != "" {
-				if resolved, err := btcClient.GetTransactionWithPrevouts(ctx, tx.TxID); err == nil {
-					// Copy resolved prevout data
-					for j := range tx.Vin {
-						if j < len(resolved.Vin) && resolved.Vin[j].PrevOut != nil {
-							tx.Vin[j].PrevOut = resolved.Vin[j].PrevOut
-						}
-					}
-				}
-			}
+		if len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil {
+			needResolution = append(needResolution, tx)
 		}
+	}
 
-		// Extract all transfers - filtering happens in worker's emitBlock
+	// Batch-resolve all prevouts in one pass using parallel fetching
+	if len(needResolution) > 0 {
+		if err := b.failover.ExecuteWithRetry(ctx, func(c bitcoin.BitcoinAPI) error {
+			return c.ResolvePrevouts(ctx, needResolution, b.config.Throttle.Concurrency)
+		}); err != nil {
+			// Log but don't fail — partial prevout data is acceptable
+			_ = err
+		}
+	}
+
+	// Extract transfers from all transactions
+	for i := range btcBlock.Tx {
+		tx := &btcBlock.Tx[i]
+		if tx.IsCoinbase() {
+			continue
+		}
 		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 	}
@@ -226,12 +225,12 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	tx *bitcoin.Transaction,
 	blockNumber, ts, latestBlock uint64,
 ) []types.Transaction {
-	var transfers []types.Transaction
-
 	// Skip coinbase transactions
 	if tx.IsCoinbase() {
-		return transfers
+		return nil
 	}
+
+	transfers := make([]types.Transaction, 0, len(tx.Vout))
 
 	fee := tx.CalculateFee()
 
@@ -365,21 +364,35 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 		return nil, fmt.Errorf("unexpected mempool format")
 	}
 
-	// Process each transaction
-	var allTransfers []types.Transaction
+	// Fetch transactions in batches and resolve prevouts
 	currentTime := uint64(time.Now().Unix())
+	allTransfers := make([]types.Transaction, 0, len(txids))
 
-	for _, txid := range txids {
-		// Fetch transaction with prevout data resolved
-		// This is critical for detecting FROM addresses
-		tx, err := btcClient.GetTransactionWithPrevouts(ctx, txid)
-		if err != nil {
-			continue
+	const batchSize = 50
+	for i := 0; i < len(txids); i += batchSize {
+		end := min(i+batchSize, len(txids))
+		batch := txids[i:end]
+
+		// Fetch all transactions in this batch
+		var txs []*bitcoin.Transaction
+		for _, txid := range batch {
+			tx, err := btcClient.GetRawTransaction(ctx, txid, true)
+			if err != nil {
+				continue
+			}
+			txs = append(txs, tx)
 		}
 
-		// Extract transfers (blockNumber=0 for mempool, confirmations will be 0)
-		transfers := b.extractTransfersFromTx(tx, 0, currentTime, latestBlock)
-		allTransfers = append(allTransfers, transfers...)
+		// Batch-resolve prevouts for all fetched transactions
+		if len(txs) > 0 {
+			_ = btcClient.ResolvePrevouts(ctx, txs, 8)
+		}
+
+		// Extract transfers
+		for _, tx := range txs {
+			transfers := b.extractTransfersFromTx(tx, 0, currentTime, latestBlock)
+			allTransfers = append(allTransfers, transfers...)
+		}
 	}
 
 	return allTransfers, nil
