@@ -249,6 +249,24 @@ export INDEXER_PORT=8080
 curl -s "http://localhost:${INDEXER_PORT}/health" | jq
 ```
 
+### Reload TON Wallet Cache (all TON chains, source = `kv` by default)
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/wallets/reload" | jq
+```
+
+### Reload TON Wallet Cache From Database (all TON chains)
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/wallets/reload?source=db" | jq
+```
+
+### Reload TON Wallet Cache For One Chain
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/ton/wallets/reload?chain=ton_mainnet&source=kv" | jq
+```
+
 ### Reload TON Jetton Registry (all TON chains)
 
 ```bash
