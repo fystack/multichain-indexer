@@ -28,6 +28,9 @@ type SuiIndexer struct {
 	pubkeyStore PubkeyStore
 }
 
+const suiMistPerSUI = 1_000_000_000
+const suiNativeCoinType = "0x2::sui::SUI"
+
 func NewSuiIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[sui.SuiAPI], pubkeyStore PubkeyStore) *SuiIndexer {
 	s := &SuiIndexer{
 		chainName:   chainName,
@@ -251,7 +254,7 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 				cost = 0
 			}
 		}
-		t.TxFee = decimal.NewFromBigInt(new(big.Int).SetUint64(cost), 0)
+		t.TxFee = decimal.NewFromBigInt(new(big.Int).SetUint64(cost), 0).Div(decimal.NewFromInt(suiMistPerSUI))
 	}
 
 	// 3. Amount and ToAddress
@@ -282,13 +285,15 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 
 	if receiver != "" {
 		t.ToAddress = receiver
-		t.Amount = decimal.NewFromBigInt(new(big.Int).SetUint64(maxAmount), 0).String()
+		amount := decimal.NewFromBigInt(new(big.Int).SetUint64(maxAmount), 0)
 		t.AssetAddress = maxAsset
-		if maxAsset == "0x2::sui::SUI" {
+		if maxAsset == suiNativeCoinType {
+			amount = amount.Div(decimal.NewFromInt(suiMistPerSUI))
 			t.Type = constant.TxTypeNativeTransfer
 		} else {
 			t.Type = constant.TxTypeTokenTransfer
 		}
+		t.Amount = amount.String()
 	}
 
 	return t
