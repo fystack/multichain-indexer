@@ -95,7 +95,7 @@ func TestCosmosConvertBlock_ParsesTransfersAndFee(t *testing.T) {
 	assert.Equal(t, "123", nativeTx.Amount)
 	assert.Equal(t, constant.TxTypeNativeTransfer, nativeTx.Type)
 	assert.Equal(t, "", nativeTx.AssetAddress)
-	assert.Equal(t, "7", nativeTx.TxFee.String())
+	assert.Equal(t, "0.000007", nativeTx.TxFee.String())
 	assert.Equal(t, uint64(1), nativeTx.Confirmations)
 	assert.Equal(t, types.StatusConfirmed, nativeTx.Status)
 
@@ -125,6 +125,20 @@ func TestExtractCosmosTransfers_PlainEventAttributes(t *testing.T) {
 	assert.Equal(t, "osmo1b", transfers[0].recipient)
 	assert.Equal(t, "100", transfers[0].amount)
 	assert.Equal(t, "uosmo", transfers[0].denom)
+}
+
+func TestExtractCosmosFee_PrefersNativeDenomAndNormalizesMicro(t *testing.T) {
+	events := []cosmos.Event{
+		{
+			Type: "tx",
+			Attributes: []cosmos.EventAttribute{
+				{Key: "fee", Value: "100stake,42uatom"},
+			},
+		},
+	}
+
+	fee := extractCosmosFee(events, "uatom")
+	assert.Equal(t, "0.000042", fee.String())
 }
 
 func TestCosmosClassifyDenom_UsesConfiguredNativeDenom(t *testing.T) {

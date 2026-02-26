@@ -29,6 +29,8 @@ const (
 	cosmosNativeDenomOsmosis = "uosmo"
 	cosmosNativeDenomAtom    = "uatom"
 	cosmosIBCDenomPrefix     = "ibc/"
+	cosmosMicroDenomPrefix   = "u"
+	cosmosMicroDenomScale    = 1_000_000
 
 	cosmosNetworkHintOsmosis = "osmosis"
 	cosmosNetworkHintOsmo    = "osmo"
@@ -269,13 +271,14 @@ func (c *CosmosIndexer) extractTransferTransactions(
 	}
 
 	transactions := make([]types.Transaction, 0, limit)
+	nativeDenom := c.nativeDenom()
 	for i := 0; i < limit; i++ {
 		txResult := results[i]
 		if txResult.Code != 0 {
 			continue
 		}
 
-		fee := extractCosmosFee(txResult.Events)
+		fee := extractCosmosFee(txResult.Events, nativeDenom)
 		transfers := extractCosmosTransfers(txResult.Events)
 
 		feeAssigned := false
@@ -975,17 +978,17 @@ func parseCosmosCoins(raw string) []cosmosCoin {
 	return coins
 }
 
-func extractCosmosFee(events []cosmos.Event) decimal.Decimal {
-	if fee, ok := extractCosmosFeeFromEvent(events, "tx", "fee"); ok {
+func extractCosmosFee(events []cosmos.Event, nativeDenom string) decimal.Decimal {
+	if fee, ok := extractCosmosFeeFromEvent(events, "tx", "fee", nativeDenom); ok {
 		return fee
 	}
-	if fee, ok := extractCosmosFeeFromEvent(events, "fee_pay", "fee"); ok {
+	if fee, ok := extractCosmosFeeFromEvent(events, "fee_pay", "fee", nativeDenom); ok {
 		return fee
 	}
 	return decimal.Zero
 }
 
-func extractCosmosFeeFromEvent(events []cosmos.Event, eventType, feeKey string) (decimal.Decimal, bool) {
+func extractCosmosFeeFromEvent(events []cosmos.Event, eventType, feeKey, nativeDenom string) (decimal.Decimal, bool) {
 	for _, event := range events {
 		if event.Type != eventType {
 			continue
@@ -1005,14 +1008,44 @@ func extractCosmosFeeFromEvent(events []cosmos.Event, eventType, feeKey string) 
 			if len(coins) == 0 {
 				continue
 			}
+			coin := pickCosmosFeeCoin(coins, nativeDenom)
 
-			fee, err := decimal.NewFromString(coins[0].Amount)
+			fee, err := decimal.NewFromString(coin.Amount)
 			if err == nil {
-				return fee, true
+				return normalizeCosmosFee(fee, coin.Denom, nativeDenom), true
 			}
 		}
 	}
 	return decimal.Zero, false
+}
+
+func pickCosmosFeeCoin(coins []cosmosCoin, nativeDenom string) cosmosCoin {
+	if len(coins) == 0 {
+		return cosmosCoin{}
+	}
+
+	native := normalizeCosmosDenom(nativeDenom)
+	if native == "" {
+		return coins[0]
+	}
+
+	for _, coin := range coins {
+		if normalizeCosmosDenom(coin.Denom) == native {
+			return coin
+		}
+	}
+
+	return coins[0]
+}
+
+func normalizeCosmosFee(fee decimal.Decimal, feeDenom, nativeDenom string) decimal.Decimal {
+	if fee.IsZero() || normalizeCosmosDenom(feeDenom) != normalizeCosmosDenom(nativeDenom) {
+		return fee
+	}
+	if strings.HasPrefix(normalizeCosmosDenom(feeDenom), cosmosMicroDenomPrefix) {
+		return fee.Div(decimal.NewFromInt(cosmosMicroDenomScale))
+	}
+	return fee
 }
 
 func decodeCosmosEventValue(raw string) string {
