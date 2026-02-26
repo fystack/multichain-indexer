@@ -1,6 +1,8 @@
 package evm
 
 import (
+	"strings"
+
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/common/utils"
@@ -11,6 +13,11 @@ const (
 	ERC20_TRANSFER_TOPIC    = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 	ERC20_TRANSFER_SIG      = "0xa9059cbb"
 	ERC20_TRANSFER_FROM_SIG = "0x23b872dd"
+
+	// Gnosis Safe execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)
+	SAFE_EXEC_TRANSACTION_SIG    = "0x6a761202"
+	SAFE_EXECUTION_SUCCESS_TOPIC = "0x442e715f626346e8c54381002da614f62bee8d27386535b2521ec8540898556e"
+	SAFE_EXECUTION_FAILURE_TOPIC = "0x23428b18acfb3ea64b08dc0c1d296ea9c09702c09083ca5272e64d115b687d23"
 )
 
 type (
@@ -102,4 +109,20 @@ func (r *TxnReceipt) IsSuccessful() bool {
 		return true
 	}
 	return status != 0
+}
+
+// HasLogTopicFrom checks if the receipt contains a log with the given topic0
+// emitted by the specified address. The address check prevents false matches
+// from events emitted by other contracts in the same transaction.
+func (r *TxnReceipt) HasLogTopicFrom(topic0, emitter string) bool {
+	if r == nil {
+		return false
+	}
+	for _, log := range r.Logs {
+		if len(log.Topics) > 0 && log.Topics[0] == topic0 &&
+			strings.EqualFold(log.Address, emitter) {
+			return true
+		}
+	}
+	return false
 }

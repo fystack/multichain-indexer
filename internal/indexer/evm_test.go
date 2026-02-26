@@ -9,6 +9,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -94,31 +95,20 @@ func TestParseGnosisSafeETHTransfer(t *testing.T) {
 			i, tx.Type, tx.FromAddress, tx.ToAddress, tx.Amount, tx.AssetAddress)
 	}
 
-	// This Gnosis Safe execTransaction has value=0x0 on the outer tx and the actual
-	// 0.1 ETH (100000000000000000 wei) transfer happens as an internal transaction.
-	// Current indexer behavior: the outer tx has value=0 and a non-empty input (execTransaction),
-	// so it does NOT match native transfer detection (which requires value > 0 and empty input).
-	// The receipt logs don't contain ERC20 Transfer events either (it's a native ETH internal tx).
-	//
-	// This test documents that Gnosis Safe internal ETH transfers are NOT currently indexed.
-	// To support these, the indexer would need to use debug_traceTransaction or trace_transaction
-	// to capture internal calls.
+	// The indexer decodes execTransaction input data and verifies the ExecutionSuccess
+	// event in the receipt to extract the internal native transfer.
 
-	var nativeTransfer, tokenTransfer bool
-	for _, tx := range typesBlock.Transactions {
+	var nativeTransfer *types.Transaction
+	for i, tx := range typesBlock.Transactions {
 		if tx.Type == constant.TxTypeNativeTransfer {
-			nativeTransfer = true
-		}
-		if tx.Type == constant.TxTypeTokenTransfer {
-			tokenTransfer = true
+			nativeTransfer = &typesBlock.Transactions[i]
 		}
 	}
 
-	// Document current behavior: Gnosis Safe internal ETH transfers are not detected
-	assert.False(t, nativeTransfer, "Gnosis Safe internal ETH transfer is NOT detected as native transfer (value=0 on outer tx)")
-	assert.False(t, tokenTransfer, "No ERC20 token transfer expected for this ETH-only Gnosis Safe tx")
-	assert.Empty(t, typesBlock.Transactions, "No transfers extracted - Gnosis Safe internal txs require trace support")
+	require.NotNil(t, nativeTransfer, "Gnosis Safe internal ETH transfer SHOULD be detected as native_transfer")
+	assert.Equal(t, evm.ToChecksumAddress("0x84ba2321d46814fb1aa69a7b71882efea50f700c"), nativeTransfer.FromAddress, "from should be the Safe contract")
+	assert.Equal(t, evm.ToChecksumAddress("0xc26dC13d057824342D5480b153f288bd1C5e3e9d"), nativeTransfer.ToAddress, "to should be the decoded recipient")
+	assert.Equal(t, "100000000000000000", nativeTransfer.Amount, "amount should be 0.1 ETH in wei")
 
-	t.Log("RESULT: Gnosis Safe execTransaction with internal ETH transfer is NOT indexed.")
-	t.Log("The indexer would need trace/debug RPC support to capture internal ETH transfers.")
+	t.Log("RESULT: Gnosis Safe execTransaction with internal ETH transfer IS indexed via input decoding.")
 }

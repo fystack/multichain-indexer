@@ -509,6 +509,66 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 		)
 	}
 
+	// ──────────────────────────────────────────────────────────────
+	// NEW: Second pass — collect Gnosis Safe tx hashes for receipt fetching.
+	// This is independent of NeedReceipt() to avoid impacting existing
+	// receipt selection logic.
+	// ──────────────────────────────────────────────────────────────
+	addedHashes := make(map[string]bool)
+	for _, hashes := range txHashMap {
+		for _, h := range hashes {
+			addedHashes[h] = true
+		}
+	}
+
+	safeTransfers := 0
+	for blockNum, block := range blocks {
+		if block == nil {
+			continue
+		}
+		for _, tx := range block.Transactions {
+			if addedHashes[tx.Hash] {
+				continue
+			}
+			if !evm.IsSafeExecTransaction(tx.Input) {
+				continue
+			}
+
+			// If no pubkeyStore, fetch receipts for all Safe txs
+			if e.pubkeyStore == nil {
+				safeTransfers++
+				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				addedHashes[tx.Hash] = true
+				continue
+			}
+
+			// pubkeyStore mode: only if recipient or Safe contract is monitored.
+			// Filter must match ExtractSafeTransfers acceptance criteria to avoid
+			// fetching receipts for txs that will be dropped anyway.
+			params, err := evm.DecodeGnosisSafeExecTransaction(tx.Input)
+			if err != nil {
+				continue
+			}
+			if params.Operation != 0 || params.Value.Sign() <= 0 || len(params.Data) != 0 {
+				continue
+			}
+
+			recipientMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, params.To)
+			safeMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
+			if recipientMonitored || safeMonitored {
+				safeTransfers++
+				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				addedHashes[tx.Hash] = true
+			}
+		}
+	}
+
+	if safeTransfers > 0 {
+		logger.Debug("[SELECTIVE RECEIPTS - SAFE]",
+			"safe_transfers_matched", safeTransfers,
+		)
+	}
+
 	return txHashMap
 }
 
@@ -774,6 +834,21 @@ func (e *EVMIndexer) convertBlock(
 	var allTransfers []types.Transaction
 	for _, tx := range eb.Transactions {
 		receipt := receipts[tx.Hash]
+
+		// ──────────────────────────────────────────────────────────
+		// NEW: Gnosis Safe — isolated processing path.
+		// Safe txs are handled here and NEVER fall through to
+		// ExtractTransfers() below. This prevents any side effects
+		// on existing ERC20/native transfer detection.
+		// ──────────────────────────────────────────────────────────
+		if evm.IsSafeExecTransaction(tx.Input) {
+			if receipt != nil && receipt.IsSuccessful() {
+				safeTransfers := evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)
+				allTransfers = append(allTransfers, safeTransfers...)
+			}
+			continue // ◄◄◄ ISOLATION: skip ExtractTransfers() entirely
+		}
+
 		if receipt == nil {
 			continue
 		}
