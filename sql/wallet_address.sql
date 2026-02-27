@@ -23,7 +23,7 @@ DO $$ BEGIN
         'evm',
         'btc',
         'sol',
-        'aptos',
+        'apt',
         'tron'
     );
 EXCEPTION

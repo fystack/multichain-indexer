@@ -20,6 +20,7 @@ const (
 	NetworkSolana  = "solana"  // Solana blockchain
 	NetworkTron    = "tron"    // Tron blockchain
 	NetworkBitcoin = "bitcoin" // Bitcoin blockchain
+	NetworkAptos   = "aptos"   // Aptos blockchain
 	NetworkGeneric = "generic" // Generic/unknown blockchain type
 )
 
