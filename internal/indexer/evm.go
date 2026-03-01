@@ -474,6 +474,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 	txHashMap := make(map[uint64][]string)
 	totalTxs := 0
 	nativeTransfers := 0
+	safeTransfers := 0
 
 	for blockNum, block := range blocks {
 		if block == nil {
@@ -481,7 +482,8 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 		}
 		for _, tx := range block.Transactions {
 			totalTxs++
-			if !tx.NeedReceipt() {
+			isSafeExecution := evm.IsSafeExecTransaction(tx.Input)
+			if !tx.NeedReceipt() && !isSafeExecution {
 				continue
 			}
 
@@ -491,21 +493,40 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 				continue
 			}
 
-			// OPTIMIZATION: Only fetch receipts for native transfers TO monitored addresses
-			// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
-			isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
+			if !isSafeExecution {
+				// OPTIMIZATION: Only fetch receipts for native transfers TO monitored addresses
+				// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
+				isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
 
-			if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To)) {
-				nativeTransfers++
-				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To)) {
+					nativeTransfers++
+					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				}
+			} else {
+				// Filter must match ExtractSafeTransfers acceptance criteria to avoid
+				// fetching receipts for txs that will be dropped anyway.
+				params, err := evm.DecodeGnosisSafeExecTransaction(tx.Input)
+				if err != nil {
+					logger.Debug("[DECODE GNOSIS SAFE EXEC TRANSACTION ERROR]", "error", err)
+					continue
+				}
+				if params.Operation != 0 || params.Value.Sign() <= 0 || len(params.Data) != 0 {
+					continue
+				}
+
+				if e.pubkeyStore.Exist(enum.NetworkTypeEVM, params.To) {
+					safeTransfers++
+					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				}
 			}
 		}
 	}
 
-	if e.pubkeyStore != nil && totalTxs > 0 {
+	if e.pubkeyStore != nil {
 		logger.Debug("[SELECTIVE RECEIPTS - NATIVE]",
 			"total_txs", totalTxs,
 			"native_transfers_matched", nativeTransfers,
+			"safe_transfers_matched", safeTransfers,
 		)
 	}
 
@@ -777,14 +798,16 @@ func (e *EVMIndexer) convertBlock(
 		if receipt == nil {
 			continue
 		}
-
 		if !receipt.IsSuccessful() {
 			logger.Debug("[RECEIPTS] skipping failed tx", "tx", tx.Hash, "status", receipt.Status, "block", num)
 			continue
 		}
-
 		logger.Info("[RECEIPTS]", "tx", tx.Hash, "receipt", receipt)
-		transfers := tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)
+		var transfers []types.Transaction
+		if evm.IsSafeExecTransaction(tx.Input) {
+			transfers = append(transfers, evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)...)
+		}
+		transfers = append(transfers, tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)...)
 		allTransfers = append(allTransfers, transfers...)
 	}
 
