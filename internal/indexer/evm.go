@@ -514,9 +514,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 					continue
 				}
 
-				recipientMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, params.To)
-				safeMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
-				if recipientMonitored || safeMonitored {
+				if e.pubkeyStore.Exist(enum.NetworkTypeEVM, params.To) {
 					safeTransfers++
 					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
 				}
