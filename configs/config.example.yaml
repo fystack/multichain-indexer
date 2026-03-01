@@ -19,6 +19,8 @@ defaults:
 
 chains:
   tron_mainnet:
+    network_id: "tron_mainnet"
+    internal_code: "TRON_MAINNET"
     type: "tron"
     start_block: 75144237
     poll_interval: "8s" # override default poll interval
@@ -37,6 +39,8 @@ chains:
       burst: 8
 
   ethereum_mainnet:
+    network_id: "ethereum_mainnet"
+    internal_code: "ETH_MAINNET"
     type: "evm"
     start_block: 23080871
     poll_interval: "3s" # faster polling for Ethereum
@@ -52,6 +56,7 @@ chains:
       # - url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
 
   bnb_mainnet:
+    network_id: "bnb_mainnet"
     internal_code: "BNB_MAINNET"
     type: "evm"
     start_block: 59040717
@@ -62,6 +67,7 @@ chains:
       - url: "https://bnb.rpc.subquery.network/public"
 
   bitcoin_testnet:
+    network_id: "bitcoin_testnet"
     internal_code: "BTC_TESTNET"
     type: "btc"
     start_block: 4440000 # recent testnet block
@@ -85,6 +91,7 @@ chains:
       concurrency: 1 # No parallel fetching needed
 
   bitcoin_mainnet:
+    network_id: "bitcoin_mainnet"
     internal_code: "BTC_MAINNET"
     type: "btc"
     start_block: 850000
@@ -164,6 +171,101 @@ chains:
     nodes:
       - url: "fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
       - url: "sui-mainnet.nodeinfra.com:443"
+
+  osmosis_mainnet:
+    network_id: "osmosis-1"
+    internal_code: "OSMO_MAINNET"
+    native_denom: "uosmo"
+    type: "cosmos"
+    start_block: 0
+    poll_interval: "5s"
+    nodes:
+      - url: "https://rpc.osmosis.zone"
+      - url: "https://osmosis-rpc.publicnode.com"
+    client:
+      timeout: "20s"
+      max_retries: 3
+      retry_delay: "2s"
+    throttle:
+      rps: 20
+      burst: 40
+      batch_size: 20
+      concurrency: 4
+
+  cosmoshub_mainnet:
+    network_id: "cosmoshub-4"
+    internal_code: "ATOM_MAINNET"
+    native_denom: "uatom"
+    type: "cosmos"
+    start_block: 0
+    poll_interval: "5s"
+    nodes:
+      - url: "https://rpc.cosmos.directory/cosmoshub"
+      - url: "https://cosmos-rpc.publicnode.com"
+    client:
+      timeout: "20s"
+      max_retries: 3
+      retry_delay: "2s"
+    throttle:
+      rps: 20
+      burst: 40
+      batch_size: 20
+      concurrency: 4
+
+  cosmos_hub_testnet:
+    network_id: "cosmos_hub_testnet"
+    internal_code: "ATOM_TESTNET"
+    native_denom: "uatom"
+    type: "cosmos"
+    start_block: 0
+    poll_interval: "5s"
+    nodes:
+      - url: "https://rpc.provider-sentry-01.hub-testnet.polypore.xyz"
+      - url: "https://cosmos-testnet-rpc.itrocket.net"
+    client:
+      timeout: "20s"
+      max_retries: 3
+      retry_delay: "2s"
+    throttle:
+      rps: 20
+      burst: 40
+      batch_size: 20
+      concurrency: 4
+
+  ton_mainnet:
+    network_id: "ton"
+    internal_code: "TON_MAINNET"
+    type: "ton"
+    poll_interval: "5s"
+    nodes:
+      - url: "https://ton.org/global.config.json"
+    throttle:
+      concurrency: 10
+      batch_size: 50
+    jettons:
+      - master_address: "EQCxE6mUtQJKFnGfaROTgt1lZbDiiX1Gw83iAV82Cn_0opUb" # USDT
+        symbol: "USDT"
+        decimals: 6
+
+  ton_testnet:
+    network_id: "ton_testnet"
+    internal_code: "TON_TESTNET"
+    type: "ton"
+    start_block: 0
+    poll_interval: "4s"
+    nodes:
+      - url: "https://ton.org/testnet-global-config.json"
+    client:
+      timeout: "15s"
+    throttle:
+      rps: 10
+      burst: 20
+      batch_size: 1
+      concurrency: 4
+    jettons:
+      - master_address: "0:1de7d5cc59be344d17f1a93274a2dad44ea0fc66ec4b1e10bc4f8d35039f8aaf"
+        symbol: "USDT"
+        decimals: 6
 
 # Infrastructure services
 services:
