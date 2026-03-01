@@ -25,6 +25,7 @@ const (
 	NetworkTypeSol  NetworkType = "sol"
 	NetworkTypeApt  NetworkType = "apt"
 	NetworkTypeSui  NetworkType = "sui"
+	NetworkTypeTon  NetworkType = "ton"
 )
 
 const (
