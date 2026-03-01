@@ -805,10 +805,9 @@ func (e *EVMIndexer) convertBlock(
 		logger.Info("[RECEIPTS]", "tx", tx.Hash, "receipt", receipt)
 		var transfers []types.Transaction
 		if evm.IsSafeExecTransaction(tx.Input) {
-			transfers = evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)
-		} else {
-			transfers = tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)
+			transfers = append(transfers, evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)...)
 		}
+		transfers = append(transfers, tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)...)
 		allTransfers = append(allTransfers, transfers...)
 	}
 
