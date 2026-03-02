@@ -26,19 +26,9 @@ import (
 var cosmosCoinRegexp = regexp.MustCompile(`^([0-9]+)([a-zA-Z0-9/._:-]+)$`)
 
 const (
-	cosmosNativeDenomOsmosis = "uosmo"
-	cosmosNativeDenomAtom    = "uatom"
-	cosmosIBCDenomPrefix     = "ibc/"
-	cosmosMicroDenomPrefix   = "u"
-	cosmosMicroDenomScale    = 1_000_000
-
-	cosmosNetworkHintOsmosis = "osmosis"
-	cosmosNetworkHintOsmo    = "osmo"
-	cosmosNetworkHintHub     = "cosmoshub"
-	cosmosNetworkHintAtom    = "atom"
-	cosmosNetworkHintCosmos  = "cosmos"
-	cosmosNetworkHintHubWord = "hub"
-	cosmosNetworkHintCosmos1 = "cosmos1"
+	cosmosIBCDenomPrefix   = "ibc/"
+	cosmosMicroDenomPrefix = "u"
+	cosmosMicroDenomScale  = 1_000_000
 
 	cosmosIBCTransferMsgAction = "/ibc.applications.transfer.v1.MsgTransfer"
 )
@@ -237,11 +227,15 @@ func (c *CosmosIndexer) convertBlock(
 	if err != nil {
 		return nil, err
 	}
+	txHashes, err := hashCosmosTxs(blockData.Block.Data.Txs)
+	if err != nil {
+		return nil, fmt.Errorf("hash cosmos txs: %w", err)
+	}
 
 	txs := c.extractTransferTransactions(
 		height,
 		ts,
-		hashCosmosTxs(blockData.Block.Data.Txs),
+		txHashes,
 		blockResults,
 	)
 
@@ -1052,18 +1046,30 @@ func decodeCosmosEventValue(raw string) string {
 	if raw == "" {
 		return ""
 	}
-
-	if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil {
-		if isReadableText(decoded) {
-			return string(decoded)
-		}
+	if isReadableText([]byte(raw)) && !shouldDecodeCosmosBase64(raw) {
+		return raw
 	}
-	if decoded, err := base64.RawStdEncoding.DecodeString(raw); err == nil {
-		if isReadableText(decoded) {
-			return string(decoded)
-		}
+
+	if decoded, ok := decodeCosmosBase64Text(raw); ok {
+		return decoded
 	}
 	return raw
+}
+
+func shouldDecodeCosmosBase64(raw string) bool {
+	// Lowercase plain-text values (sender/recipient/transfer/amount) can be valid
+	// base64 syntax by accident, so decode only when there is a stronger signal.
+	return strings.ContainsAny(raw, "ABCDEFGHIJKLMNOPQRSTUVWXYZ+/=")
+}
+
+func decodeCosmosBase64Text(raw string) (string, bool) {
+	if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil && isReadableText(decoded) {
+		return string(decoded), true
+	}
+	if decoded, err := base64.RawStdEncoding.DecodeString(raw); err == nil && isReadableText(decoded) {
+		return string(decoded), true
+	}
+	return "", false
 }
 
 func isReadableText(b []byte) bool {
@@ -1082,25 +1088,25 @@ func isReadableText(b []byte) bool {
 	return true
 }
 
-func hashCosmosTxs(encodedTxs []string) []string {
-	hashes := make([]string, 0, len(encodedTxs))
-	for _, encoded := range encodedTxs {
+func hashCosmosTxs(encodedTxs []string) ([]string, error) {
+	hashes := make([]string, len(encodedTxs))
+	for i, encoded := range encodedTxs {
 		if encoded == "" {
-			continue
+			return nil, fmt.Errorf("empty tx payload at index %d", i)
 		}
 
 		raw, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			raw, err = base64.RawStdEncoding.DecodeString(encoded)
 			if err != nil {
-				continue
+				return nil, fmt.Errorf("decode tx payload at index %d: %w", i, err)
 			}
 		}
 
 		sum := sha256.Sum256(raw)
-		hashes = append(hashes, strings.ToUpper(hex.EncodeToString(sum[:])))
+		hashes[i] = strings.ToUpper(hex.EncodeToString(sum[:]))
 	}
-	return hashes
+	return hashes, nil
 }
 
 func parseCosmosBlockTime(raw string) (uint64, error) {
@@ -1120,41 +1126,7 @@ func (c *CosmosIndexer) classifyDenom(denom string) (constant.TxType, string) {
 }
 
 func (c *CosmosIndexer) nativeDenom() string {
-	if d := strings.TrimSpace(c.config.NativeDenom); d != "" {
-		return d
-	}
-
-	network := strings.ToLower(c.config.NetworkId + " " + c.chainName)
-
-	switch {
-	case strings.Contains(network, cosmosNetworkHintOsmosis), containsCosmosNetworkToken(network, cosmosNetworkHintOsmo):
-		return cosmosNativeDenomOsmosis
-	case strings.Contains(network, cosmosNetworkHintHub),
-		strings.Contains(network, cosmosNetworkHintAtom),
-		strings.Contains(network, cosmosNetworkHintCosmos1),
-		(containsCosmosNetworkToken(network, cosmosNetworkHintCosmos) &&
-			containsCosmosNetworkToken(network, cosmosNetworkHintHubWord)):
-		return cosmosNativeDenomAtom
-	default:
-		return ""
-	}
-}
-
-func containsCosmosNetworkToken(network, token string) bool {
-	if network == "" || token == "" {
-		return false
-	}
-
-	parts := strings.FieldsFunc(network, func(r rune) bool {
-		return (r < 'a' || r > 'z') && (r < '0' || r > '9')
-	})
-
-	for _, part := range parts {
-		if part == token {
-			return true
-		}
-	}
-	return false
+	return strings.TrimSpace(c.config.NativeDenom)
 }
 
 func (c *CosmosIndexer) getBlockResultsByTxLookup(
@@ -1162,7 +1134,10 @@ func (c *CosmosIndexer) getBlockResultsByTxLookup(
 	height uint64,
 	encodedTxs []string,
 ) (*cosmos.BlockResultsResponse, error) {
-	hashes := hashCosmosTxs(encodedTxs)
+	hashes, err := hashCosmosTxs(encodedTxs)
+	if err != nil {
+		return nil, fmt.Errorf("hash cosmos txs for lookup: %w", err)
+	}
 	if len(hashes) == 0 {
 		return &cosmos.BlockResultsResponse{
 			Height:     strconv.FormatUint(height, 10),

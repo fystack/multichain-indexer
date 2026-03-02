@@ -85,7 +85,9 @@ func TestCosmosConvertBlock_ParsesTransfersAndFee(t *testing.T) {
 	assert.Equal(t, "PARENT_HASH", block.ParentHash)
 	assert.Equal(t, uint64(1770940800), block.Timestamp)
 
-	expectedHash := hashCosmosTxs([]string{txEncoded})[0]
+	txHashes, err := hashCosmosTxs([]string{txEncoded})
+	require.NoError(t, err)
+	expectedHash := txHashes[0]
 
 	nativeTx := block.Transactions[0]
 	assert.Equal(t, expectedHash, nativeTx.TxHash)
@@ -127,6 +129,16 @@ func TestExtractCosmosTransfers_PlainEventAttributes(t *testing.T) {
 	assert.Equal(t, "uosmo", transfers[0].denom)
 }
 
+func TestDecodeCosmosEventValue_LeavesPlainTextThatLooksLikeBase64(t *testing.T) {
+	assert.Equal(t, "transfer", decodeCosmosEventValue("transfer"))
+	assert.Equal(t, "sender", decodeCosmosEventValue("sender"))
+}
+
+func TestDecodeCosmosEventValue_DecodesBase64Text(t *testing.T) {
+	assert.Equal(t, "sender", decodeCosmosEventValue("c2VuZGVy"))
+	assert.Equal(t, "recipient", decodeCosmosEventValue("cmVjaXBpZW50"))
+}
+
 func TestExtractCosmosFee_PrefersNativeDenomAndNormalizesMicro(t *testing.T) {
 	events := []cosmos.Event{
 		{
@@ -139,6 +151,11 @@ func TestExtractCosmosFee_PrefersNativeDenomAndNormalizesMicro(t *testing.T) {
 
 	fee := extractCosmosFee(events, "uatom")
 	assert.Equal(t, "0.000042", fee.String())
+}
+
+func TestHashCosmosTxs_ReturnsErrorForInvalidBase64(t *testing.T) {
+	_, err := hashCosmosTxs([]string{"not-base64*"})
+	require.Error(t, err)
 }
 
 func TestCosmosClassifyDenom_UsesConfiguredNativeDenom(t *testing.T) {
@@ -159,7 +176,7 @@ func TestCosmosClassifyDenom_UsesConfiguredNativeDenom(t *testing.T) {
 	assert.Equal(t, "ibc/XYZ", asset)
 }
 
-func TestCosmosClassifyDenom_InfersCosmosHubNativeDenom(t *testing.T) {
+func TestCosmosClassifyDenom_WithoutNativeDenomTreatsAsToken(t *testing.T) {
 	idx := &CosmosIndexer{
 		chainName: "cosmoshub_mainnet",
 		config: config.ChainConfig{
@@ -168,25 +185,20 @@ func TestCosmosClassifyDenom_InfersCosmosHubNativeDenom(t *testing.T) {
 	}
 
 	txType, asset := idx.classifyDenom("uatom")
-	assert.Equal(t, constant.TxTypeNativeTransfer, txType)
-	assert.Equal(t, "", asset)
-
-	txType, asset = idx.classifyDenom("ibc/ATOM")
 	assert.Equal(t, constant.TxTypeTokenTransfer, txType)
-	assert.Equal(t, "ibc/ATOM", asset)
+	assert.Equal(t, "uatom", asset)
 }
 
-func TestCosmosClassifyDenom_InfersCosmosHubFromCosmos1Hint(t *testing.T) {
+func TestCosmosNativeDenom_ReturnsTrimmedConfiguredValue(t *testing.T) {
 	idx := &CosmosIndexer{
 		chainName: "cosmos1_hub_mainnet",
 		config: config.ChainConfig{
-			NetworkId: "mainnet",
+			NetworkId:   "mainnet",
+			NativeDenom: "  uatom  ",
 		},
 	}
 
-	txType, asset := idx.classifyDenom("uatom")
-	assert.Equal(t, constant.TxTypeNativeTransfer, txType)
-	assert.Equal(t, "", asset)
+	assert.Equal(t, "uatom", idx.nativeDenom())
 }
 
 func TestCosmosConvertBlock_SupportsCosmosHubAddresses(t *testing.T) {
@@ -196,7 +208,8 @@ func TestCosmosConvertBlock_SupportsCosmosHubAddresses(t *testing.T) {
 	idx := &CosmosIndexer{
 		chainName: "cosmoshub_mainnet",
 		config: config.ChainConfig{
-			NetworkId: "cosmoshub-4",
+			NetworkId:   "cosmoshub-4",
+			NativeDenom: "uatom",
 		},
 	}
 
@@ -255,7 +268,8 @@ func TestCosmosConvertBlock_SkipsSourceIBCTransferAndFeePay(t *testing.T) {
 	idx := &CosmosIndexer{
 		chainName: "cosmoshub_mainnet",
 		config: config.ChainConfig{
-			NetworkId: "cosmoshub-4",
+			NetworkId:   "cosmoshub-4",
+			NativeDenom: "uatom",
 		},
 		pubkeyStore: mockCosmosPubkeyStore{
 			addresses: map[string]struct{}{
@@ -797,7 +811,8 @@ func TestCosmosConvertBlock_SkipsSendPacketForMsgTransfer(t *testing.T) {
 	idx := &CosmosIndexer{
 		chainName: "cosmoshub_mainnet",
 		config: config.ChainConfig{
-			NetworkId: "cosmoshub-4",
+			NetworkId:   "cosmoshub-4",
+			NativeDenom: "uatom",
 		},
 		pubkeyStore: mockCosmosPubkeyStore{
 			addresses: map[string]struct{}{
@@ -860,7 +875,8 @@ func TestCosmosConvertBlock_SkipsSendPacketWhenNotMsgTransfer(t *testing.T) {
 	idx := &CosmosIndexer{
 		chainName: "cosmoshub_mainnet",
 		config: config.ChainConfig{
-			NetworkId: "cosmoshub-4",
+			NetworkId:   "cosmoshub-4",
+			NativeDenom: "uatom",
 		},
 		pubkeyStore: mockCosmosPubkeyStore{
 			addresses: map[string]struct{}{
