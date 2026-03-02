@@ -132,6 +132,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	// Store original range for logging
 	originalStart := rw.currentBlock
 	originalEnd := end
+	startTime := time.Now()
 
 	results, err := rw.chain.GetBlocks(rw.ctx, rw.currentBlock, end, rw.config.Throttle.Parallel)
 	if err != nil {
@@ -140,7 +141,6 @@ func (rw *RegularWorker) processRegularBlocks() error {
 
 	lastSuccess := rw.currentBlock - 1
 	var lastSuccessHash string
-	startTime := time.Now()
 
 	for i, res := range results {
 		if res.Block == nil || res.Error != nil {
@@ -356,4 +356,3 @@ func splitCatchupRange(r blockstore.CatchupRange, maxSize uint64) []blockstore.C
 
 	return ranges
 }
-

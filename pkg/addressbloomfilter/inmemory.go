@@ -48,6 +48,7 @@ func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
 		enum.NetworkTypeBtc,
 		enum.NetworkTypeSui,
 		enum.NetworkTypeCosmos,
+		enum.NetworkTypeTon,
 	}
 
 	for _, addrType := range types {

@@ -2,7 +2,11 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/rpc"
@@ -11,6 +15,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
+	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
@@ -18,9 +23,12 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
+	"github.com/fystack/multichain-indexer/pkg/model"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
+	"github.com/fystack/multichain-indexer/pkg/repository"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
+	tonaddr "github.com/xssnick/tonutils-go/address"
 	"gorm.io/gorm"
 )
 
@@ -43,6 +51,12 @@ type ManagerConfig struct {
 	EnableCatchup   bool
 	EnableManual    bool
 }
+
+const (
+	tonAssetCachePrefix                = "assetcache"
+	tonPreloadJettonResolveTimeout     = 6 * time.Second
+	tonPreloadJettonConcurrencyDefault = 8
+)
 
 // BuildWorkers constructs workers for a given mode.
 // Note: This function now expects the indexer to be created with the appropriate mode-scoped rate limiter
@@ -327,6 +341,320 @@ func buildCosmosIndexer(
 	return indexer.NewCosmosIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildTonIndexer constructs a TON indexer using tonutils lite-server client.
+func buildTonIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	pubkeyStore pubkeystore.Store,
+	db *gorm.DB,
+	redisClient infra.RedisClient,
+) indexer.Indexer {
+	if len(chainCfg.Nodes) == 0 {
+		logger.Fatal("TON chain has no configured nodes", "chain", chainName)
+	}
+
+	client, err := tonrpc.NewClient(context.Background(), tonrpc.ClientConfig{
+		ConfigURL: chainCfg.Nodes[0].URL,
+	})
+	if err != nil {
+		logger.Fatal("Failed to initialize TON client", "chain", chainName, "err", err)
+	}
+
+	pretrackedJettonWallets := preloadTONJettonWallets(
+		context.Background(),
+		chainName,
+		chainCfg,
+		client,
+		db,
+		redisClient,
+	)
+
+	return indexer.NewTonIndexer(
+		chainName,
+		chainCfg,
+		client,
+		pubkeyStore,
+		pretrackedJettonWallets,
+	)
+}
+
+func preloadTONJettonWallets(
+	ctx context.Context,
+	chainName string,
+	chainCfg config.ChainConfig,
+	client tonrpc.TonAPI,
+	db *gorm.DB,
+	redisClient infra.RedisClient,
+) []string {
+	if db == nil {
+		logger.Warn("skip TON jetton wallet preload: database not configured", "chain", chainName)
+		return nil
+	}
+	if redisClient == nil || redisClient.GetClient() == nil {
+		logger.Warn("skip TON jetton wallet preload: redis not configured", "chain", chainName)
+		return nil
+	}
+	if client == nil {
+		logger.Warn("skip TON jetton wallet preload: ton client not configured", "chain", chainName)
+		return nil
+	}
+
+	owners, err := loadTONOwnerWallets(ctx, db)
+	if err != nil {
+		logger.Warn("failed loading TON owner wallets for jetton preload", "chain", chainName, "err", err)
+		return nil
+	}
+	if len(owners) == 0 {
+		logger.Info("skip TON jetton wallet preload: no TON owner wallets found", "chain", chainName)
+		return nil
+	}
+
+	masters, err := loadTONJettonMastersFromCache(ctx, redisClient, chainName, chainCfg)
+	if err != nil {
+		logger.Warn("failed loading TON jetton masters from cache", "chain", chainName, "err", err)
+		return nil
+	}
+	if len(masters) == 0 {
+		logger.Info("skip TON jetton wallet preload: no TON jetton masters found in cache", "chain", chainName)
+		return nil
+	}
+
+	pairCount := len(owners) * len(masters)
+	logger.Info(
+		"Preloading TON jetton wallets",
+		"chain", chainName,
+		"owners", len(owners),
+		"jetton_masters", len(masters),
+		"pairs", pairCount,
+	)
+
+	wallets := deriveTONJettonWallets(ctx, chainName, chainCfg, client, owners, masters)
+	logger.Info(
+		"TON jetton wallet preload completed",
+		"chain", chainName,
+		"owners", len(owners),
+		"jetton_masters", len(masters),
+		"jetton_wallets", len(wallets),
+	)
+
+	return wallets
+}
+
+func loadTONOwnerWallets(ctx context.Context, db *gorm.DB) ([]string, error) {
+	repo := repository.NewRepository[model.WalletAddress](db)
+	rows, err := repo.Find(ctx, repository.FindOptions{
+		Where:  repository.WhereType{"type": enum.NetworkTypeTon},
+		Select: []string{"address"},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	set := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		normalized := normalizeTONAddressForPreload(row.Address)
+		if normalized == "" {
+			continue
+		}
+		set[normalized] = struct{}{}
+	}
+
+	owners := make([]string, 0, len(set))
+	for owner := range set {
+		owners = append(owners, owner)
+	}
+	return owners, nil
+}
+
+func loadTONJettonMastersFromCache(
+	ctx context.Context,
+	redisClient infra.RedisClient,
+	chainName string,
+	chainCfg config.ChainConfig,
+) ([]string, error) {
+	client := redisClient.GetClient()
+	networkCodes := tonAssetCacheNetworkCodes(chainName, chainCfg)
+	masterSet := make(map[string]struct{})
+
+	for _, networkCode := range networkCodes {
+		if networkCode == "" {
+			continue
+		}
+
+		pattern := fmt.Sprintf("%s:%s:*", tonAssetCachePrefix, networkCode)
+		prefix := fmt.Sprintf("%s:%s:", tonAssetCachePrefix, networkCode)
+		var cursor uint64
+
+		for {
+			keys, nextCursor, err := client.Scan(ctx, cursor, pattern, 500).Result()
+			if err != nil {
+				return nil, err
+			}
+
+			for _, key := range keys {
+				contractAddress := strings.TrimSpace(strings.TrimPrefix(key, prefix))
+				if contractAddress == "" || strings.EqualFold(contractAddress, "native") {
+					continue
+				}
+
+				normalized := normalizeTONAddressForPreload(contractAddress)
+				if normalized == "" {
+					continue
+				}
+				masterSet[normalized] = struct{}{}
+			}
+
+			cursor = nextCursor
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+
+	masters := make([]string, 0, len(masterSet))
+	for master := range masterSet {
+		masters = append(masters, master)
+	}
+
+	return masters, nil
+}
+
+func deriveTONJettonWallets(
+	ctx context.Context,
+	chainName string,
+	chainCfg config.ChainConfig,
+	client tonrpc.TonAPI,
+	owners []string,
+	masters []string,
+) []string {
+	if len(owners) == 0 || len(masters) == 0 {
+		return nil
+	}
+
+	workerCount := chainCfg.Throttle.Concurrency
+	if workerCount <= 0 {
+		workerCount = tonPreloadJettonConcurrencyDefault
+	}
+	if workerCount > 32 {
+		workerCount = 32
+	}
+
+	type resolveJob struct {
+		owner  string
+		master string
+	}
+
+	jobs := make(chan resolveJob, workerCount*2)
+	wallets := make(chan string, workerCount*2)
+
+	var wg sync.WaitGroup
+	worker := func() {
+		defer wg.Done()
+
+		for job := range jobs {
+			callCtx, cancel := context.WithTimeout(ctx, tonPreloadJettonResolveTimeout)
+			wallet, err := client.ResolveJettonWalletAddress(callCtx, job.master, job.owner)
+			cancel()
+			if err != nil {
+				continue
+			}
+
+			normalized := normalizeTONAddressForPreload(wallet)
+			if normalized == "" {
+				continue
+			}
+			wallets <- normalized
+		}
+	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, owner := range owners {
+			for _, master := range masters {
+				select {
+				case <-ctx.Done():
+					return
+				case jobs <- resolveJob{
+					owner:  owner,
+					master: master,
+				}:
+				}
+			}
+		}
+	}()
+
+	go func() {
+		wg.Wait()
+		close(wallets)
+	}()
+
+	walletSet := make(map[string]struct{})
+	for wallet := range wallets {
+		walletSet[wallet] = struct{}{}
+	}
+
+	out := make([]string, 0, len(walletSet))
+	for wallet := range walletSet {
+		out = append(out, wallet)
+	}
+
+	return out
+}
+
+func tonAssetCacheNetworkCodes(chainName string, chainCfg config.ChainConfig) []string {
+	candidates := []string{
+		chainCfg.InternalCode,
+		strings.ToUpper(chainCfg.InternalCode),
+		strings.ToLower(chainCfg.InternalCode),
+		chainCfg.NetworkId,
+		strings.ToUpper(chainCfg.NetworkId),
+		strings.ToLower(chainCfg.NetworkId),
+		chainName,
+		strings.ToUpper(chainName),
+		strings.ToLower(chainName),
+	}
+
+	set := make(map[string]struct{}, len(candidates))
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		normalized := strings.TrimSpace(candidate)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := set[normalized]; exists {
+			continue
+		}
+		set[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+
+	return out
+}
+
+func normalizeTONAddressForPreload(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+
+	if parsed, err := tonaddr.ParseRawAddr(addr); err == nil && parsed != nil {
+		return parsed.StringRaw()
+	}
+	if parsed, err := tonaddr.ParseAddr(addr); err == nil && parsed != nil {
+		return parsed.StringRaw()
+	}
+
+	return ""
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -368,6 +696,8 @@ func CreateManagerWithWorkers(
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeCosmos:
 			idxr = buildCosmosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeTon:
+			idxr = buildTonIndexer(chainName, chainCfg, pubkeyStore, db, redisClient)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}

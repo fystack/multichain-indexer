@@ -20,6 +20,7 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 - Solana
 - Sui
 - Cosmos (Osmosis, Celestia, Cosmos Hub)
+- TON
 
 ---
 

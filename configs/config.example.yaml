@@ -260,6 +260,32 @@ chains:
       batch_size: 20
       concurrency: 4
 
+  ton_mainnet:
+    network_id: "ton"
+    internal_code: "TON_MAINNET"
+    type: "ton"
+    start_block: 0
+    poll_interval: "1s"
+    nodes:
+      - url: "https://ton.org/global.config.json"
+    throttle:
+      # TON uses shard transaction pagination per masterchain block.
+      batch_size: 10
+      concurrency: 2
+
+  ton_testnet:
+    network_id: "ton_testnet"
+    internal_code: "TON_TESTNET"
+    type: "ton"
+    start_block: 0
+    poll_interval: "1s"
+    nodes:
+      - url: "https://ton.org/testnet-global.config.json"
+    throttle:
+      # TON uses shard transaction pagination per masterchain block.
+      batch_size: 10
+      concurrency: 2
+
 # Infrastructure services
 services:
   port: 8080 # Health check and monitoring server port
