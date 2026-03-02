@@ -2,24 +2,29 @@ package config
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/goccy/go-yaml"
+	"github.com/go-viper/mapstructure/v2"
+	"github.com/spf13/viper"
 )
 
 var validate = validator.New()
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.AutomaticEnv()
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
 	}
 
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, err
+	if err := v.Unmarshal(&cfg, func(c *mapstructure.DecoderConfig) {
+		c.TagName = "yaml"
+	}); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
 	// apply defaults
