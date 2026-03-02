@@ -7,6 +7,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
+	"github.com/fystack/multichain-indexer/internal/rpc/cosmos"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
@@ -288,6 +289,44 @@ func buildSuiIndexer(
 	return indexer.NewSuiIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
+// buildCosmosIndexer constructs a Cosmos indexer with failover and providers.
+func buildCosmosIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[cosmos.CosmosAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := cosmos.NewCosmosClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: rpc.ClientTypeREST,
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewCosmosIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
 // CreateManagerWithWorkers initializes manager and all workers for configured chains.
 func CreateManagerWithWorkers(
 	ctx context.Context,
@@ -327,6 +366,8 @@ func CreateManagerWithWorkers(
 			idxr = buildSolanaIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeSui:
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeCosmos:
+			idxr = buildCosmosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}

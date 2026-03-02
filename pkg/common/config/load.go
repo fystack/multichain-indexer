@@ -41,7 +41,11 @@ func Load(path string) (*Config, error) {
 	for name, chain := range cfg.Chains {
 		// apply name to struct name
 		chain.Name = strings.ToUpper(name)
+		chain.NativeDenom = strings.TrimSpace(chain.NativeDenom)
 		if err := validate.Struct(chain); err != nil {
+			return nil, fmt.Errorf("chain %s validation failed: %w", name, err)
+		}
+		if err := validateChainConfig(chain); err != nil {
 			return nil, fmt.Errorf("chain %s validation failed: %w", name, err)
 		}
 		cfg.Chains[name] = chain
