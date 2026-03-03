@@ -167,10 +167,18 @@ chains:
     internal_code: "SUI_MAINNET"
     type: "sui"
     start_block: 0
-    poll_interval: "5s"
+    poll_interval: "1s"
     nodes:
       - url: "fullnode.mainnet.sui.io:443" # e.g. 127.0.0.1:9000
       - url: "sui-mainnet.nodeinfra.com:443"
+    client:
+      timeout: "12s"
+      max_retries: 2
+      retry_delay: "1s"
+    throttle:
+      batch_size: 200
+      concurrency: 12
+      parallel: true
 
   osmosis_mainnet:
     network_id: "osmosis-1"

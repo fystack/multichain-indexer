@@ -134,10 +134,19 @@ func (s *SuiIndexer) GetBlocksByNumbers(
 	ctx context.Context,
 	blockNumbers []uint64,
 ) ([]BlockResult, error) {
-	// Limit concurrency to avoid overwhelming the node
-	// Default to 10 concurrent requests
-	const maxConcurrency = 10
-	sem := semaphore.NewWeighted(maxConcurrency)
+	if len(blockNumbers) == 0 {
+		return nil, nil
+	}
+
+	// Use configured concurrency when available, fallback to a safe default.
+	workers := s.cfg.Throttle.Concurrency
+	if workers <= 0 {
+		workers = 10
+	}
+	if workers > 50 {
+		workers = 50
+	}
+	sem := semaphore.NewWeighted(int64(workers))
 
 	// Results map protected by mutex
 	resultsMap := make(map[uint64]BlockResult)
@@ -175,15 +184,23 @@ func (s *SuiIndexer) GetBlocksByNumbers(
 
 	wg.Wait()
 
-	// Convert map to slice in order of requested blockNumbers
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
+	// Convert map to slice in order of requested blockNumbers and surface first error.
 	results := make([]BlockResult, 0, len(blockNumbers))
+	var firstErr error
 	for _, num := range blockNumbers {
 		if res, ok := resultsMap[num]; ok {
 			results = append(results, res)
+			if firstErr == nil && res.Error != nil {
+				firstErr = fmt.Errorf("block %d: %s", res.Number, res.Error.Message)
+			}
 		}
 	}
 
-	return results, nil
+	return results, firstErr
 }
 
 // IsHealthy does a quick gRPC health check by asking for the latest checkpoint.
