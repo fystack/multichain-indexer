@@ -18,6 +18,7 @@ This indexer is designed to be used in a multi-chain environment, where each cha
 - Optimism
 - Bitcoin
 - Solana
+- Aptos
 - Sui
 - Cosmos (Osmosis, Celestia, Cosmos Hub)
 - TON
