@@ -31,6 +31,43 @@ type SuiIndexer struct {
 const suiMistPerSUI = 1_000_000_000
 const suiNativeCoinType = "0x2::sui::SUI"
 
+func isSuiNativeCoinType(coinType string) bool {
+	coinType = strings.TrimSpace(coinType)
+	if coinType == "" {
+		return false
+	}
+
+	// Some nodes/serializers may return wrapped types (e.g. Coin<0x2::sui::SUI>).
+	if i := strings.Index(coinType, "<"); i >= 0 && strings.HasSuffix(coinType, ">") {
+		inner := strings.TrimSpace(coinType[i+1 : len(coinType)-1])
+		if isSuiNativeCoinType(inner) {
+			return true
+		}
+	}
+
+	parts := strings.Split(coinType, "::")
+	if len(parts) != 3 {
+		return false
+	}
+
+	return normalizeSuiAddress(parts[0]) == "0x2" &&
+		strings.EqualFold(parts[1], "sui") &&
+		strings.EqualFold(parts[2], "SUI")
+}
+
+func normalizeSuiAddress(addr string) string {
+	addr = strings.TrimSpace(strings.ToLower(addr))
+	if !strings.HasPrefix(addr, "0x") {
+		return addr
+	}
+
+	hex := strings.TrimLeft(addr[2:], "0")
+	if hex == "" {
+		hex = "0"
+	}
+	return "0x" + hex
+}
+
 func NewSuiIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[sui.SuiAPI], pubkeyStore PubkeyStore) *SuiIndexer {
 	s := &SuiIndexer{
 		chainName:   chainName,
@@ -304,8 +341,8 @@ func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNum
 		t.ToAddress = receiver
 		amount := decimal.NewFromBigInt(new(big.Int).SetUint64(maxAmount), 0)
 		t.AssetAddress = maxAsset
-		if maxAsset == suiNativeCoinType {
-			amount = amount.Div(decimal.NewFromInt(suiMistPerSUI))
+		if isSuiNativeCoinType(maxAsset) {
+			t.AssetAddress = suiNativeCoinType
 			t.Type = constant.TxTypeNativeTransfer
 		} else {
 			t.Type = constant.TxTypeTokenTransfer
