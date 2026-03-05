@@ -56,3 +56,4 @@ COMMENT ON COLUMN wallet_addresses.standard IS 'The token standard (free text, n
 INSERT INTO wallet_addresses (address, type, standard) VALUES
 ('TAWdqnuYCNU3dKsi7pR8d7sDkx1Evb2giV', 'tron', 'trc20'),
 ('TT1j2adMBb6bF2K8C2LX1QkkmSXHjiaAfw', 'tron', 'trc20');
+('0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe', 'ton', 'native')

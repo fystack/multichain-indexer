@@ -178,6 +178,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"type", tx.Type,
 				"addressType", addressType,
 				"txhash", tx.TxHash,
+				"txnType", tx.Type,
 				"status", tx.Status,
 				"confirmations", tx.Confirmations,
 			)
