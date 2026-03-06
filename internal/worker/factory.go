@@ -10,6 +10,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/internal/rpc/aptos"
 	"github.com/fystack/multichain-indexer/internal/rpc/bitcoin"
 	"github.com/fystack/multichain-indexer/internal/rpc/cosmos"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
@@ -339,6 +340,44 @@ func buildCosmosIndexer(
 	}
 
 	return indexer.NewCosmosIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
+// buildAptosIndexer constructs an Aptos indexer with failover and providers.
+func buildAptosIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[aptos.AptosAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := aptos.NewAptosClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: rpc.ClientTypeREST,
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewAptosIndexer(chainName, chainCfg, failover, pubkeyStore)
 }
 
 // buildTonIndexer constructs a TON indexer using tonutils lite-server client.
@@ -696,6 +735,8 @@ func CreateManagerWithWorkers(
 			idxr = buildSuiIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeCosmos:
 			idxr = buildCosmosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeApt:
+			idxr = buildAptosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTon:
 			idxr = buildTonIndexer(chainName, chainCfg, pubkeyStore, db, redisClient)
 		default:
