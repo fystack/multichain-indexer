@@ -17,6 +17,7 @@ const (
 // Network types - supported blockchain networks
 const (
 	NetworkEVM     = "evm"     // Ethereum and EVM-compatible chains
+	NetworkAptos   = "apt"     // Aptos blockchain
 	NetworkSolana  = "solana"  // Solana blockchain
 	NetworkTron    = "tron"    // Tron blockchain
 	NetworkBitcoin = "bitcoin" // Bitcoin blockchain

@@ -160,6 +160,54 @@ chains:
       concurrency: 12
       parallel: true
 
+  aptos_mainnet:
+    network_id: "aptos_mainnet"
+    internal_code: "APTOS_MAINNET"
+    type: "apt"
+    start_block: 0
+    # Aptos produces blocks quickly, so use sub-second polling to reduce head gap.
+    poll_interval: "200ms"
+    nodes:
+      - url: "https://aptos-rest.publicnode.com"
+      - url: "https://api.mainnet.aptoslabs.com"
+      - url: "https://aptos-mainnet.public.blastapi.io"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "1s"
+    throttle:
+      rps: 100
+      burst: 200
+      batch_size: 100
+      concurrency: 20
+      parallel: true
+
+  aptos_testnet:
+    network_id: "aptos_testnet"
+    internal_code: "APTOS_TESTNET"
+    type: "apt"
+    start_block: 0
+    # Aptos produces blocks quickly, so use sub-second polling to reduce head gap.
+    poll_interval: "200ms"
+    nodes:
+      - url: "https://api.testnet.aptoslabs.com"
+        auth: # API key required for higher rate limits
+          type: "header"
+          key: "Authorization"
+          value: "Bearer <APTOSLABS_API_KEY>"
+      - url: "https://fullnode.testnet.aptoslabs.com"
+      - url: "https://testnet.aptos-apis.com"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "1s"
+    throttle:
+      rps: 100
+      burst: 200
+      batch_size: 100
+      concurrency: 20
+      parallel: true
+
   sui_mainnet:
     # Example Sui network using gRPC-based node endpoint.
     # Adjust network_id, internal_code, start_block (checkpoint sequence), and URL to your setup.
