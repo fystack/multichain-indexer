@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
@@ -12,6 +13,10 @@ import (
 var validate = validator.New()
 
 func Load(path string) (*Config, error) {
+	// Unset CHAINS env var to prevent Viper from overriding the
+	// "chains" map in the YAML config with a plain string value.
+	os.Unsetenv("CHAINS")
+
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
