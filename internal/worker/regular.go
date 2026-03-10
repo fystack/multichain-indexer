@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -16,8 +17,12 @@ import (
 )
 
 const (
-	MaxBlockHashSize = 20
+	MaxBlockHashSize        = 20
+	regularGapRetryAttempts = 2
+	regularGapRetryDelay    = time.Second
 )
+
+var errRegularRecoveryReorgHandled = errors.New("regular recovery reorg handled")
 
 type RegularWorker struct {
 	*BaseWorker
@@ -141,35 +146,23 @@ func (rw *RegularWorker) processRegularBlocks() error {
 
 	lastSuccess := rw.currentBlock - 1
 	var lastSuccessHash string
+	var (
+		processErr error
+		stopTick   bool
+	)
+	if rw.isReorgCheckRequired() {
+		stopTick, processErr = rw.processReorgCheckedBatch(results, end, &lastSuccess, &lastSuccessHash)
+	} else {
+		for _, res := range results {
+			if rw.handleBlockResult(res) {
+				lastSuccess = res.Number
+				lastSuccessHash = res.Block.Hash
+			}
+		}
+	}
 
-	for i, res := range results {
-		if res.Block == nil || res.Error != nil {
-			continue
-		}
-		// cross-batch reorg detection
-		if rw.isReorgCheckRequired() {
-			if reorg, err := rw.detectAndHandleReorg(&res); err != nil {
-				return err
-			} else if reorg {
-				return nil // rollback done, stop this tick
-			}
-		}
-		// intra-batch continuity
-		if i > 0 && rw.isReorgCheckRequired() {
-			if !checkContinuity(results[i-1], res) {
-				rw.logger.Warn("Batch continuity broken, will retry next tick",
-					"prev", results[i-1].Block.Number,
-					"prev_hash", results[i-1].Block.Hash,
-					"curr", res.Block.Number,
-					"curr_parent", res.Block.ParentHash,
-				)
-				break
-			}
-		}
-		if rw.handleBlockResult(res) {
-			lastSuccess = res.Number
-			lastSuccessHash = res.Block.Hash
-		}
+	if stopTick {
+		return nil
 	}
 
 	if lastSuccess >= rw.currentBlock {
@@ -190,7 +183,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		"expected", originalEnd-originalStart+1,
 		"got", len(results),
 	)
-	return nil
+	return processErr
 }
 
 func (rw *RegularWorker) determineStartingBlock() uint64 {
@@ -315,8 +308,203 @@ func (rw *RegularWorker) clearBlockHashes() {
 	rw.blockHashes = rw.blockHashes[:0] // Clear slice but keep capacity
 }
 
+func (rw *RegularWorker) processReorgCheckedBatch(
+	results []indexer.BlockResult,
+	end uint64,
+	lastSuccess *uint64,
+	lastSuccessHash *string,
+) (bool, error) {
+	expected := rw.currentBlock
+
+	for _, res := range results {
+		if expected > end {
+			break
+		}
+
+		if res.Number != expected {
+			rw.logger.Warn("Batch result out of order, switching to single-block recovery",
+				"expected", expected,
+				"actual", res.Number,
+			)
+			return rw.recoverRegularGap(expected, end, lastSuccess, lastSuccessHash)
+		}
+
+		if res.Error != nil || res.Block == nil {
+			rw.logger.Warn("Batch result unresolved, switching to single-block recovery",
+				"block", expected,
+				"batch_error", blockResultError(res),
+			)
+			return rw.recoverRegularGap(expected, end, lastSuccess, lastSuccessHash)
+		}
+
+		reorg, err := rw.detectAndHandleReorg(&res)
+		if err != nil {
+			return false, err
+		}
+		if reorg {
+			return true, nil
+		}
+
+		if *lastSuccessHash != "" && !matchesParentHash(*lastSuccessHash, res.Block.ParentHash) {
+			rw.logger.Warn("Batch continuity broken, switching to single-block recovery",
+				"expected", expected,
+				"prev_hash", *lastSuccessHash,
+				"curr_parent", res.Block.ParentHash,
+			)
+			return rw.recoverRegularGap(expected, end, lastSuccess, lastSuccessHash)
+		}
+
+		if rw.handleBlockResult(res) {
+			*lastSuccess = res.Number
+			*lastSuccessHash = res.Block.Hash
+			expected = res.Number + 1
+		}
+	}
+
+	if expected <= end {
+		rw.logger.Warn("Batch returned incomplete results, switching to single-block recovery",
+			"expected", expected,
+			"end", end,
+			"received", len(results),
+		)
+		return rw.recoverRegularGap(expected, end, lastSuccess, lastSuccessHash)
+	}
+
+	return false, nil
+}
+
+func (rw *RegularWorker) recoverRegularGap(
+	start, end uint64,
+	lastSuccess *uint64,
+	lastSuccessHash *string,
+) (bool, error) {
+	rw.logger.Warn("Recovering regular gap with failover-aware single-block fetch",
+		"start", start,
+		"end", end,
+		"attempts", regularGapRetryAttempts,
+	)
+
+	for blockNumber := start; blockNumber <= end; blockNumber++ {
+		if err := rw.recoverRegularBlock(blockNumber, lastSuccess, lastSuccessHash); err != nil {
+			if errors.Is(err, errRegularRecoveryReorgHandled) {
+				return true, nil
+			}
+
+			rw.handleBlockResult(indexer.BlockResult{
+				Number: blockNumber,
+				Error: &indexer.Error{
+					ErrorType: indexer.ErrorTypeUnknown,
+					Message:   err.Error(),
+				},
+			})
+			return false, fmt.Errorf("recover block %d: %w", blockNumber, err)
+		}
+	}
+
+	return false, nil
+}
+
+func (rw *RegularWorker) recoverRegularBlock(
+	blockNumber uint64,
+	lastSuccess *uint64,
+	lastSuccessHash *string,
+) error {
+	var lastErr error
+
+	for attempt := 1; attempt <= regularGapRetryAttempts; attempt++ {
+		res, err := rw.fetchRegularBlock(blockNumber)
+		if err == nil {
+			reorg, reorgErr := rw.detectAndHandleReorg(&res)
+			if reorgErr != nil {
+				return reorgErr
+			}
+			if reorg {
+				return errRegularRecoveryReorgHandled
+			}
+
+			if *lastSuccessHash != "" && !matchesParentHash(*lastSuccessHash, res.Block.ParentHash) {
+				err = fmt.Errorf(
+					"continuity mismatch for block %d: expected parent %s, got %s",
+					blockNumber,
+					*lastSuccessHash,
+					res.Block.ParentHash,
+				)
+			} else if rw.handleBlockResult(res) {
+				*lastSuccess = res.Number
+				*lastSuccessHash = res.Block.Hash
+				return nil
+			} else {
+				err = fmt.Errorf("failed to process recovered block %d", blockNumber)
+			}
+		}
+
+		lastErr = err
+		rw.logger.Warn("Single-block recovery failed",
+			"block", blockNumber,
+			"attempt", attempt,
+			"max_attempts", regularGapRetryAttempts,
+			"error", err,
+		)
+
+		if attempt < regularGapRetryAttempts {
+			select {
+			case <-rw.ctx.Done():
+				return rw.ctx.Err()
+			case <-time.After(regularGapRetryDelay):
+			}
+		}
+	}
+
+	return lastErr
+}
+
+func (rw *RegularWorker) fetchRegularBlock(blockNumber uint64) (indexer.BlockResult, error) {
+	block, err := rw.chain.GetBlock(rw.ctx, blockNumber)
+	if err != nil {
+		return indexer.BlockResult{Number: blockNumber}, err
+	}
+	if block == nil {
+		return indexer.BlockResult{Number: blockNumber}, fmt.Errorf("nil block result for %d", blockNumber)
+	}
+	return indexer.BlockResult{
+		Number: blockNumber,
+		Block:  block,
+	}, nil
+}
+
 func checkContinuity(prev, curr indexer.BlockResult) bool {
+	if prev.Error != nil || curr.Error != nil || prev.Block == nil || curr.Block == nil {
+		return false
+	}
 	return prev.Block.Hash == curr.Block.ParentHash
+}
+
+func blockResultNumber(res indexer.BlockResult) uint64 {
+	if res.Block != nil {
+		return res.Block.Number
+	}
+	return res.Number
+}
+
+func blockResultHash(res indexer.BlockResult) string {
+	if res.Block != nil {
+		return res.Block.Hash
+	}
+	return ""
+}
+
+func blockResultError(res indexer.BlockResult) string {
+	if res.Error != nil {
+		return res.Error.Message
+	}
+	if res.Block == nil {
+		return "nil block"
+	}
+	return ""
+}
+
+func matchesParentHash(prevHash, parentHash string) bool {
+	return prevHash == parentHash
 }
 
 // splitCatchupRange splits a large catchup range into smaller, manageable chunks
