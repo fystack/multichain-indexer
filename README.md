@@ -1,9 +1,19 @@
 # Multi-Chain Transaction Indexer
 
-Production-ready indexer for multiple blockchains with four cooperating workers:
-**Regular (real-time)**, **Catchup (historical)**, **Rescanner (failed/missed blocks)**, **Manual (manual blocks)**.
+A production-ready, multi-chain blockchain indexer that parses every transaction on supported networks and detects transfers to addresses registered in your system. It uses a bloom filter to efficiently match destination addresses against your known address set, then emits matched transactions as events via NATS JetStream for downstream processing.
 
-This indexer is designed to be used in a multi-chain environment, where each chain is indexed independently and emits events.
+## Use Cases
+
+- **Crypto Payment Gateways** — Detect incoming payments to merchant deposit addresses in real time across multiple chains. Automatically trigger order fulfillment or payment confirmation when funds arrive.
+- **Centralized Exchanges (CEX)** — Monitor deposit addresses for incoming user funds. Identify and credit deposits across all supported chains without running separate infrastructure per network.
+- **OTC Desks** — Track settlement addresses to confirm large transfers have landed on-chain. Get instant notifications when counterparty funds arrive at designated addresses.
+
+## How It Works
+
+The indexer scans every block on each configured chain, extracts transfer events (native and token), and checks each destination address against a bloom filter populated with your system's known addresses. When a match is found, the transaction is published to NATS JetStream for your application to consume, verify, and act on.
+
+Four cooperating workers ensure complete coverage:
+**Regular (real-time)**, **Catchup (historical)**, **Rescanner (failed/missed blocks)**, **Manual (manual blocks)**. Each chain is indexed independently in parallel.
 
 ![Fystack Indexer](images/Fystack_indexer.png)
 
