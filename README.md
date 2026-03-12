@@ -239,6 +239,66 @@ nats consumer sub transfer transaction-consumer
 
 ---
 
+## 🌐 HTTP API
+
+```bash
+# set this to your configured services.port
+export INDEXER_PORT=8080
+```
+
+### Health Check
+
+```bash
+curl -s "http://localhost:${INDEXER_PORT}/health" | jq
+```
+
+### Rescan Block Range
+
+The manual worker will pick this range up from Redis automatically.
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/api/v1/networks/rescan" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "network_code": "ETH_MAINNET",
+    "from": 19000000,
+    "to": 19000100
+  }' | jq
+```
+
+### Reload Wallet Bloom Filter
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/api/v1/wallets/reload" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "evm"
+  }' | jq
+```
+
+### Reload TON Wallet Bloom Filter And Derived Jetton Wallets
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/api/v1/wallets/reload" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "ton",
+    "chain": "ton_mainnet"
+  }' | jq
+```
+
+### Reload TON Jetton Registry
+
+```bash
+curl -s -X POST "http://localhost:${INDEXER_PORT}/api/v1/ton/jettons/reload" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "chain": "ton_mainnet"
+  }' | jq
+```
+
+---
+
 ## 📝 Example `configs/config.yaml` (chains section)
 
 ```yaml

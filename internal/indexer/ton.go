@@ -98,6 +98,25 @@ func NewTonIndexer(
 func (t *TonIndexer) GetName() string                  { return strings.ToUpper(t.chainName) }
 func (t *TonIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeTon }
 func (t *TonIndexer) GetNetworkInternalCode() string   { return t.cfg.InternalCode }
+func (t *TonIndexer) Client() tonrpc.TonAPI            { return t.client }
+
+func (t *TonIndexer) ReplaceTrackedJettonWallets(wallets []string) int {
+	next := make(map[string]struct{}, len(wallets))
+	for _, wallet := range wallets {
+		normalized := normalizeTONAddressRaw(wallet)
+		if normalized == "" {
+			continue
+		}
+		next[normalized] = struct{}{}
+	}
+
+	t.jettonMasterMu.Lock()
+	t.trackedJettonWallets = next
+	t.jettonOwners = make(map[string]string)
+	t.jettonMasters = make(map[string]string)
+	t.jettonMasterMu.Unlock()
+	return len(next)
+}
 
 func (t *TonIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	if t.client == nil {

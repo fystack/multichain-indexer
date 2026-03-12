@@ -28,6 +28,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 	"github.com/fystack/multichain-indexer/pkg/repository"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/missingblockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 	tonaddr "github.com/xssnick/tonutils-go/address"
 	"gorm.io/gorm"
@@ -38,6 +39,7 @@ type WorkerDeps struct {
 	Ctx        context.Context
 	KVStore    infra.KVStore
 	BlockStore blockstore.Store
+	MissingBlk missingblockstore.MissingBlocksStore
 	Emitter    events.Emitter
 	Pubkey     pubkeystore.Store
 	Redis      infra.RedisClient
@@ -114,7 +116,7 @@ func BuildWorkers(
 				idxr,
 				cfg,
 				deps.KVStore,
-				deps.Redis,
+				deps.MissingBlk,
 				deps.BlockStore,
 				deps.Emitter,
 				deps.Pubkey,
@@ -703,6 +705,7 @@ func CreateManagerWithWorkers(
 	addressBF addressbloomfilter.WalletAddressBloomFilter,
 	emitter events.Emitter,
 	redisClient infra.RedisClient,
+	missingBlocks missingblockstore.MissingBlocksStore,
 	managerCfg ManagerConfig,
 ) *Manager {
 	// Shared stores
@@ -748,6 +751,7 @@ func CreateManagerWithWorkers(
 			Ctx:        ctx,
 			KVStore:    kvstore,
 			BlockStore: blockStore,
+			MissingBlk: missingBlocks,
 			Emitter:    emitter,
 			Pubkey:     pubkeyStore,
 			Redis:      redisClient,

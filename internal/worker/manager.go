@@ -80,3 +80,9 @@ func (m *Manager) closeResource(name string, resource interface{}, closer func()
 func (m *Manager) AddWorkers(workers ...Worker) {
 	m.workers = append(m.workers, workers...)
 }
+
+func (m *Manager) Workers() []Worker {
+	out := make([]Worker, 0, len(m.workers))
+	out = append(out, m.workers...)
+	return out
+}

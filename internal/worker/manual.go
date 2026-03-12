@@ -36,7 +36,7 @@ func NewManualWorker(
 	chain indexer.Indexer,
 	cfg config.ChainConfig,
 	kv infra.KVStore,
-	redisClient infra.RedisClient,
+	mbs missingblockstore.MissingBlocksStore,
 	blockStore blockstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
@@ -54,7 +54,7 @@ func NewManualWorker(
 			ModeManual,
 			failedChan,
 		),
-		mbs:    missingblockstore.NewMissingBlocksStore(redisClient),
+		mbs:    mbs,
 		config: DefaultManualConfig,
 	}
 }

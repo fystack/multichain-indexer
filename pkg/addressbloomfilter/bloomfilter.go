@@ -16,6 +16,9 @@ type WalletAddressBloomFilter interface {
 	// Initialize fully resets the bloom filter from database state.
 	Initialize(ctx context.Context) error
 
+	// InitializeWithTypes resets bloom filters for selected address types only.
+	InitializeWithTypes(ctx context.Context, addressTypes []enum.NetworkType) error
+
 	// Add inserts a single address into the bloom filter for a given address type.
 	Add(address string, addressType enum.NetworkType)
 
@@ -30,6 +33,16 @@ type WalletAddressBloomFilter interface {
 
 	// Stats returns metadata and filter info for the given address type.
 	Stats(addressType enum.NetworkType) map[string]any
+}
+
+func DefaultAddressTypes() []enum.NetworkType {
+	return []enum.NetworkType{
+		enum.NetworkTypeEVM,
+		enum.NetworkTypeTron,
+		enum.NetworkTypeBtc,
+		enum.NetworkTypeSol,
+		enum.NetworkTypeSui,
+	}
 }
 
 func NewBloomFilter(

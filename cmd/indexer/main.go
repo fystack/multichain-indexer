@@ -2,25 +2,27 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
 	"gorm.io/gorm"
 
+	indexerapi "github.com/fystack/multichain-indexer/internal/api"
 	"github.com/fystack/multichain-indexer/internal/worker"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/kvstore"
+	"github.com/fystack/multichain-indexer/pkg/store/missingblockstore"
 )
 
 type CLI struct {
@@ -128,8 +130,8 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	if err != nil {
 		logger.Fatal("Create kvstore failed", "err", err)
 	}
-	defer kvstore.Close()
 
+	missingBlocksStore := missingblockstore.NewMissingBlocksStore(redisClient)
 	logger.Info("Connecting to NATS", "url", services.Nats.URL)
 	natsConn, err := infra.GetNATSConnection(services.Nats, string(cfg.Environment))
 	if err != nil {
@@ -149,24 +151,6 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	utxoQueue := utxoQueueManager.NewMessageQueue("dispatch")
 
 	emitter := events.NewEmitter(eventQueue, utxoQueue, services.Nats.SubjectPrefix)
-	defer emitter.Close()
-
-	// start address bloom filter (Initialize is optional)
-	var addressBF addressbloomfilter.WalletAddressBloomFilter
-	if services.Bloomfilter != nil && db != nil {
-		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
-		if err := addressBF.Initialize(ctx); err != nil {
-			logger.Fatal("Address bloom filter init failed", "err", err)
-		}
-		logger.Info("Address bloom filter initialized")
-	} else if services.Bloomfilter != nil {
-		// Create bloom filter instance even without database, but skip initialization
-		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
-		logger.Info("Address bloom filter created (initialization skipped - no database)")
-	} else {
-		logger.Info("Address bloom filter skipped - not configured")
-	}
-
 	// If no chains specified, use all configured chains
 	if len(chains) == 0 {
 		chains = cfg.Chains.Names()
@@ -186,6 +170,22 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
+	// start address bloom filter (Initialize is optional)
+	var addressBF addressbloomfilter.WalletAddressBloomFilter
+	if services.Bloomfilter != nil && db != nil {
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		bloomAddressTypes := resolveBloomAddressTypes(cfg, chains)
+		if err := addressBF.InitializeWithTypes(ctx, bloomAddressTypes); err != nil {
+			logger.Fatal("Address bloom filter init failed", "err", err)
+		}
+		logger.Info("Address bloom filter initialized", "address_types", bloomAddressTypes)
+	} else if services.Bloomfilter != nil {
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		logger.Info("Address bloom filter created (initialization skipped - no database)")
+	} else {
+		logger.Info("Address bloom filter skipped - not configured")
+	}
+
 	// Create manager with all workers using factory
 	managerCfg := worker.ManagerConfig{
 		Chains:        chains,
@@ -201,10 +201,20 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		addressBF,
 		emitter,
 		redisClient,
+		missingBlocksStore,
 		managerCfg,
 	)
 
-	healthServer := startHealthServer(cfg.Services.Port, cfg)
+	walletReloadService := worker.NewWalletReloadServiceFromManager(manager, db, redisClient, addressBF)
+	tonJettonReloadService := worker.NewTonJettonReloadServiceFromManager(manager, db, redisClient)
+
+	httpServer := startHTTPServer(
+		cfg.Services.Port,
+		cfg.Version,
+		missingBlocksStore,
+		walletReloadService,
+		tonJettonReloadService,
+	)
 
 	// Start all workers
 	logger.Info("Starting all workers")
@@ -215,14 +225,14 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	logger.Info("Shutting down indexer...")
 
-	// Shutdown health server
-	if healthServer != nil {
+	// Shutdown HTTP server
+	if httpServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := healthServer.Shutdown(ctx); err != nil {
-			logger.Error("Health server shutdown failed", "error", err)
+		if err := httpServer.Shutdown(ctx); err != nil {
+			logger.Error("HTTP server shutdown failed", "error", err)
 		} else {
-			logger.Info("Health server stopped gracefully")
+			logger.Info("HTTP server stopped gracefully")
 		}
 	}
 
@@ -230,49 +240,66 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	logger.Info("✅ Indexer stopped gracefully")
 }
 
-type HealthResponse struct {
-	Status    string    `json:"status"`
-	Timestamp time.Time `json:"timestamp"`
-	Version   string    `json:"version"`
+func waitForShutdown() {
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
 }
 
-func startHealthServer(port int, cfg *config.Config) *http.Server {
-	mux := http.NewServeMux()
-
-	version := cfg.Version
+func startHTTPServer(
+	port int,
+	version string,
+	missingBlocksStore missingblockstore.MissingBlocksStore,
+	walletReloadService *worker.WalletReloadService,
+	tonJettonReloadService *worker.TonJettonReloadService,
+) *http.Server {
 	if version == "" {
-		version = "1.0.0" // fallback version
+		version = "1.0.0"
 	}
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		response := HealthResponse{
-			Status:    "ok",
-			Timestamp: time.Now().UTC(),
-			Version:   version,
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
-	})
-
+	handler := indexerapi.NewHandler(version, missingBlocksStore, walletReloadService, tonJettonReloadService)
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", port),
-		Handler: mux,
+		Addr:    ":" + strconv.Itoa(port),
+		Handler: handler.Router(),
 	}
 
 	go func() {
-		logger.Info("Health check server started", "port", port, "endpoint", "/health")
+		logger.Info(
+			"Indexer HTTP server started",
+			"port", port,
+			"health_endpoint", "/health",
+			"rescan_endpoint", "/api/v1/networks/rescan",
+			"wallet_reload_endpoint", "/api/v1/wallets/reload",
+			"jetton_reload_endpoint", "/api/v1/ton/jettons/reload",
+		)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Health server failed to start", "error", err)
+			logger.Error("HTTP server failed to start", "error", err)
 		}
 	}()
 
 	return server
 }
 
-func waitForShutdown() {
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-	<-stop
+func resolveBloomAddressTypes(cfg *config.Config, chains []string) []enum.NetworkType {
+	if cfg == nil || len(chains) == 0 {
+		return nil
+	}
+
+	selected := make(map[enum.NetworkType]struct{})
+	for _, chainName := range chains {
+		chainCfg, err := cfg.Chains.GetChain(chainName)
+		if err != nil {
+			continue
+		}
+		selected[chainCfg.Type] = struct{}{}
+	}
+
+	ordered := addressbloomfilter.DefaultAddressTypes()
+	result := make([]enum.NetworkType, 0, len(ordered))
+	for _, t := range ordered {
+		if _, ok := selected[t]; ok {
+			result = append(result, t)
+		}
+	}
+	return result
 }
