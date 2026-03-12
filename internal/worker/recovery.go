@@ -19,7 +19,7 @@ func (bw *BaseWorker) executeRecoverable(task string, fn func() error) (err erro
 	return fn()
 }
 
-func (bw *BaseWorker) goWithRecovery(task string, fn func()) {
+func (bw *BaseWorker) executeWithRecovery(task string, fn func()) {
 	go func() {
 		defer bw.recoverPanic(task)
 		fn()

@@ -70,7 +70,7 @@ func (cw *CatchupWorker) Start() {
 		"total_blocks", totalBlocks,
 		"parallel_workers", CATCHUP_WORKERS,
 	)
-	cw.goWithRecovery("catchup loop", cw.runCatchup)
+	cw.executeWithRecovery("catchup loop", cw.runCatchup)
 }
 
 // runCatchup is a tight loop that processes catchup ranges without PollInterval delays.

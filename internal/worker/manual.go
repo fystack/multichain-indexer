@@ -63,7 +63,7 @@ func (mw *ManualWorker) Start() {
 	mw.logger.Info("Starting manual worker", "chain", mw.chain.GetName())
 
 	// Periodic metrics
-	mw.goWithRecovery("manual metrics", func() {
+	mw.executeWithRecovery("manual metrics", func() {
 		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
 		for {
@@ -76,7 +76,7 @@ func (mw *ManualWorker) Start() {
 		}
 	})
 
-	mw.goWithRecovery("manual loop", mw.loop)
+	mw.executeWithRecovery("manual loop", mw.loop)
 }
 
 func (mw *ManualWorker) loop() {
