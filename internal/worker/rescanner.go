@@ -74,17 +74,17 @@ func (rw *RescannerWorker) Start() {
 	)
 
 	// listen failedChan
-	go func() {
+	rw.executeWithRecovery("rescanner failed listener", func() {
 		for evt := range rw.failedChan {
 			rw.addFailedBlock(evt.Block, fmt.Sprintf("from failedChan attempt %d", evt.Attempt))
 		}
-	}()
+	})
 
 	// periodic rescan
 	go rw.run(rw.processRescan)
 
 	// periodic flush
-	go rw.periodicBatchFlush()
+	rw.executeWithRecovery("rescanner flush loop", rw.periodicBatchFlush)
 }
 
 func (rw *RescannerWorker) Stop() {

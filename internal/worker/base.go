@@ -90,7 +90,9 @@ func (bw *BaseWorker) run(job func() error) {
 			start := time.Now()
 
 			// Use Exponential retry for the job
-			if err := retry.Exponential(job, retry.ExponentialConfig{
+			if err := retry.Exponential(func() error {
+				return bw.executeRecoverable("worker job", job)
+			}, retry.ExponentialConfig{
 				InitialInterval: retryInterval,
 				MaxElapsedTime:  bw.config.PollInterval * 4,
 				OnRetry: func(err error, next time.Duration) {

@@ -19,6 +19,7 @@ const (
 	MAX_RANGE_SIZE         = 20
 	CATCHUP_WORKERS        = 3 // Number of parallel workers
 	PROGRESS_SAVE_INTERVAL = 1 // Save progress every N batches
+	catchupPanicRetryDelay = time.Second
 )
 
 type CatchupWorker struct {
@@ -69,7 +70,7 @@ func (cw *CatchupWorker) Start() {
 		"total_blocks", totalBlocks,
 		"parallel_workers", CATCHUP_WORKERS,
 	)
-	go cw.runCatchup()
+	cw.executeWithRecovery("catchup loop", cw.runCatchup)
 }
 
 // runCatchup is a tight loop that processes catchup ranges without PollInterval delays.
@@ -83,9 +84,17 @@ func (cw *CatchupWorker) runCatchup() {
 		default:
 		}
 
-		if err := cw.processCatchupBlocksParallel(); err != nil {
+		err := cw.executeRecoverable("catchup pass", cw.processCatchupBlocksParallel)
+		if err != nil {
 			cw.logger.Error("Catchup job error", "err", err)
 			_ = cw.emitter.EmitError(cw.chain.GetName(), err)
+			if _, ok := err.(*recoveredPanicError); ok {
+				select {
+				case <-cw.ctx.Done():
+					return
+				case <-time.After(catchupPanicRetryDelay):
+				}
+			}
 			continue
 		}
 
@@ -206,6 +215,7 @@ func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
+			defer cw.recoverPanic(fmt.Sprintf("catchup range worker %d", workerID))
 			cw.logger.Debug("Starting catchup worker", "worker_id", workerID)
 
 			for r := range rangeChan {
