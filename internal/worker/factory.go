@@ -42,6 +42,7 @@ type WorkerDeps struct {
 	Pubkey     pubkeystore.Store
 	Redis      infra.RedisClient
 	FailedChan chan FailedBlockEvent
+	Observer   BlockResultObserver
 }
 
 // ManagerConfig defines which workers to enable per chain.
@@ -51,6 +52,28 @@ type ManagerConfig struct {
 	EnableRescanner bool
 	EnableCatchup   bool
 	EnableManual    bool
+	Observer        BlockResultObserver
+}
+
+// setObserverOnWorkers injects the observer callback into each worker's BaseWorker.
+func setObserverOnWorkers(workers []Worker, obs BlockResultObserver) {
+	if obs == nil {
+		return
+	}
+	for _, w := range workers {
+		switch wt := w.(type) {
+		case *RegularWorker:
+			wt.BaseWorker.observer = obs
+		case *CatchupWorker:
+			wt.BaseWorker.observer = obs
+		case *RescannerWorker:
+			wt.BaseWorker.observer = obs
+		case *ManualWorker:
+			wt.BaseWorker.observer = obs
+		case *MempoolWorker:
+			wt.BaseWorker.observer = obs
+		}
+	}
 }
 
 const (
@@ -67,9 +90,11 @@ func BuildWorkers(
 	mode WorkerMode,
 	deps WorkerDeps,
 ) []Worker {
+	var workers []Worker
+
 	switch mode {
 	case ModeRegular:
-		return []Worker{
+		workers = []Worker{
 			NewRegularWorker(
 				deps.Ctx,
 				idxr,
@@ -82,7 +107,7 @@ func BuildWorkers(
 			),
 		}
 	case ModeCatchup:
-		return []Worker{
+		workers = []Worker{
 			NewCatchupWorker(
 				deps.Ctx,
 				idxr,
@@ -95,7 +120,7 @@ func BuildWorkers(
 			),
 		}
 	case ModeRescanner:
-		return []Worker{
+		workers = []Worker{
 			NewRescannerWorker(
 				deps.Ctx,
 				idxr,
@@ -108,7 +133,7 @@ func BuildWorkers(
 			),
 		}
 	case ModeManual:
-		return []Worker{
+		workers = []Worker{
 			NewManualWorker(
 				deps.Ctx,
 				idxr,
@@ -122,7 +147,7 @@ func BuildWorkers(
 			),
 		}
 	case ModeMempool:
-		return []Worker{
+		workers = []Worker{
 			NewMempoolWorker(
 				deps.Ctx,
 				idxr,
@@ -137,6 +162,9 @@ func BuildWorkers(
 	default:
 		return nil
 	}
+
+	setObserverOnWorkers(workers, deps.Observer)
+	return workers
 }
 
 // buildEVMIndexer constructs an EVM indexer with failover and providers.
@@ -159,6 +187,9 @@ func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerM
 			chainCfg.Client.Timeout,
 			rl,
 		)
+		if len(node.Headers) > 0 {
+			client.SetCustomHeaders(node.Headers)
+		}
 
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
@@ -752,6 +783,7 @@ func CreateManagerWithWorkers(
 			Pubkey:     pubkeyStore,
 			Redis:      redisClient,
 			FailedChan: failedChan,
+			Observer:   managerCfg.Observer,
 		}
 
 		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter)

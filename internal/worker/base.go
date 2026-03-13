@@ -18,6 +18,19 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
+// BlockStatus represents the outcome of processing a single block.
+type BlockStatus string
+
+const (
+	BlockStatusProcessed BlockStatus = "processed"
+	BlockStatusNotFound  BlockStatus = "not_found"
+	BlockStatusFailed    BlockStatus = "failed"
+)
+
+// BlockResultObserver is called for every block result when set.
+// It receives the chain name, block number, and the status assigned by the indexer.
+type BlockResultObserver func(chainName string, blockNumber uint64, status BlockStatus)
+
 // BaseWorker holds the common state and logic shared by all worker types.
 type BaseWorker struct {
 	ctx    context.Context
@@ -32,6 +45,7 @@ type BaseWorker struct {
 	pubkeyStore pubkeystore.Store
 	emitter     events.Emitter
 	failedChan  chan FailedBlockEvent
+	observer    BlockResultObserver
 }
 
 // Stop stops the worker and cleans up internal resources
@@ -115,6 +129,13 @@ func (bw *BaseWorker) run(job func() error) {
 	}
 }
 
+// notifyObserver calls the observer callback if set.
+func (bw *BaseWorker) notifyObserver(blockNumber uint64, status BlockStatus) {
+	if bw.observer != nil {
+		bw.observer(bw.chain.GetName(), blockNumber, status)
+	}
+}
+
 // handleBlockResult processes a block result and persists/forwards errors if needed.
 func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 	if result.Error != nil {
@@ -136,6 +157,12 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 			"block", result.Number,
 			"err", result.Error.Message,
 		)
+
+		if result.Error.ErrorType == indexer.ErrorTypeBlockNotFound {
+			bw.notifyObserver(result.Number, BlockStatusNotFound)
+		} else {
+			bw.notifyObserver(result.Number, BlockStatusFailed)
+		}
 		return false
 	}
 
@@ -144,6 +171,7 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 			"chain", bw.chain.GetName(),
 			"block", result.Number,
 		)
+		bw.notifyObserver(result.Number, BlockStatusFailed)
 		return false
 	}
 
@@ -154,6 +182,7 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 		"chain", bw.chain.GetName(),
 		"block", result.Block.Number,
 	)
+	bw.notifyObserver(result.Number, BlockStatusProcessed)
 	return true
 }
 

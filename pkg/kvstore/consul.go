@@ -201,6 +201,49 @@ func (c ConsulClient) List(prefix string) ([]*infra.KVPair, error) {
 	return result, nil
 }
 
+// BatchSet writes multiple key-value pairs atomically using Consul's Transaction API.
+// Consul limits transactions to 64 operations, so larger batches are chunked.
+func (c ConsulClient) BatchSet(pairs []infra.KVPair) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	const maxOpsPerTxn = 64
+
+	for i := 0; i < len(pairs); i += maxOpsPerTxn {
+		end := i + maxOpsPerTxn
+		if end > len(pairs) {
+			end = len(pairs)
+		}
+		chunk := pairs[i:end]
+
+		ops := make(api.TxnOps, 0, len(chunk))
+		for _, p := range chunk {
+			key := p.Key
+			if c.folder != "" {
+				key = c.folder + "/" + key
+			}
+			ops = append(ops, &api.TxnOp{
+				KV: &api.KVTxnOp{
+					Verb:  api.KVSet,
+					Key:   key,
+					Value: p.Value,
+				},
+			})
+		}
+
+		ok, resp, _, err := c.client.Txn().Txn(ops, nil)
+		if err != nil {
+			return fmt.Errorf("consul batch set failed: %w", err)
+		}
+		if !ok && resp != nil && len(resp.Errors) > 0 {
+			return fmt.Errorf("consul txn rejected: %s", resp.Errors[0].What)
+		}
+	}
+
+	return nil
+}
+
 // Delete deletes the stored value for the given key.
 // Deleting a non-existing key-value pair does NOT lead to an error.
 // The key must not be "".
@@ -308,6 +351,7 @@ func NewConsulClient(options Options) (infra.KVStore, error) {
 		return result, fmt.Errorf("failed to connect to Consul: %w", err)
 	}
 
+	result.client = client
 	result.kv = client.KV()
 	result.folder = options.Folder
 	result.codec = options.Codec

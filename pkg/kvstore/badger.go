@@ -168,6 +168,26 @@ func (b *BadgerStore) List(prefix string) ([]*infra.KVPair, error) {
 	return result, err
 }
 
+// BatchSet writes multiple key-value pairs in a single Badger transaction.
+func (b *BadgerStore) BatchSet(pairs []infra.KVPair) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	return b.db.Update(func(txn *badger.Txn) error {
+		for _, p := range pairs {
+			k := p.Key
+			if b.prefix != "" {
+				k = b.prefix + "/" + k
+			}
+			if err := txn.Set([]byte(k), p.Value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (b *BadgerStore) Delete(key string) error {
 	k, err := b.fullKey(key)
 	if err != nil {

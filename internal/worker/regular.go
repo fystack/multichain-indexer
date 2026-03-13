@@ -92,6 +92,11 @@ func (rw *RegularWorker) processRegularBlocks() error {
 
 	rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
 
+	// Lag detection: if we're too far behind, jump to chain head and queue skipped range for catchup
+	if rw.skipAheadIfLagging(latest) {
+		return nil
+	}
+
 	if rw.currentBlock > latest {
 		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)
 		time.Sleep(rw.config.PollInterval)
@@ -196,13 +201,15 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 			Start: start, End: end, Current: start - 1,
 		}, MAX_RANGE_SIZE)
 
-		// Save each split range
-		for _, r := range ranges {
-			_ = rw.blockStore.SaveCatchupProgress(
-				rw.chain.GetNetworkInternalCode(),
-				r.Start,
-				r.End,
-				r.Current,
+		// Batch save all split ranges
+		if err := rw.blockStore.SaveCatchupRanges(
+			rw.chain.GetNetworkInternalCode(),
+			ranges,
+		); err != nil {
+			rw.logger.Error("Failed to batch save catchup ranges",
+				"chain", rw.chain.GetName(),
+				"count", len(ranges),
+				"error", err,
 			)
 		}
 
@@ -283,6 +290,57 @@ func (rw *RegularWorker) getBlockHash(blockNumber uint64) string {
 // clearBlockHashes clears all block hashes (used on reorg)
 func (rw *RegularWorker) clearBlockHashes() {
 	rw.blockHashes = rw.blockHashes[:0] // Clear slice but keep capacity
+}
+
+// skipAheadIfLagging checks if the regular worker is too far behind the chain head.
+// If so, it queues the skipped range for catchup and jumps currentBlock to chain head.
+func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
+	maxLag := rw.config.MaxLag
+	if maxLag == 0 {
+		maxLag = constant.DefaultMaxLag
+	}
+
+	if latest <= rw.currentBlock || (latest-rw.currentBlock) <= maxLag {
+		return false
+	}
+
+	skipStart := rw.currentBlock
+	skipEnd := latest - 1
+
+	rw.logger.Warn("Lag threshold exceeded, skipping ahead to chain head",
+		"chain", rw.chain.GetName(),
+		"current_block", rw.currentBlock,
+		"chain_head", latest,
+		"lag", latest-rw.currentBlock,
+		"max_lag", maxLag,
+		"catchup_range", fmt.Sprintf("%d-%d", skipStart, skipEnd),
+	)
+
+	ranges := splitCatchupRange(blockstore.CatchupRange{
+		Start: skipStart, End: skipEnd, Current: skipStart - 1,
+	}, MAX_RANGE_SIZE)
+
+	if err := rw.blockStore.SaveCatchupRanges(
+		rw.chain.GetNetworkInternalCode(),
+		ranges,
+	); err != nil {
+		rw.logger.Error("Failed to save skip-ahead catchup ranges",
+			"chain", rw.chain.GetName(),
+			"count", len(ranges),
+			"error", err,
+		)
+	}
+
+	rw.currentBlock = latest
+	_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), latest-1)
+	rw.clearBlockHashes()
+
+	rw.logger.Info("Skip-ahead complete, queued catchup ranges",
+		"chain", rw.chain.GetName(),
+		"new_current", rw.currentBlock,
+		"catchup_ranges", len(ranges),
+	)
+	return true
 }
 
 func (rw *RegularWorker) processReorgCheckedBatch(

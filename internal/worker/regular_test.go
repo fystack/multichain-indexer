@@ -252,6 +252,10 @@ func (s *stubBlockStore) RemoveFailedBlocks(string, []uint64) error {
 	return nil
 }
 
+func (s *stubBlockStore) SaveCatchupRanges(string, []blockstore.CatchupRange) error {
+	return nil
+}
+
 func (s *stubBlockStore) SaveCatchupProgress(string, uint64, uint64, uint64) error {
 	return nil
 }
