@@ -44,12 +44,16 @@ chains:
     type: "evm"
     start_block: 23080871
     poll_interval: "3s" # faster polling for Ethereum
+    max_lag: 200 # skip ahead if regular worker falls this many blocks behind chain head (default: 100)
     client:
       timeout: "30s" # override global timeout
     throttle:
       batch_size: 20 # smaller batch size
     nodes:
       - url: "https://ethereum-rpc.publicnode.com"
+        headers: # optional: additional HTTP headers sent with every request
+          Origin: "https://myapp.example.com"
+          Referer: "https://myapp.example.com/"
       - url: "https://eth.rpc.blxrbdn.com"
       - url: "https://eth.llamarpc.com"
       - url: "https://rpc.mevblocker.io"
