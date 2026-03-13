@@ -53,6 +53,7 @@ type Store interface {
 	RemoveFailedBlocks(chainName string, blockNumbers []uint64) error
 
 	SaveCatchupProgress(chain string, start, end, current uint64) error
+	SaveCatchupRanges(chain string, ranges []CatchupRange) error
 	GetCatchupProgress(chain string) ([]CatchupRange, error)
 	DeleteCatchupRange(chain string, start, end uint64) error
 
@@ -191,6 +192,37 @@ func (bs *blockStore) SaveCatchupProgress(chain string, start, end, current uint
 		"current", current,
 	)
 	return bs.store.Set(key, fmt.Sprintf("%d", current))
+}
+
+// SaveCatchupRanges batch-writes multiple catchup ranges atomically.
+func (bs *blockStore) SaveCatchupRanges(chain string, ranges []CatchupRange) error {
+	if chain == "" {
+		return errors.New("chain name is required")
+	}
+	if len(ranges) == 0 {
+		return nil
+	}
+
+	pairs := make([]infra.KVPair, 0, len(ranges))
+	for _, r := range ranges {
+		if r.Start == 0 || r.End < r.Start {
+			continue
+		}
+		pairs = append(pairs, infra.KVPair{
+			Key:   catchupKey(chain, r.Start, r.End),
+			Value: []byte(fmt.Sprintf("%d", r.Current)),
+		})
+	}
+
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	logger.Debug("Batch saving catchup ranges",
+		"chain", chain,
+		"count", len(pairs),
+	)
+	return bs.store.BatchSet(pairs)
 }
 
 // GetCatchupProgress returns all catchup ranges (struct-based).

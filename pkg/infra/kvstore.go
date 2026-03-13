@@ -27,6 +27,7 @@ type KVStore interface {
 
 	List(prefix string) ([]*KVPair, error)
 	Delete(k string) error
+	BatchSet(pairs []KVPair) error
 	Close() error
 }
 
