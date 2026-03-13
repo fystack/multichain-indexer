@@ -13,6 +13,7 @@ type TonAPI interface {
 	StickyContext(ctx context.Context) context.Context
 	GetLatestMasterchainInfo(ctx context.Context) (*tonlib.BlockIDExt, error)
 	LookupMasterchainBlock(ctx context.Context, seqno uint32) (*tonlib.BlockIDExt, error)
+	LookupBlock(ctx context.Context, workchain int32, shard int64, seqno uint32) (*tonlib.BlockIDExt, error)
 	GetBlockData(ctx context.Context, block *tonlib.BlockIDExt) (*tlb.Block, error)
 	GetBlockShardsInfo(ctx context.Context, master *tonlib.BlockIDExt) ([]*tonlib.BlockIDExt, error)
 	GetBlockTransactionsV2(

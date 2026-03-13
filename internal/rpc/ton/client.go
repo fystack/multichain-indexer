@@ -84,6 +84,20 @@ func (c *Client) LookupMasterchainBlock(ctx context.Context, seqno uint32) (*ton
 	)
 }
 
+func (c *Client) LookupBlock(
+	ctx context.Context,
+	workchain int32,
+	shard int64,
+	seqno uint32,
+) (*tonlib.BlockIDExt, error) {
+	if c == nil || c.api == nil {
+		return nil, fmt.Errorf("ton client not initialized")
+	}
+
+	// WaitForBlock avoids lookup races when asked for a freshly produced seqno.
+	return c.api.WaitForBlock(seqno).LookupBlock(ctx, workchain, shard, seqno)
+}
+
 func (c *Client) GetBlockData(ctx context.Context, block *tonlib.BlockIDExt) (*tlb.Block, error) {
 	if c == nil || c.api == nil {
 		return nil, fmt.Errorf("ton client not initialized")
@@ -94,7 +108,19 @@ func (c *Client) GetBlockData(ctx context.Context, block *tonlib.BlockIDExt) (*t
 
 	var lastErr error
 	for attempt := 1; attempt <= getBlockDataMaxRetry; attempt++ {
-		data, err := c.api.WaitForBlock(block.SeqNo).GetBlockData(ctx, block)
+		var (
+			data *tlb.Block
+			err  error
+		)
+
+		if block.Workchain == masterchainWorkchain {
+			// For masterchain blocks, seqno is master seqno.
+			data, err = c.api.WaitForBlock(block.SeqNo).GetBlockData(ctx, block)
+		} else {
+			// Shard seqno is not comparable with master seqno. Using WaitForBlock(shardSeqno)
+			// can trigger liteserver error 651 ("too big masterchain block seqno").
+			data, err = c.api.GetBlockData(ctx, block)
+		}
 		if err == nil {
 			return data, nil
 		}

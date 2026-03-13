@@ -28,6 +28,7 @@ const (
 	tonJettonInternalTransferOpcode     uint64 = 0x178d4519
 	tonJettonTransferNotificationOpcode uint64 = 0x7362d09c
 	tonDefaultTxPageSize                uint32 = 256
+	tonDefaultShardScanWorkers                 = 3
 	tonDefaultTxFetchConcurrency               = 8
 	tonGetTxMaxRetry                           = 3
 	tonGetTxRetryDelay                         = 200 * time.Millisecond
@@ -35,12 +36,13 @@ const (
 )
 
 type TonIndexer struct {
-	chainName   string
-	cfg         config.ChainConfig
-	client      tonrpc.TonAPI
-	pubkeyStore PubkeyStore
-	txPageSize  uint32
-	txFetchConc int
+	chainName        string
+	cfg              config.ChainConfig
+	client           tonrpc.TonAPI
+	pubkeyStore      PubkeyStore
+	txPageSize       uint32
+	txFetchConc      int
+	shardScanWorkers int
 
 	stateMu         sync.Mutex
 	shardLastSeqno  map[string]uint32
@@ -52,6 +54,11 @@ type TonIndexer struct {
 	jettonOwners   map[string]string // wallet -> owner
 	// preloaded raw TON jetton-wallet addresses derived from (owner wallets x jetton masters)
 	trackedJettonWallets map[string]struct{}
+}
+
+type tonShardScanRange struct {
+	head   *tonlib.BlockIDExt
+	blocks []*tonlib.BlockIDExt
 }
 
 func NewTonIndexer(
@@ -67,9 +74,21 @@ func NewTonIndexer(
 	if cfg.Throttle.BatchSize > int(tonDefaultTxPageSize) {
 		pageSize = uint32(cfg.Throttle.BatchSize)
 	}
-	txFetchConc := cfg.Throttle.Concurrency
+
+	txFetchConc := cfg.Ton.TxFetchWorkers
+	if txFetchConc <= 0 {
+		txFetchConc = cfg.Throttle.Concurrency
+	}
 	if txFetchConc <= 0 {
 		txFetchConc = tonDefaultTxFetchConcurrency
+	}
+
+	shardScanWorkers := cfg.Ton.ShardScanWorkers
+	if shardScanWorkers <= 0 {
+		shardScanWorkers = cfg.Throttle.Concurrency
+	}
+	if shardScanWorkers <= 0 {
+		shardScanWorkers = tonDefaultShardScanWorkers
 	}
 
 	trackedJettonWallets := make(map[string]struct{}, len(pretrackedJettonWallets))
@@ -88,6 +107,7 @@ func NewTonIndexer(
 		pubkeyStore:          pubkeyStore,
 		txPageSize:           pageSize,
 		txFetchConc:          txFetchConc,
+		shardScanWorkers:     shardScanWorkers,
 		shardLastSeqno:       make(map[string]uint32),
 		jettonMasters:        make(map[string]string),
 		jettonOwners:         make(map[string]string),
@@ -140,43 +160,32 @@ func (t *TonIndexer) GetBlock(ctx context.Context, number uint64) (*types.Block,
 		return nil, fmt.Errorf("get block shards for master seqno %d: %w", master.SeqNo, err)
 	}
 
-	shardsToScan := make([]*tonlib.BlockIDExt, 0, len(currentShards))
+	var (
+		ranges            []tonShardScanRange
+		shouldAdvanceHead bool
+	)
+
 	switch {
 	case !t.initialized:
-		shardsToScan = append(shardsToScan, currentShards...)
-		for _, shard := range currentShards {
-			t.shardLastSeqno[getShardID(shard)] = shard.SeqNo
-		}
-		t.initialized = true
-		t.lastMasterSeqno = master.SeqNo
+		ranges = shardRangesFromHeads(currentShards)
+		shouldAdvanceHead = true
 	case master.SeqNo > t.lastMasterSeqno:
-		// Fast path for wallet-detection throughput: scan only current shard blocks.
-		// This skips parent-chain deep backfill and avoids long spikes when lite-servers are slow.
-		shardsToScan = append(shardsToScan, currentShards...)
-		for _, shard := range currentShards {
-			t.shardLastSeqno[getShardID(shard)] = shard.SeqNo
-		}
-		t.lastMasterSeqno = master.SeqNo
-	default:
-		// Older block fetch (manual/rescan): scan shards from this master only.
-		shardsToScan = append(shardsToScan, currentShards...)
-	}
-
-	shardsToScan = dedupShardBlocks(shardsToScan)
-
-	allTxs := make([]types.Transaction, 0)
-	for _, shard := range shardsToScan {
-		if shard == nil || shard.Workchain == tonMasterchainWorkchain {
-			continue
-		}
-
-		txs, err := t.scanShardBlock(requestCtx, master.SeqNo, shard)
+		// Realtime path: walk shard parent chains and scan intermediate blocks between
+		// previous shard heads and current shard heads to avoid silently skipping txs.
+		ranges, err = t.buildRealtimeShardRanges(requestCtx, currentShards)
 		if err != nil {
 			return nil, err
 		}
-		allTxs = append(allTxs, txs...)
+		shouldAdvanceHead = true
+	default:
+		// Older block fetch (manual/rescan): scan shards from this master only.
+		ranges = shardRangesFromHeads(currentShards)
 	}
 
+	allTxs, err := t.scanShardRangesParallel(requestCtx, master.SeqNo, ranges)
+	if err != nil {
+		return nil, err
+	}
 	allTxs = utils.DedupTransfers(allTxs)
 
 	blockTS := uint64(time.Now().Unix())
@@ -186,6 +195,19 @@ func (t *TonIndexer) GetBlock(ctx context.Context, number uint64) (*types.Block,
 			if tx.Timestamp > blockTS {
 				blockTS = tx.Timestamp
 			}
+		}
+	}
+
+	if shouldAdvanceHead {
+		for _, shard := range currentShards {
+			if shard == nil || shard.Workchain == tonMasterchainWorkchain {
+				continue
+			}
+			t.shardLastSeqno[getShardID(shard)] = shard.SeqNo
+		}
+		t.initialized = true
+		if master.SeqNo > t.lastMasterSeqno {
+			t.lastMasterSeqno = master.SeqNo
 		}
 	}
 
@@ -264,6 +286,236 @@ func (t *TonIndexer) IsHealthy() bool {
 	defer cancel()
 	_, err := t.GetLatestBlockNumber(ctx)
 	return err == nil
+}
+
+func shardRangesFromHeads(shards []*tonlib.BlockIDExt) []tonShardScanRange {
+	deduped := dedupShardBlocks(shards)
+	ranges := make([]tonShardScanRange, 0, len(deduped))
+	for _, shard := range deduped {
+		if shard == nil || shard.Workchain == tonMasterchainWorkchain {
+			continue
+		}
+		ranges = append(ranges, tonShardScanRange{
+			head:   shard,
+			blocks: []*tonlib.BlockIDExt{shard},
+		})
+	}
+	return ranges
+}
+
+func (t *TonIndexer) buildRealtimeShardRanges(
+	ctx context.Context,
+	currentShards []*tonlib.BlockIDExt,
+) ([]tonShardScanRange, error) {
+	deduped := dedupShardBlocks(currentShards)
+	lastSeen := t.copyShardLastSeqno()
+	scanAssigned := make(map[string]struct{}, len(deduped))
+	ranges := make([]tonShardScanRange, 0, len(deduped))
+
+	for _, shard := range deduped {
+		if shard == nil || shard.Workchain == tonMasterchainWorkchain {
+			continue
+		}
+
+		lineage, err := t.collectShardLineage(ctx, shard, lastSeen)
+		if err != nil {
+			return nil, err
+		}
+		if len(lineage) == 0 {
+			continue
+		}
+
+		filtered := make([]*tonlib.BlockIDExt, 0, len(lineage))
+		for _, block := range lineage {
+			key := shardBlockScanKey(block)
+			if _, ok := scanAssigned[key]; ok {
+				continue
+			}
+			scanAssigned[key] = struct{}{}
+			filtered = append(filtered, block)
+		}
+		if len(filtered) == 0 {
+			continue
+		}
+
+		ranges = append(ranges, tonShardScanRange{
+			head:   shard,
+			blocks: filtered,
+		})
+	}
+
+	return ranges, nil
+}
+
+func (t *TonIndexer) collectShardLineage(
+	ctx context.Context,
+	head *tonlib.BlockIDExt,
+	lastSeen map[string]uint32,
+) ([]*tonlib.BlockIDExt, error) {
+	if head == nil {
+		return nil, nil
+	}
+
+	ordered := make([]*tonlib.BlockIDExt, 0, 4)
+	visited := make(map[string]struct{}, 8)
+
+	var walk func(block *tonlib.BlockIDExt) error
+	walk = func(block *tonlib.BlockIDExt) error {
+		if block == nil || block.Workchain == tonMasterchainWorkchain {
+			return nil
+		}
+
+		blockKey := shardBlockScanKey(block)
+		if _, ok := visited[blockKey]; ok {
+			return nil
+		}
+		visited[blockKey] = struct{}{}
+
+		if stopSeq, ok := lastSeen[getShardID(block)]; ok && block.SeqNo <= stopSeq {
+			return nil
+		}
+
+		blockData, err := t.client.GetBlockData(ctx, block)
+		if err != nil {
+			return fmt.Errorf(
+				"get TON shard block data wc=%d shard=%x seqno=%d: %w",
+				block.Workchain,
+				uint64(block.Shard),
+				block.SeqNo,
+				err,
+			)
+		}
+
+		parents, err := tonlib.GetParentBlocks(&blockData.BlockInfo)
+		if err != nil {
+			return fmt.Errorf(
+				"resolve TON shard parents wc=%d shard=%x seqno=%d: %w",
+				block.Workchain,
+				uint64(block.Shard),
+				block.SeqNo,
+				err,
+			)
+		}
+
+		for _, parent := range parents {
+			if err := walk(parent); err != nil {
+				return err
+			}
+		}
+
+		ordered = append(ordered, block)
+		return nil
+	}
+
+	if err := walk(head); err != nil {
+		return nil, err
+	}
+
+	return ordered, nil
+}
+
+func (t *TonIndexer) scanShardRangesParallel(
+	ctx context.Context,
+	masterSeqno uint32,
+	ranges []tonShardScanRange,
+) ([]types.Transaction, error) {
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+
+	workerCount := t.shardScanWorkers
+	if workerCount <= 0 {
+		workerCount = tonDefaultShardScanWorkers
+	}
+	if workerCount > len(ranges) {
+		workerCount = len(ranges)
+	}
+
+	scanCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	jobs := make(chan tonShardScanRange, len(ranges))
+	for _, r := range ranges {
+		if len(r.blocks) == 0 {
+			continue
+		}
+		jobs <- r
+	}
+	close(jobs)
+
+	var (
+		wg       sync.WaitGroup
+		outMu    sync.Mutex
+		outTxs   []types.Transaction
+		firstErr error
+		errOnce  sync.Once
+	)
+
+	worker := func() {
+		defer wg.Done()
+		for r := range jobs {
+			if scanCtx.Err() != nil {
+				return
+			}
+
+			rangeTxs, err := t.scanShardRange(scanCtx, masterSeqno, r)
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = err
+					cancel()
+				})
+				return
+			}
+			if len(rangeTxs) == 0 {
+				continue
+			}
+
+			outMu.Lock()
+			outTxs = append(outTxs, rangeTxs...)
+			outMu.Unlock()
+		}
+	}
+
+	wg.Add(workerCount)
+	for i := 0; i < workerCount; i++ {
+		go worker()
+	}
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return outTxs, nil
+}
+
+func (t *TonIndexer) scanShardRange(
+	ctx context.Context,
+	masterSeqno uint32,
+	r tonShardScanRange,
+) ([]types.Transaction, error) {
+	out := make([]types.Transaction, 0)
+	for _, block := range r.blocks {
+		txs, err := t.scanShardBlock(ctx, masterSeqno, block)
+		if err != nil {
+			return nil, fmt.Errorf(
+				"scan TON shard block wc=%d shard=%x seqno=%d: %w",
+				block.Workchain,
+				uint64(block.Shard),
+				block.SeqNo,
+				err,
+			)
+		}
+		out = append(out, txs...)
+	}
+	return out, nil
+}
+
+func (t *TonIndexer) copyShardLastSeqno() map[string]uint32 {
+	out := make(map[string]uint32, len(t.shardLastSeqno))
+	for k, v := range t.shardLastSeqno {
+		out[k] = v
+	}
+	return out
 }
 
 func (t *TonIndexer) scanShardBlock(
@@ -715,6 +967,13 @@ func getShardID(shard *tonlib.BlockIDExt) string {
 	return fmt.Sprintf("%d|%d", shard.Workchain, shard.Shard)
 }
 
+func shardBlockScanKey(shard *tonlib.BlockIDExt) string {
+	if shard == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d|%d|%d", shard.Workchain, shard.Shard, shard.SeqNo)
+}
+
 func dedupShardBlocks(in []*tonlib.BlockIDExt) []*tonlib.BlockIDExt {
 	if len(in) <= 1 {
 		return in
@@ -726,7 +985,7 @@ func dedupShardBlocks(in []*tonlib.BlockIDExt) []*tonlib.BlockIDExt {
 		if shard == nil {
 			continue
 		}
-		key := fmt.Sprintf("%d|%d|%d", shard.Workchain, shard.Shard, shard.SeqNo)
+		key := shardBlockScanKey(shard)
 		if _, ok := seen[key]; ok {
 			continue
 		}

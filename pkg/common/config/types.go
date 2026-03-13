@@ -48,6 +48,7 @@ type ChainConfig struct {
 	IndexUTXO           bool             `yaml:"index_utxo"`
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
+	Ton                 TonConfig        `yaml:"ton"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`
 }
 
@@ -63,6 +64,14 @@ type Throttle struct {
 	BatchSize   int  `yaml:"batch_size"`
 	Concurrency int  `yaml:"concurrency"`
 	Parallel    bool `yaml:"parallel"`
+}
+
+type TonConfig struct {
+	// ShardScanWorkers controls parallelism at shard-range level (each worker scans
+	// shard lineage sequentially to preserve ordering).
+	ShardScanWorkers int `yaml:"shard_scan_workers"`
+	// TxFetchWorkers controls parallel GetTransaction calls per shard block.
+	TxFetchWorkers int `yaml:"tx_fetch_workers"`
 }
 
 type NodeConfig struct {

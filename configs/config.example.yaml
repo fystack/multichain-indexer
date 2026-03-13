@@ -320,6 +320,11 @@ chains:
       # TON uses shard transaction pagination per masterchain block.
       batch_size: 10
       concurrency: 2
+    ton:
+      # Parallel shard-range scanners per master block.
+      shard_scan_workers: 2
+      # Parallel GetTransaction workers inside each shard block.
+      tx_fetch_workers: 6
 
   ton_testnet:
     network_id: "ton_testnet"
@@ -333,6 +338,11 @@ chains:
       # TON uses shard transaction pagination per masterchain block.
       batch_size: 10
       concurrency: 2
+    ton:
+      # Parallel shard-range scanners per master block.
+      shard_scan_workers: 3
+      # Parallel GetTransaction workers inside each shard block.
+      tx_fetch_workers: 8
 
 # Infrastructure services
 services:
