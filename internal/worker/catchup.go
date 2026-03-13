@@ -154,21 +154,16 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 					Start: start, End: end, Current: start - 1,
 				})
 
-				// Save each split range to database
-				for _, nr := range newRanges {
-					err := cw.blockStore.SaveCatchupProgress(
-						cw.chain.GetNetworkInternalCode(),
-						nr.Start,
-						nr.End,
-						nr.Current,
+				// Batch save all split ranges to database
+				if err := cw.blockStore.SaveCatchupRanges(
+					cw.chain.GetNetworkInternalCode(),
+					newRanges,
+				); err != nil {
+					cw.logger.Error("Failed to batch save catchup ranges",
+						"chain", cw.chain.GetName(),
+						"count", len(newRanges),
+						"error", err,
 					)
-					if err != nil {
-						cw.logger.Error("Failed to save catchup progress",
-							"chain", cw.chain.GetName(),
-							"range", fmt.Sprintf("%d-%d", nr.Start, nr.End),
-							"error", err,
-						)
-					}
 				}
 				ranges = append(ranges, newRanges...)
 			}
@@ -293,7 +288,10 @@ func (cw *CatchupWorker) processRange(r blockstore.CatchupRange, workerID int) e
 		batchSuccess := current - 1
 		for _, res := range results {
 			if res.Error != nil && res.Error.ErrorType == indexer.ErrorTypeBlockNotFound && cw.chain.GetNetworkType() == enum.NetworkTypeSol {
-				// Solana skipped slots are normal. Do not treat as errors during catchup.
+				// Solana skipped slots are normal — the validator didn't produce a block
+				// for this slot. Skip without retry.
+				cw.logger.Debug("Solana skipped slot, no retry needed", "slot", res.Number)
+				cw.notifyObserver(res.Number, BlockStatusNotFound)
 				if res.Number > batchSuccess {
 					batchSuccess = res.Number
 				}
@@ -394,18 +392,30 @@ func (cw *CatchupWorker) Close() error {
 	cw.progressMu.Lock()
 	defer cw.progressMu.Unlock()
 
-	for _, r := range cw.blockRanges {
-		current := min(r.Current, r.End)
+	if len(cw.blockRanges) == 0 {
+		return nil
+	}
+
+	// Cap Current at End for each range before batch saving
+	rangesToSave := make([]blockstore.CatchupRange, len(cw.blockRanges))
+	for i, r := range cw.blockRanges {
+		rangesToSave[i] = blockstore.CatchupRange{
+			Start:   r.Start,
+			End:     r.End,
+			Current: min(r.Current, r.End),
+		}
 		cw.logger.Debug("Saving final catchup progress on close",
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
-			"current", current,
+			"current", rangesToSave[i].Current,
 		)
-		if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current); err != nil {
-			cw.logger.Error("Failed to save progress on close",
-				"range", fmt.Sprintf("%d-%d", r.Start, r.End),
-				"error", err,
-			)
-		}
+	}
+
+	if err := cw.blockStore.SaveCatchupRanges(cw.chain.GetNetworkInternalCode(), rangesToSave); err != nil {
+		cw.logger.Error("Failed to batch save progress on close",
+			"chain", cw.chain.GetName(),
+			"ranges", len(rangesToSave),
+			"error", err,
+		)
 	}
 
 	return nil

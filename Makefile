@@ -13,10 +13,13 @@ build-kv-migrate:
 build-wallet-kv-load:
 	go build -o $(WALLET_KV_LOAD_BINARY) ./cmd/wallet-kv-load
 
-build-all: build build-kv-migrate build-wallet-kv-load
+build-blockreliability:
+	go build -o block-reliability ./cmd/devtools/blockreliability
+
+build-all: build build-kv-migrate build-wallet-kv-load build-blockreliability
 
 clean:
-	rm -f $(INDEXER_BINARY) $(KV_MIGRATE_BINARY) $(WALLET_KV_LOAD_BINARY)
+	rm -f $(INDEXER_BINARY) $(KV_MIGRATE_BINARY) $(WALLET_KV_LOAD_BINARY) block-reliability
 
 run:
 	./$(INDEXER_BINARY) index --catchup

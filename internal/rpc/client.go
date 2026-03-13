@@ -30,14 +30,15 @@ type NetworkClient interface {
 }
 
 type BaseClient struct {
-	baseURL     string
-	network     string
-	clientType  string
-	rpcID       int64
-	httpClient  *http.Client
-	auth        *AuthConfig
-	rateLimiter *ratelimiter.PooledRateLimiter
-	mu          sync.Mutex
+	baseURL       string
+	network       string
+	clientType    string
+	rpcID         int64
+	httpClient    *http.Client
+	auth          *AuthConfig
+	rateLimiter   *ratelimiter.PooledRateLimiter
+	customHeaders map[string]string
+	mu            sync.Mutex
 }
 
 func NewBaseClient(
@@ -119,6 +120,10 @@ func (c *BaseClient) doRaw(
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
+	}
+
+	for k, v := range c.customHeaders {
+		req.Header.Set(k, v)
 	}
 
 	if c.auth != nil {
@@ -234,6 +239,11 @@ func (c *BaseClient) WaitRateLimit(ctx context.Context) error {
 		return nil
 	}
 	return c.rateLimiter.Wait(ctx, c.baseURL)
+}
+
+// SetCustomHeaders sets additional HTTP headers to include in every request.
+func (c *BaseClient) SetCustomHeaders(headers map[string]string) {
+	c.customHeaders = headers
 }
 
 func (c *BaseClient) GetNetworkType() string { return c.network }
