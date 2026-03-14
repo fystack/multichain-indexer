@@ -7,6 +7,7 @@ defaults:
   from_latest: true # start indexing from the latest block
   poll_interval: "5s" # how often to poll for new blocks
   reorg_rollback_window: 20 # number of blocks to roll back on reorg
+  two_way_indexing: true # enable two-way indexing for all chains
   client:
     timeout: "20s" # RPC timeout per request
     max_retries: 3 # max retries per RPC call
@@ -73,7 +74,7 @@ chains:
     start_block: 4440000 # recent testnet block
     poll_interval: "60s" # Bitcoin blocks ~10 minutes
     reorg_rollback_window: 100
-    index_change_output: false
+    index_change_output: true # Enable change output event extraction and emission (Bitcoin only)
     index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-testnet-rpc.publicnode.com"

@@ -7,6 +7,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
@@ -96,12 +97,9 @@ func (mw *MempoolWorker) processMempool() error {
 
 	for _, tx := range transactions {
 		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
-		if !toMonitored {
-			continue
-		}
+		fromMonitored := mw.config.TwoWayIndexing && tx.FromAddress != "" && mw.pubkeyStore.Exist(networkType, tx.FromAddress)
 
-		txKey := tx.TxHash + ":" + tx.ToAddress
-		if mw.seenTxs[txKey] {
+		if !toMonitored && !fromMonitored {
 			continue
 		}
 
@@ -115,24 +113,43 @@ func (mw *MempoolWorker) processMempool() error {
 				break
 			}
 		}
-		mw.seenTxs[txKey] = true
-		newTxCount++
 
-		if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
-			mw.logger.Error("Failed to emit mempool transaction",
-				"txHash", tx.TxHash,
-				"direction", "incoming",
-				"err", err,
-			)
-		} else {
-			mw.logger.Debug("Emitted mempool transaction",
-				"txHash", tx.TxHash,
-				"direction", "incoming",
-				"from", tx.FromAddress,
-				"to", tx.ToAddress,
-				"amount", tx.Amount,
-				"status", tx.Status,
-			)
+		if toMonitored {
+			key := tx.TxHash + ":in"
+			if !mw.seenTxs[key] {
+				mw.seenTxs[key] = true
+				newTxCount++
+				inTx := tx
+				inTx.Direction = types.DirectionIn
+				if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &inTx); err != nil {
+					mw.logger.Error("Failed to emit mempool transaction",
+						"txHash", tx.TxHash, "direction", types.DirectionIn, "err", err)
+				} else {
+					mw.logger.Debug("Emitted mempool transaction",
+						"txHash", tx.TxHash, "direction", types.DirectionIn,
+						"from", tx.FromAddress, "to", tx.ToAddress,
+						"amount", tx.Amount, "status", tx.Status)
+				}
+			}
+		}
+
+		if fromMonitored {
+			key := tx.TxHash + ":out"
+			if !mw.seenTxs[key] {
+				mw.seenTxs[key] = true
+				newTxCount++
+				outTx := tx
+				outTx.Direction = types.DirectionOut
+				if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &outTx); err != nil {
+					mw.logger.Error("Failed to emit mempool transaction",
+						"txHash", tx.TxHash, "direction", types.DirectionOut, "err", err)
+				} else {
+					mw.logger.Debug("Emitted mempool transaction",
+						"txHash", tx.TxHash, "direction", types.DirectionOut,
+						"from", tx.FromAddress, "to", tx.ToAddress,
+						"amount", tx.Amount, "status", tx.Status)
+				}
+			}
 		}
 	}
 

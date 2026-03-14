@@ -158,8 +158,8 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 }
 
 // emitBlock emits relevant transactions for subscribed addresses.
-// Only emits transactions where ToAddress is monitored (incoming deposits).
-// Outgoing transactions are handled by the transactor/withdrawal flow.
+// When two_way_indexing is enabled, both incoming (to) and outgoing (from) transfers are emitted.
+// For internal transfers where both addresses are monitored, two events are emitted — one per direction.
 func (bw *BaseWorker) emitBlock(block *types.Block) {
 	if block == nil || bw.pubkeyStore == nil {
 		return
@@ -167,24 +167,39 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 
 	addressType := bw.chain.GetNetworkType()
 	for _, tx := range block.Transactions {
-		// Only check if ToAddress is monitored (incoming transfer/deposit)
-		// Outgoing transactions (FROM monitored addresses) are handled by withdrawal flow
 		toMonitored := tx.ToAddress != "" && bw.pubkeyStore.Exist(addressType, tx.ToAddress)
+		fromMonitored := bw.config.TwoWayIndexing && tx.FromAddress != "" && bw.pubkeyStore.Exist(addressType, tx.FromAddress)
 
 		if toMonitored {
+			inTx := tx
+			inTx.Direction = types.DirectionIn
 			bw.logger.Info("Emitting matched transaction",
-				"direction", "incoming",
+				"direction", types.DirectionIn,
 				"from", tx.FromAddress,
 				"to", tx.ToAddress,
 				"chain", bw.chain.GetName(),
 				"type", tx.Type,
-				"addressType", addressType,
 				"txhash", tx.TxHash,
-				"txnType", tx.Type,
 				"status", tx.Status,
 				"confirmations", tx.Confirmations,
 			)
-			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &tx)
+			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &inTx)
+		}
+
+		if fromMonitored {
+			outTx := tx
+			outTx.Direction = types.DirectionOut
+			bw.logger.Info("Emitting matched transaction",
+				"direction", types.DirectionOut,
+				"from", tx.FromAddress,
+				"to", tx.ToAddress,
+				"chain", bw.chain.GetName(),
+				"type", tx.Type,
+				"txhash", tx.TxHash,
+				"status", tx.Status,
+				"confirmations", tx.Confirmations,
+			)
+			_ = bw.emitter.EmitTransaction(bw.chain.GetName(), &outTx)
 		}
 	}
 
