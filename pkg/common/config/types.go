@@ -24,6 +24,7 @@ type Config struct {
 
 type Defaults struct {
 	FromLatest          bool               `yaml:"from_latest"`
+	TwoWayIndexing      bool               `yaml:"two_way_indexing"`
 	PollInterval        time.Duration      `yaml:"poll_interval"         validate:"required"`
 	ReorgRollbackWindow int                `yaml:"reorg_rollback_window" validate:"required,min=1"`
 	Client              ClientConfig       `yaml:"client"`
@@ -43,6 +44,7 @@ type ChainConfig struct {
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`
 	ReorgRollbackWindow int              `yaml:"reorg_rollback_window"`
+	TwoWayIndexing      bool             `yaml:"two_way_indexing"`
 	IndexChangeOutput   bool             `yaml:"index_change_output"`
 	IndexUTXO           bool             `yaml:"index_utxo"`
 	Client              ClientConfig     `yaml:"client"`

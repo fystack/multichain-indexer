@@ -35,6 +35,12 @@ func (b *Block) GetMetadata(key string) (interface{}, bool) {
 	return val, ok
 }
 
+// Transfer direction constants for two-way indexing.
+const (
+	DirectionIn  = "in"  // Transfer received by a monitored address (deposit)
+	DirectionOut = "out" // Transfer sent from a monitored address (withdrawal)
+)
+
 type Transaction struct {
 	TxHash        string          `json:"txHash"`
 	NetworkId     string          `json:"networkId"`
@@ -48,6 +54,7 @@ type Transaction struct {
 	Timestamp     uint64          `json:"timestamp"`
 	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
 	Status        string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
+	Direction     string          `json:"direction"`     // "in" (deposit) or "out" (withdrawal)
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
@@ -64,7 +71,7 @@ func (t *Transaction) UnmarshalBinary(data []byte) error {
 
 func (t Transaction) String() string {
 	return fmt.Sprintf(
-		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d, Confirmations: %d, Status: %s}",
+		"{TxHash: %s, NetworkId: %s, BlockNumber: %d, FromAddress: %s, ToAddress: %s, AssetAddress: %s, Amount: %s, Type: %s, TxFee: %s, Timestamp: %d, Confirmations: %d, Status: %s, Direction: %s}",
 		t.TxHash,
 		t.NetworkId,
 		t.BlockNumber,
@@ -77,11 +84,12 @@ func (t Transaction) String() string {
 		t.Timestamp,
 		t.Confirmations,
 		t.Status,
+		t.Direction,
 	)
 }
 
 // Hash generates a deterministic hash for the transaction that can be used as an idempotent key.
-// It combines NetworkID, TxHash, FromAddress, ToAddress, and Timestamp to ensure uniqueness.
+// Direction is included so that internal transfers (both addresses monitored) produce distinct hashes.
 func (t Transaction) Hash() string {
 	var builder strings.Builder
 	builder.WriteString(t.NetworkId)
@@ -93,6 +101,8 @@ func (t Transaction) Hash() string {
 	builder.WriteString(t.ToAddress)
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
+	builder.WriteByte('|')
+	builder.WriteString(t.Direction)
 	hash := sha256.Sum256([]byte(builder.String()))
 	return fmt.Sprintf("%x", hash)
 }

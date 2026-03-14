@@ -7,6 +7,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
@@ -96,12 +97,9 @@ func (mw *MempoolWorker) processMempool() error {
 
 	for _, tx := range transactions {
 		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
-		if !toMonitored {
-			continue
-		}
+		fromMonitored := mw.config.TwoWayIndexing && tx.FromAddress != "" && mw.pubkeyStore.Exist(networkType, tx.FromAddress)
 
-		txKey := tx.TxHash + ":" + tx.ToAddress
-		if mw.seenTxs[txKey] {
+		if !toMonitored && !fromMonitored {
 			continue
 		}
 
@@ -115,24 +113,35 @@ func (mw *MempoolWorker) processMempool() error {
 				break
 			}
 		}
-		mw.seenTxs[txKey] = true
-		newTxCount++
 
-		if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &tx); err != nil {
-			mw.logger.Error("Failed to emit mempool transaction",
-				"txHash", tx.TxHash,
-				"direction", "incoming",
-				"err", err,
-			)
-		} else {
-			mw.logger.Debug("Emitted mempool transaction",
-				"txHash", tx.TxHash,
-				"direction", "incoming",
-				"from", tx.FromAddress,
-				"to", tx.ToAddress,
-				"amount", tx.Amount,
-				"status", tx.Status,
-			)
+		candidates := [2]struct {
+			active    bool
+			direction string
+		}{
+			{toMonitored, types.DirectionIn},
+			{fromMonitored, types.DirectionOut},
+		}
+		for _, c := range candidates {
+			if !c.active {
+				continue
+			}
+			key := tx.TxHash + ":" + c.direction
+			if mw.seenTxs[key] {
+				continue
+			}
+			mw.seenTxs[key] = true
+			newTxCount++
+			dirTx := tx
+			dirTx.Direction = c.direction
+			if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &dirTx); err != nil {
+				mw.logger.Error("Failed to emit mempool transaction",
+					"txHash", tx.TxHash, "direction", c.direction, "err", err)
+			} else {
+				mw.logger.Debug("Emitted mempool transaction",
+					"txHash", tx.TxHash, "direction", c.direction,
+					"from", tx.FromAddress, "to", tx.ToAddress,
+					"amount", tx.Amount, "status", tx.Status)
+			}
 		}
 	}
 

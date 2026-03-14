@@ -57,6 +57,9 @@ func (c Chains) ApplyDefaults(def Defaults) error {
 		if !chain.FromLatest {
 			chain.FromLatest = def.FromLatest
 		}
+		if !chain.TwoWayIndexing {
+			chain.TwoWayIndexing = def.TwoWayIndexing
+		}
 		if chain.PollInterval == 0 {
 			chain.PollInterval = def.PollInterval
 		}
