@@ -43,7 +43,6 @@ type ChainConfig struct {
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`
 	ReorgRollbackWindow int              `yaml:"reorg_rollback_window"`
-	Confirmations       uint64           `yaml:"confirmations"`
 	IndexChangeOutput   bool             `yaml:"index_change_output"`
 	IndexUTXO           bool             `yaml:"index_utxo"`
 	Client              ClientConfig     `yaml:"client"`

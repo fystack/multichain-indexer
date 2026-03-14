@@ -72,7 +72,6 @@ chains:
     type: "btc"
     start_block: 4440000 # recent testnet block
     poll_interval: "60s" # Bitcoin blocks ~10 minutes
-    confirmations: 1
     reorg_rollback_window: 100
     index_change_output: false
     index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
@@ -96,7 +95,6 @@ chains:
     type: "btc"
     start_block: 850000
     poll_interval: "60s"
-    confirmations: 1
     reorg_rollback_window: 100
     index_change_output: false
     index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
