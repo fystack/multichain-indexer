@@ -114,41 +114,33 @@ func (mw *MempoolWorker) processMempool() error {
 			}
 		}
 
-		if toMonitored {
-			key := tx.TxHash + ":in"
-			if !mw.seenTxs[key] {
-				mw.seenTxs[key] = true
-				newTxCount++
-				inTx := tx
-				inTx.Direction = types.DirectionIn
-				if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &inTx); err != nil {
-					mw.logger.Error("Failed to emit mempool transaction",
-						"txHash", tx.TxHash, "direction", types.DirectionIn, "err", err)
-				} else {
-					mw.logger.Debug("Emitted mempool transaction",
-						"txHash", tx.TxHash, "direction", types.DirectionIn,
-						"from", tx.FromAddress, "to", tx.ToAddress,
-						"amount", tx.Amount, "status", tx.Status)
-				}
-			}
+		candidates := [2]struct {
+			active    bool
+			direction string
+		}{
+			{toMonitored, types.DirectionIn},
+			{fromMonitored, types.DirectionOut},
 		}
-
-		if fromMonitored {
-			key := tx.TxHash + ":out"
-			if !mw.seenTxs[key] {
-				mw.seenTxs[key] = true
-				newTxCount++
-				outTx := tx
-				outTx.Direction = types.DirectionOut
-				if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &outTx); err != nil {
-					mw.logger.Error("Failed to emit mempool transaction",
-						"txHash", tx.TxHash, "direction", types.DirectionOut, "err", err)
-				} else {
-					mw.logger.Debug("Emitted mempool transaction",
-						"txHash", tx.TxHash, "direction", types.DirectionOut,
-						"from", tx.FromAddress, "to", tx.ToAddress,
-						"amount", tx.Amount, "status", tx.Status)
-				}
+		for _, c := range candidates {
+			if !c.active {
+				continue
+			}
+			key := tx.TxHash + ":" + c.direction
+			if mw.seenTxs[key] {
+				continue
+			}
+			mw.seenTxs[key] = true
+			newTxCount++
+			dirTx := tx
+			dirTx.Direction = c.direction
+			if err := mw.emitter.EmitTransaction(mw.chain.GetName(), &dirTx); err != nil {
+				mw.logger.Error("Failed to emit mempool transaction",
+					"txHash", tx.TxHash, "direction", c.direction, "err", err)
+			} else {
+				mw.logger.Debug("Emitted mempool transaction",
+					"txHash", tx.TxHash, "direction", c.direction,
+					"from", tx.FromAddress, "to", tx.ToAddress,
+					"amount", tx.Amount, "status", tx.Status)
 			}
 		}
 	}
