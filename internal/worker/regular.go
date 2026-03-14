@@ -15,6 +15,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
+
 const (
 	MaxBlockHashSize = 20
 )
@@ -84,31 +85,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		return fmt.Errorf("get latest block: %w", err)
 	}
 
-	// Bitcoin-specific: Only index confirmed blocks
-	if rw.chain.GetNetworkType() == enum.NetworkTypeBtc {
-		btcIndexer, ok := rw.chain.(*indexer.BitcoinIndexer)
-		if ok {
-			confirmedHeight, err := btcIndexer.GetConfirmedHeight(rw.ctx)
-			if err != nil {
-				return fmt.Errorf("get confirmed height: %w", err)
-			}
-			rw.logger.Info("Got confirmed height for Bitcoin",
-				"latest", latest,
-				"confirmed", confirmedHeight,
-				"current", rw.currentBlock)
-			latest = confirmedHeight
-
-			if rw.currentBlock > latest {
-				rw.logger.Info("Waiting for confirmations",
-					"current", rw.currentBlock,
-					"confirmed_height", latest)
-				time.Sleep(rw.config.PollInterval)
-				return nil
-			}
-		}
-	} else {
-		rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
-	}
+	rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
 
 	if rw.currentBlock > latest {
 		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)

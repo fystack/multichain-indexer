@@ -105,6 +105,16 @@ func (mw *MempoolWorker) processMempool() error {
 			continue
 		}
 
+		// seenTxs grows unbounded as the mempool churns. Once it hits 50k entries,
+		// evict one random entry before inserting the new one to keep memory bounded.
+		// Go map iteration is randomly ordered, so ranging and breaking after the
+		// first delete is a lightweight random-eviction without a separate data structure.
+		if len(mw.seenTxs) >= 50_000 {
+			for k := range mw.seenTxs {
+				delete(mw.seenTxs, k)
+				break
+			}
+		}
 		mw.seenTxs[txKey] = true
 		newTxCount++
 
@@ -178,20 +188,6 @@ func (mw *MempoolWorker) processMempool() error {
 			"new_utxos", newUTXOCount,
 			"total_tracked", len(mw.seenTxs),
 		)
-	}
-
-	// Cleanup: Remove old transactions from tracking (keep last 10k)
-	if len(mw.seenTxs) > 10000 {
-		// Clear half the map (simple approach)
-		count := 0
-		for txKey := range mw.seenTxs {
-			delete(mw.seenTxs, txKey)
-			count++
-			if count > 5000 {
-				break
-			}
-		}
-		mw.logger.Debug("Cleaned up old mempool transactions", "removed", count)
 	}
 
 	// Sleep until next poll interval

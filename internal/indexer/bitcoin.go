@@ -14,16 +14,14 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
-	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/shopspring/decimal"
 )
 
 type BitcoinIndexer struct {
-	chainName     string
-	config        config.ChainConfig
-	failover      *rpc.Failover[bitcoin.BitcoinAPI]
-	pubkeyStore   PubkeyStore
-	confirmations uint64
+	chainName   string
+	config      config.ChainConfig
+	failover    *rpc.Failover[bitcoin.BitcoinAPI]
+	pubkeyStore PubkeyStore
 }
 
 func NewBitcoinIndexer(
@@ -32,15 +30,20 @@ func NewBitcoinIndexer(
 	failover *rpc.Failover[bitcoin.BitcoinAPI],
 	pubkeyStore PubkeyStore,
 ) *BitcoinIndexer {
-	confirmations := cfg.Confirmations
-
 	return &BitcoinIndexer{
-		chainName:     chainName,
-		config:        cfg,
-		failover:      failover,
-		pubkeyStore:   pubkeyStore,
-		confirmations: confirmations,
+		chainName:   chainName,
+		config:      cfg,
+		failover:    failover,
+		pubkeyStore: pubkeyStore,
 	}
+}
+
+// satoshisFromFloat converts a BTC float64 value to satoshis using string-based decimal
+// arithmetic to avoid float64 truncation errors (e.g. 0.1 * 1e8 = 9999999.999...).
+func satoshisFromFloat(value float64) int64 {
+	return decimal.RequireFromString(fmt.Sprintf("%.8f", value)).
+		Mul(decimal.NewFromInt(1e8)).
+		IntPart()
 }
 
 func (b *BitcoinIndexer) GetName() string {
@@ -73,7 +76,6 @@ func (b *BitcoinIndexer) GetBlock(ctx context.Context, number uint64) (*types.Bl
 	var btcBlock *bitcoin.Block
 
 	err := b.failover.ExecuteWithRetry(ctx, func(c bitcoin.BitcoinAPI) error {
-		// Verbosity 3 = full transaction details with prevout data included (Bitcoin Core 25+)
 		block, err := c.GetBlockByHeight(ctx, number, 3)
 		if err != nil {
 			return err
@@ -89,39 +91,83 @@ func (b *BitcoinIndexer) GetBlock(ctx context.Context, number uint64) (*types.Bl
 	return b.convertBlockWithPrevoutResolution(ctx, btcBlock)
 }
 
-// convertBlockWithPrevoutResolution converts a block and resolves prevout data for transactions
+// convertBlockWithPrevoutResolution converts a block and resolves prevout data
+// for transactions that lack it. Prevout resolution runs in parallel using a
+// pool sized to config.Throttle.Concurrency.
 func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, btcBlock *bitcoin.Block) (*types.Block, error) {
-	var allTransfers []types.Transaction
-	var allUTXOEvents []types.UTXOEvent
-
 	latestBlock := btcBlock.Height
 	if btcBlock.Confirmations > 0 {
 		latestBlock = btcBlock.Height + btcBlock.Confirmations - 1
 	}
 
-	provider, _ := b.failover.GetBestProvider()
-	var btcClient *bitcoin.BitcoinClient
-	if provider != nil {
-		btcClient, _ = provider.Client.(*bitcoin.BitcoinClient)
-	}
-
+	// Stage 1: Collect indices of transactions missing prevout data.
+	var needsResolution []int
 	for i := range btcBlock.Tx {
 		tx := &btcBlock.Tx[i]
-
 		if tx.IsCoinbase() {
 			continue
 		}
+		if len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil && tx.Vin[0].TxID != "" {
+			needsResolution = append(needsResolution, i)
+		}
+	}
 
-		if btcClient != nil && len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil {
-			if tx.Vin[0].TxID != "" {
-				if resolved, err := btcClient.GetTransactionWithPrevouts(ctx, tx.TxID); err == nil {
-					for j := range tx.Vin {
-						if j < len(resolved.Vin) && resolved.Vin[j].PrevOut != nil {
-							tx.Vin[j].PrevOut = resolved.Vin[j].PrevOut
+	// Stage 2: Resolve prevout data in parallel.
+	if len(needsResolution) > 0 {
+		concurrency := b.config.Throttle.Concurrency
+		if concurrency < 1 {
+			concurrency = 1
+		}
+
+		type job struct{ txIdx int }
+		jobs := make(chan job, len(needsResolution))
+		for _, idx := range needsResolution {
+			jobs <- job{txIdx: idx}
+		}
+		close(jobs)
+
+		var wg sync.WaitGroup
+		for i := 0; i < concurrency; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				provider, err := b.failover.GetBestProvider()
+				if err != nil || provider == nil {
+					for range jobs {
+					}
+					return
+				}
+				client, ok := provider.Client.(bitcoin.BitcoinAPI)
+				if !ok {
+					for range jobs {
+					}
+					return
+				}
+				for j := range jobs {
+					tx := &btcBlock.Tx[j.txIdx]
+					resolved, err := client.GetTransactionWithPrevouts(ctx, tx.TxID)
+					if err != nil {
+						continue // silently skip — same behaviour as the previous sequential code
+					}
+					for k := range tx.Vin {
+						if k < len(resolved.Vin) && resolved.Vin[k].PrevOut != nil {
+							tx.Vin[k].PrevOut = resolved.Vin[k].PrevOut
 						}
 					}
 				}
-			}
+			}()
+		}
+		wg.Wait()
+	}
+
+	// Stage 3: Extract transfers and UTXO events.
+	var allTransfers []types.Transaction
+	var allUTXOEvents []types.UTXOEvent
+
+	for i := range btcBlock.Tx {
+		tx := &btcBlock.Tx[i]
+		if tx.IsCoinbase() {
+			continue
 		}
 
 		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
@@ -142,7 +188,6 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 		Timestamp:    btcBlock.Time,
 		Transactions: allTransfers,
 	}
-
 	block.SetMetadata("utxo_events", allUTXOEvents)
 
 	return block, nil
@@ -242,9 +287,25 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	fee := tx.CalculateFee()
 
 	confirmations := b.calculateConfirmations(blockNumber, latestBlock)
-	status := utils.CalculateTransactionStatus(confirmations, b.confirmations)
+	status := types.StatusPending
+	if confirmations > 0 {
+		status = types.StatusConfirmed
+	}
 
 	fromAddr := b.getFirstInputAddress(tx)
+
+	// Build set of all normalized input addresses for change output detection.
+	inputAddrs := make(map[string]bool, len(tx.Vin))
+	for _, vin := range tx.Vin {
+		addr := bitcoin.GetInputAddress(&vin)
+		if addr == "" {
+			continue
+		}
+		if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
+			addr = normalized
+		}
+		inputAddrs[addr] = true
+	}
 
 	feeAssigned := false
 	for _, vout := range tx.Vout {
@@ -259,12 +320,12 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 
 		// For Transfer events, respect index_change_output config
 		// (This filters what goes to transfer.event.dispatch)
-		if !b.config.IndexChangeOutput && fromAddr != "" && fromAddr == toAddr {
+		if !b.config.IndexChangeOutput && len(inputAddrs) > 0 && inputAddrs[toAddr] {
 			continue
 		}
 
 		// Convert BTC to satoshis (multiply by 1e8)
-		amountSat := int64(vout.Value * 1e8)
+		amountSat := satoshisFromFloat(vout.Value)
 
 		txFee := decimal.Zero
 		if !feeAssigned {
@@ -318,7 +379,7 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 			addr = normalized
 		}
 
-		amountSat := int64(vout.Value * 1e8)
+		amountSat := satoshisFromFloat(vout.Value)
 
 		created = append(created, types.UTXO{
 			TxHash:       tx.TxID,
@@ -345,7 +406,7 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 			addr = normalized
 		}
 
-		amountSat := int64(vin.PrevOut.Value * 1e8)
+		amountSat := satoshisFromFloat(vin.PrevOut.Value)
 
 		spent = append(spent, types.SpentUTXO{
 			TxHash:  vin.TxID,
@@ -363,7 +424,10 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 	}
 
 	confirmations := b.calculateConfirmations(blockNumber, latestBlock)
-	status := utils.CalculateTransactionStatus(confirmations, b.confirmations)
+	status := types.StatusPending
+	if confirmations > 0 {
+		status = types.StatusConfirmed
+	}
 	fee := tx.CalculateFee()
 
 	return &types.UTXOEvent{
@@ -410,20 +474,6 @@ func (b *BitcoinIndexer) IsHealthy() bool {
 	return err == nil
 }
 
-// GetConfirmedHeight returns the latest block height minus confirmations
-// This ensures we only index blocks with sufficient confirmations to avoid reorgs
-func (b *BitcoinIndexer) GetConfirmedHeight(ctx context.Context) (uint64, error) {
-	latest, err := b.GetLatestBlockNumber(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get latest block: %w", err)
-	}
-
-	if latest < b.confirmations {
-		return 0, nil
-	}
-
-	return latest - b.confirmations, nil
-}
 
 // GetMempoolTransactions fetches and processes transactions from the mempool
 // Returns transactions and UTXO events involving monitored addresses with 0 confirmations
