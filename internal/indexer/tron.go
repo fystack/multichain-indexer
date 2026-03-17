@@ -44,6 +44,20 @@ func (t *TronIndexer) GetNetworkId() string {
 	return t.config.NetworkId
 }
 
+func (t *TronIndexer) isMonitoredTransfer(from, to string) bool {
+	if t.pubkeyStore == nil {
+		return true
+	}
+
+	if to != "" && t.pubkeyStore.Exist(enum.NetworkTypeTron, to) {
+		return true
+	}
+
+	return t.config.TwoWayIndexing &&
+		from != "" &&
+		t.pubkeyStore.Exist(enum.NetworkTypeTron, from)
+}
+
 func (t *TronIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
 	err := t.failover.ExecuteWithRetry(ctx, func(c tron.TronAPI) error {
@@ -133,7 +147,7 @@ func (t *TronIndexer) processBlock(
 			)
 			if err == nil && len(parsed) > 0 {
 				for _, p := range parsed {
-					if t.pubkeyStore != nil && !t.pubkeyStore.Exist(enum.NetworkTypeTron, p.ToAddress) {
+					if !t.isMonitoredTransfer(p.FromAddress, p.ToAddress) {
 						continue
 					}
 					transfers = append(transfers, p)
@@ -204,7 +218,7 @@ func (t *TronIndexer) processBlock(
 			if tr == nil {
 				continue
 			}
-			if t.pubkeyStore != nil && !t.pubkeyStore.Exist(enum.NetworkTypeTron, tr.ToAddress) {
+			if !t.isMonitoredTransfer(tr.FromAddress, tr.ToAddress) {
 				continue
 			}
 

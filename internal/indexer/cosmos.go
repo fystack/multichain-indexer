@@ -58,6 +58,20 @@ func (c *CosmosIndexer) GetName() string                  { return strings.ToUpp
 func (c *CosmosIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeCosmos }
 func (c *CosmosIndexer) GetNetworkInternalCode() string   { return c.config.InternalCode }
 
+func (c *CosmosIndexer) isMonitoredTransfer(sender, recipient string) bool {
+	if c.pubkeyStore == nil {
+		return true
+	}
+
+	if recipient != "" && c.pubkeyStore.Exist(enum.NetworkTypeCosmos, recipient) {
+		return true
+	}
+
+	return c.config.TwoWayIndexing &&
+		sender != "" &&
+		c.pubkeyStore.Exist(enum.NetworkTypeCosmos, sender)
+}
+
 func (c *CosmosIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
 	err := c.failover.ExecuteWithRetry(ctx, func(client cosmos.CosmosAPI) error {
@@ -280,7 +294,7 @@ func (c *CosmosIndexer) extractTransferTransactions(
 			if transfer.sender == "" || transfer.recipient == "" || transfer.amount == "" {
 				continue
 			}
-			if c.pubkeyStore != nil && !c.pubkeyStore.Exist(enum.NetworkTypeCosmos, transfer.recipient) {
+			if !c.isMonitoredTransfer(transfer.sender, transfer.recipient) {
 				continue
 			}
 

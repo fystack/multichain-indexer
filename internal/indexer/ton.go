@@ -119,6 +119,24 @@ func (t *TonIndexer) GetName() string                  { return strings.ToUpper(
 func (t *TonIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeTon }
 func (t *TonIndexer) GetNetworkInternalCode() string   { return t.cfg.InternalCode }
 
+func (t *TonIndexer) isMonitoredTransfer(from, to string) bool {
+	if t.pubkeyStore == nil {
+		return true
+	}
+
+	toMatched, _, _ := t.matchMonitoredTONAddress(to)
+	if toMatched {
+		return true
+	}
+
+	if !t.cfg.TwoWayIndexing {
+		return false
+	}
+
+	fromMatched, _, _ := t.matchMonitoredTONAddress(from)
+	return fromMatched
+}
+
 func (t *TonIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	if t.client == nil {
 		return 0, fmt.Errorf("ton client is not configured")
@@ -575,12 +593,8 @@ func (t *TonIndexer) scanShardBlock(
 				if parsed[i].ToAddress == "" {
 					continue
 				}
-
-				if t.pubkeyStore != nil {
-					matched, _, _ := t.matchMonitoredTONAddress(parsed[i].ToAddress)
-					if !matched {
-						continue
-					}
+				if !t.isMonitoredTransfer(parsed[i].FromAddress, parsed[i].ToAddress) {
+					continue
 				}
 
 				out = append(out, parsed[i])

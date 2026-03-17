@@ -426,7 +426,8 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 		return nil, fmt.Errorf("failed to query Transfer logs: %w", err)
 	}
 
-	// Map of tx hashes that have transfers to monitored addresses
+	// Map of tx hashes that have transfers involving monitored addresses.
+	// When two_way_indexing is enabled, both 'to' and 'from' sides are considered.
 	matchedTxHashes := make(map[string]bool)
 
 	for _, log := range logs {
@@ -443,20 +444,27 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 		// Topics[2] = to address (indexed)
 		// Data = amount (not indexed)
 
-		// Extract 'to' address from topics[2]
-		// Topics are 32 bytes, address is last 20 bytes
+		// Extract 'from' (topics[1]) and 'to' (topics[2]) addresses.
+		// Topics are 32 bytes, address is last 20 bytes.
+		fromAddressTopic := log.Topics[1]
 		toAddressTopic := log.Topics[2]
-		if len(toAddressTopic) < 64 { // hex string without 0x prefix should be 64 chars
+		if len(fromAddressTopic) < 64 || len(toAddressTopic) < 64 { // hex string without 0x prefix should be 64 chars
 			continue
 		}
 
-		// Get last 40 hex chars (20 bytes) and add 0x prefix
+		// Get last 40 hex chars (20 bytes) and add 0x prefix.
+		fromAddress := "0x" + fromAddressTopic[len(fromAddressTopic)-40:]
 		toAddress := "0x" + toAddressTopic[len(toAddressTopic)-40:]
 
-		// Check if this address is monitored
-		if e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(toAddress)) {
+		fromMonitored := e.config.TwoWayIndexing && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(fromAddress))
+		toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(toAddress))
+		if fromMonitored || toMonitored {
 			matchedTxHashes[log.TransactionHash] = true
-			logger.Info("EXISTING TRANSFER", "tx_hash", log.TransactionHash, "to_address", toAddress)
+			logger.Info("MATCHED ERC20 TRANSFER",
+				"tx_hash", log.TransactionHash,
+				"from_address", fromAddress,
+				"to_address", toAddress,
+			)
 		}
 	}
 
@@ -494,13 +502,20 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 			}
 
 			if !isSafeExecution {
-				// OPTIMIZATION: Only fetch receipts for native transfers TO monitored addresses
+				// OPTIMIZATION: Only fetch receipts for native transfers involving monitored addresses.
+				// In two-way mode, include both:
+				// - incoming: tx.To is monitored
+				// - outgoing: tx.From is monitored
 				// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
 				isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
 
-				if isNativeTransfer && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To)) {
-					nativeTransfers++
-					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				if isNativeTransfer {
+					toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
+					fromMonitored := e.config.TwoWayIndexing && tx.From != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.From))
+					if toMonitored || fromMonitored {
+						nativeTransfers++
+						txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+					}
 				}
 			} else {
 				// Filter must match ExtractSafeTransfers acceptance criteria to avoid
@@ -514,7 +529,10 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 					continue
 				}
 
-				if e.pubkeyStore.Exist(enum.NetworkTypeEVM, params.To) {
+				// In Safe transfers, tx.To (the Safe contract) is the logical sender (FromAddress).
+				toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(params.To))
+				fromMonitored := e.config.TwoWayIndexing && tx.To != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
+				if toMonitored || fromMonitored {
 					safeTransfers++
 					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
 				}

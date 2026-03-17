@@ -46,6 +46,7 @@ func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
 		enum.NetworkTypeEVM,
 		enum.NetworkTypeTron,
 		enum.NetworkTypeBtc,
+		enum.NetworkTypeSol,
 		enum.NetworkTypeSui,
 		enum.NetworkTypeCosmos,
 		enum.NetworkTypeApt,
