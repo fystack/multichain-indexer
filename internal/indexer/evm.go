@@ -529,6 +529,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 					continue
 				}
 
+				// In Safe transfers, tx.To (the Safe contract) is the logical sender (FromAddress).
 				toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(params.To))
 				fromMonitored := e.config.TwoWayIndexing && tx.To != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
 				if toMonitored || fromMonitored {
