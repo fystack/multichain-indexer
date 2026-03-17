@@ -40,6 +40,20 @@ func (s *SolanaIndexer) GetName() string                  { return strings.ToUpp
 func (s *SolanaIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeSol }
 func (s *SolanaIndexer) GetNetworkInternalCode() string   { return s.config.InternalCode }
 
+func (s *SolanaIndexer) shouldKeepTransfer(from, to string) bool {
+	if s.pubkeyStore == nil {
+		return true
+	}
+
+	if to != "" && s.pubkeyStore.Exist(enum.NetworkTypeSol, to) {
+		return true
+	}
+
+	return s.config.TwoWayIndexing &&
+		from != "" &&
+		s.pubkeyStore.Exist(enum.NetworkTypeSol, from)
+}
+
 func (s *SolanaIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var slot uint64
 	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
@@ -496,7 +510,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 		}
 
 		appendNative := func(from, to string, lamports uint64) {
-			if s.pubkeyStore != nil && !s.pubkeyStore.Exist(enum.NetworkTypeSol, to) {
+			if !s.shouldKeepTransfer(from, to) {
 				return
 			}
 			out = append(out, types.Transaction{
@@ -517,10 +531,8 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 			fromOwner := tokenOwnerByAcc[srcTokenAcc]
 			toOwner := tokenOwnerByAcc[dstTokenAcc]
 
-			if s.pubkeyStore != nil {
-				if toOwner == "" || !s.pubkeyStore.Exist(enum.NetworkTypeSol, toOwner) {
-					return
-				}
+			if !s.shouldKeepTransfer(fromOwner, toOwner) {
+				return
 			}
 
 			if mint == "" {

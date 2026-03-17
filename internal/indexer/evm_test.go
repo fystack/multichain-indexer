@@ -9,10 +9,21 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type evmPubkeyStoreStub struct {
+	addresses map[string]bool
+}
+
+func (s evmPubkeyStoreStub) Exist(_ enum.NetworkType, address string) bool {
+	return s.addresses[address]
+}
+
+const safeExecInputTest = "0x6a761202000000000000000000000000c26dc13d057824342d5480b153f288bd1c5e3e9d000000000000000000000000000000000000000000000000016345785d8a000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008200000000000000000000000040a1ade6e21129c09cfb3c501efba5e56ba9a3e50000000000000000000000000000000000000000000000000000000000000000010000000000000000000000005c45ee16de1570b662e32e7960e1e501dd93cde4000000000000000000000000000000000000000000000000000000000000000001a5aa81e56a92b6f46bf78edb6a34e0086c0bb5c1e9d2c20ae60d49c1a8de6b4f15c14847f1ba3f6c35b51dbefae4c74a01bf7c28a0a0c53fb4e73a6d40e36f76b1c00000000000000000000000000000000000000000000000000000000000000"
 
 const ethMainnetRPC = "https://ethereum-rpc.publicnode.com"
 const sepoliaRPC = "https://ethereum-sepolia-rpc.publicnode.com"
@@ -39,6 +50,38 @@ func newTestSepoliaIndexer() *EVMIndexer {
 		config:      config.ChainConfig{NetworkId: "ethereum-sepolia"},
 		pubkeyStore: nil,
 	}
+}
+
+func TestExtractReceiptTxHashes_SelectsSafeOutgoingWhenTwoWayEnabled(t *testing.T) {
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config: config.ChainConfig{
+			NetworkId:      "ethereum-mainnet",
+			TwoWayIndexing: true,
+		},
+		pubkeyStore: evmPubkeyStoreStub{
+			addresses: map[string]bool{
+				evm.ToChecksumAddress("0x84ba2321d46814fb1aa69a7b71882efea50f700c"): true,
+			},
+		},
+	}
+
+	blockNum := uint64(123)
+	blocks := map[uint64]*evm.Block{
+		blockNum: {
+			Transactions: []evm.Txn{
+				{
+					Hash:  "0xabc123",
+					From:  "0xa768d264b8bf98588ebdef6e241a0a73baf287d1",
+					To:    "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+					Input: safeExecInputTest,
+				},
+			},
+		},
+	}
+
+	got := idx.extractReceiptTxHashes(blocks)
+	require.Equal(t, []string{"0xabc123"}, got[blockNum])
 }
 
 // TestParseGnosisSafeETHTransfer tests indexing a Gnosis Safe execTransaction that transfers 0.1 ETH internally.

@@ -529,7 +529,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 					continue
 				}
 
-				toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, params.To)
+				toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(params.To))
 				fromMonitored := e.config.TwoWayIndexing && tx.To != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
 				if toMonitored || fromMonitored {
 					safeTransfers++

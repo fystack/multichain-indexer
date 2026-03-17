@@ -57,6 +57,18 @@ func (a *AptosIndexer) GetName() string                  { return strings.ToUppe
 func (a *AptosIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeApt }
 func (a *AptosIndexer) GetNetworkInternalCode() string   { return a.config.InternalCode }
 
+func (a *AptosIndexer) shouldKeepTransfer(from, to string) bool {
+	if a.pubkeyStore == nil {
+		return true
+	}
+
+	if a.isMonitoredAddress(to) {
+		return true
+	}
+
+	return a.config.TwoWayIndexing && a.isMonitoredAddress(from)
+}
+
 func (a *AptosIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var latest uint64
 	err := a.failover.ExecuteWithRetry(ctx, func(client aptos.AptosAPI) error {
@@ -209,7 +221,7 @@ func (a *AptosIndexer) convertBlock(
 		if !ok {
 			continue
 		}
-		if a.pubkeyStore != nil && !a.isMonitoredAddress(parsed.ToAddress) {
+		if !a.shouldKeepTransfer(parsed.FromAddress, parsed.ToAddress) {
 			continue
 		}
 		txs = append(txs, parsed)
@@ -258,16 +270,16 @@ func (a *AptosIndexer) extractTransfer(
 	fee := convertAptosFeeToNative(tx.GasUsed, tx.GasUnitPrice)
 
 	return types.Transaction{
-		TxHash:        tx.Hash,
-		NetworkId:     a.config.NetworkId,
-		BlockNumber:   blockHeight,
-		FromAddress:   fromAddress,
-		ToAddress:     toAddress,
-		AssetAddress:  assetAddress,
-		Amount:        amount,
-		Type:          txType,
-		TxFee:         fee,
-		Timestamp:     timestamp,
+		TxHash:       tx.Hash,
+		NetworkId:    a.config.NetworkId,
+		BlockNumber:  blockHeight,
+		FromAddress:  fromAddress,
+		ToAddress:    toAddress,
+		AssetAddress: assetAddress,
+		Amount:       amount,
+		Type:         txType,
+		TxFee:        fee,
+		Timestamp:    timestamp,
 	}, true
 }
 

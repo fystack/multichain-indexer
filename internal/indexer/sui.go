@@ -92,6 +92,37 @@ func (s *SuiIndexer) GetName() string                  { return strings.ToUpper(
 func (s *SuiIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeSui }
 func (s *SuiIndexer) GetNetworkInternalCode() string   { return s.cfg.InternalCode }
 
+func (s *SuiIndexer) isMonitoredAddress(addr string) bool {
+	if s.pubkeyStore == nil {
+		return true
+	}
+
+	candidates := []string{addr, normalizeSuiAddress(addr)}
+	for _, candidate := range candidates {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		if s.pubkeyStore.Exist(enum.NetworkTypeSui, candidate) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (s *SuiIndexer) shouldKeepTransfer(from, to string) bool {
+	if s.pubkeyStore == nil {
+		return true
+	}
+
+	if s.isMonitoredAddress(to) {
+		return true
+	}
+
+	return s.cfg.TwoWayIndexing && s.isMonitoredAddress(from)
+}
+
 // GetLatestBlockNumber returns the latest checkpoint sequence number.
 func (s *SuiIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 
@@ -259,7 +290,7 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 		if tx.ToAddress == "" {
 			continue
 		}
-		if s.pubkeyStore != nil && !s.pubkeyStore.Exist(enum.NetworkTypeSui, tx.ToAddress) {
+		if !s.shouldKeepTransfer(tx.FromAddress, tx.ToAddress) {
 			continue
 		}
 		txs = append(txs, tx)
