@@ -189,16 +189,8 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	// Build bloom sync config if enabled
 	var bloomSyncCfg *worker.BloomSyncConfig
 	if services.Bloomfilter != nil && services.Bloomfilter.Sync.Enabled && db != nil {
-		cfg := worker.DefaultBloomSyncConfig()
-		if services.Bloomfilter.Sync.Interval != "" {
-			if interval, parseErr := time.ParseDuration(services.Bloomfilter.Sync.Interval); parseErr == nil {
-				cfg.Interval = interval
-			}
-		}
-		if services.Bloomfilter.Sync.BatchSize > 0 {
-			cfg.BatchSize = services.Bloomfilter.Sync.BatchSize
-		}
-		bloomSyncCfg = &cfg
+		c := worker.NewBloomSyncConfig(services.Bloomfilter.Sync)
+		bloomSyncCfg = &c
 	}
 
 	// Create manager with all workers using factory

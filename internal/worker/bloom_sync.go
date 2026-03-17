@@ -6,12 +6,29 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
+	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
-	"github.com/fystack/multichain-indexer/pkg/model"
-	"github.com/samber/lo"
-	"gorm.io/gorm"
 )
+
+// AddressLoader loads addresses for bloom filter synchronization.
+// Implementations can query any data source (database, API, file, etc.).
+type AddressLoader interface {
+	LoadAddresses(ctx context.Context, params AddressLoaderParams) ([]LoadedAddress, error)
+}
+
+// AddressLoaderParams contains the parameters for loading addresses.
+type AddressLoaderParams struct {
+	NetworkType enum.NetworkType
+	After       time.Time // Load addresses created after this time
+	Limit       int
+}
+
+// LoadedAddress represents an address returned by an AddressLoader.
+type LoadedAddress struct {
+	Address   string
+	CreatedAt time.Time
+}
 
 // BloomSyncConfig holds configuration for the bloom filter sync worker.
 type BloomSyncConfig struct {
@@ -19,22 +36,30 @@ type BloomSyncConfig struct {
 	BatchSize int           // Max addresses to fetch per sync cycle
 }
 
-// DefaultBloomSyncConfig returns sensible defaults for production.
-func DefaultBloomSyncConfig() BloomSyncConfig {
-	return BloomSyncConfig{
+// NewBloomSyncConfig creates a BloomSyncConfig from the parsed config,
+// applying defaults for any unset fields.
+func NewBloomSyncConfig(syncCfg config.BloomSyncConfig) BloomSyncConfig {
+	cfg := BloomSyncConfig{
 		Interval:  time.Second,
 		BatchSize: 500,
 	}
+	if interval, err := time.ParseDuration(syncCfg.Interval); err == nil {
+		cfg.Interval = interval
+	}
+	if syncCfg.BatchSize > 0 {
+		cfg.BatchSize = syncCfg.BatchSize
+	}
+	return cfg
 }
 
-// BloomSyncWorker continuously syncs new addresses from the database to the bloom filter.
+// BloomSyncWorker continuously syncs new addresses to the bloom filter.
 // Implements the Worker interface for unified lifecycle management.
 type BloomSyncWorker struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
 	bloomFilter addressbloomfilter.WalletAddressBloomFilter
-	db          *gorm.DB
+	loader      AddressLoader
 	config      BloomSyncConfig
 
 	mu              sync.RWMutex
@@ -46,7 +71,7 @@ type BloomSyncWorker struct {
 func NewBloomSyncWorker(
 	ctx context.Context,
 	bloomFilter addressbloomfilter.WalletAddressBloomFilter,
-	db *gorm.DB,
+	loader AddressLoader,
 	config BloomSyncConfig,
 ) *BloomSyncWorker {
 	workerCtx, cancel := context.WithCancel(ctx)
@@ -54,7 +79,7 @@ func NewBloomSyncWorker(
 		ctx:             workerCtx,
 		cancel:          cancel,
 		bloomFilter:     bloomFilter,
-		db:              db,
+		loader:          loader,
 		config:          config,
 		lastSyncedTimes: make(map[enum.NetworkType]time.Time),
 		totalSynced:     make(map[enum.NetworkType]uint64),
@@ -98,24 +123,14 @@ func (w *BloomSyncWorker) initLastSyncedTimes() {
 	defer w.mu.Unlock()
 
 	now := time.Now()
-	for _, nt := range []enum.NetworkType{
-		enum.NetworkTypeEVM,
-		enum.NetworkTypeTron,
-		enum.NetworkTypeBtc,
-		enum.NetworkTypeSui,
-	} {
+	for _, nt := range enum.AllNetworkTypes {
 		w.lastSyncedTimes[nt] = now
 		w.totalSynced[nt] = 0
 	}
 }
 
 func (w *BloomSyncWorker) syncAllNetworks() {
-	for _, nt := range []enum.NetworkType{
-		enum.NetworkTypeEVM,
-		enum.NetworkTypeTron,
-		enum.NetworkTypeBtc,
-		enum.NetworkTypeSui,
-	} {
+	for _, nt := range enum.AllNetworkTypes {
 		if err := w.syncNetwork(nt); err != nil {
 			logger.Error("Bloom sync failed for network",
 				"networkType", nt,
@@ -144,15 +159,11 @@ func (w *BloomSyncWorker) syncNetwork(networkType enum.NetworkType) error {
 		// Use a small overlap to handle clock skew edge cases
 		queryTime := lastSynced.Add(-time.Second)
 
-		var addresses []model.WalletAddress
-		err := w.db.WithContext(w.ctx).
-			Model(&model.WalletAddress{}).
-			Select("address", "created_at").
-			Where("type = ? AND created_at > ?", networkType, queryTime).
-			Order("created_at ASC").
-			Limit(w.config.BatchSize).
-			Find(&addresses).Error
-
+		addresses, err := w.loader.LoadAddresses(w.ctx, AddressLoaderParams{
+			NetworkType: networkType,
+			After:       queryTime,
+			Limit:       w.config.BatchSize,
+		})
 		if err != nil {
 			return err
 		}
@@ -168,9 +179,10 @@ func (w *BloomSyncWorker) syncNetwork(networkType enum.NetworkType) error {
 		}
 
 		// Add to bloom filter (idempotent)
-		addressStrings := lo.Map(addresses, func(a model.WalletAddress, _ int) string {
-			return a.Address
-		})
+		addressStrings := make([]string, len(addresses))
+		for i, a := range addresses {
+			addressStrings[i] = a.Address
+		}
 		w.bloomFilter.AddBatch(addressStrings, networkType)
 
 		latestTime := addresses[len(addresses)-1].CreatedAt

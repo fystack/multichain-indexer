@@ -814,7 +814,7 @@ func CreateManagerWithWorkers(
 
 	// Bloom filter sync worker (global, not per-chain)
 	if managerCfg.BloomSync != nil && db != nil && addressBF != nil {
-		bloomWorker := NewBloomSyncWorker(ctx, addressBF, db, *managerCfg.BloomSync)
+		bloomWorker := NewBloomSyncWorker(ctx, addressBF, NewDefaultDBLoader(db), *managerCfg.BloomSync)
 		manager.AddWorkers(bloomWorker)
 		logger.Info("Bloom filter sync worker enabled",
 			"interval", managerCfg.BloomSync.Interval,

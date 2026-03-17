@@ -29,6 +29,17 @@ const (
 	NetworkTypeTon    NetworkType = "ton"
 )
 
+var AllNetworkTypes = []NetworkType{
+	NetworkTypeEVM,
+	NetworkTypeTron,
+	NetworkTypeBtc,
+	NetworkTypeSol,
+	NetworkTypeApt,
+	NetworkTypeSui,
+	NetworkTypeCosmos,
+	NetworkTypeTon,
+}
+
 const (
 	BFBackendRedis    BFType = "redis"
 	BFBackendInMemory BFType = "in_memory"

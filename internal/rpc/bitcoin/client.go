@@ -152,7 +152,7 @@ func (c *BitcoinClient) GetRawMempool(ctx context.Context, verbose bool) (interf
 func (c *BitcoinClient) GetRawTransaction(ctx context.Context, txid string, verbose bool) (*Transaction, error) {
 	verbosity := 0
 	if verbose {
-		verbosity = 2 // Verbosity 2 includes prevout data for fee calculation
+		verbosity = 2 // Verbosity 2 returns decoded JSON; prevout data may not be included depending on the node version
 	}
 
 	resp, err := c.CallRPC(ctx, "getrawtransaction", []interface{}{txid, verbosity})
