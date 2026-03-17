@@ -7,7 +7,7 @@ defaults:
   from_latest: true # start indexing from the latest block
   poll_interval: "5s" # how often to poll for new blocks
   reorg_rollback_window: 20 # number of blocks to roll back on reorg
-  two_way_indexing: true # enable two-way indexing for all chains
+  two_way_indexing: false # enable two-way indexing for all chains
   client:
     timeout: "20s" # RPC timeout per request
     max_retries: 3 # max retries per RPC call
@@ -45,12 +45,16 @@ chains:
     type: "evm"
     start_block: 23080871
     poll_interval: "3s" # faster polling for Ethereum
+    max_lag: 200 # skip ahead if regular worker falls this many blocks behind chain head (default: 100)
     client:
       timeout: "30s" # override global timeout
     throttle:
       batch_size: 20 # smaller batch size
     nodes:
       - url: "https://ethereum-rpc.publicnode.com"
+        headers: # optional: additional HTTP headers sent with every request
+          Origin: "https://myapp.example.com"
+          Referer: "https://myapp.example.com/"
       - url: "https://eth.rpc.blxrbdn.com"
       - url: "https://eth.llamarpc.com"
       - url: "https://rpc.mevblocker.io"
@@ -74,8 +78,8 @@ chains:
     start_block: 4440000 # recent testnet block
     poll_interval: "60s" # Bitcoin blocks ~10 minutes
     reorg_rollback_window: 100
-    index_change_output: true # Enable change output event extraction and emission (Bitcoin only)
-    index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
+    index_change_output: false # Enable change output event extraction and emission (Bitcoin only)
+    index_utxo: false # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-testnet-rpc.publicnode.com"
       - url: "https://blockstream.info/testnet/api"
@@ -98,7 +102,7 @@ chains:
     poll_interval: "60s"
     reorg_rollback_window: 100
     index_change_output: false
-    index_utxo: true  # Enable UTXO event extraction and emission (Bitcoin only)
+    index_utxo: false # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-rpc.publicnode.com"
       - url: "https://blockstream.info/api"

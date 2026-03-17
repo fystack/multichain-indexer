@@ -45,6 +45,8 @@ type ChainConfig struct {
 	PollInterval        time.Duration    `yaml:"poll_interval"`
 	ReorgRollbackWindow int              `yaml:"reorg_rollback_window"`
 	TwoWayIndexing      bool             `yaml:"two_way_indexing"`
+	Confirmations       uint64           `yaml:"confirmations"`
+	MaxLag              uint64           `yaml:"max_lag"`
 	IndexChangeOutput   bool             `yaml:"index_change_output"`
 	IndexUTXO           bool             `yaml:"index_utxo"`
 	Client              ClientConfig     `yaml:"client"`
@@ -76,8 +78,9 @@ type TonConfig struct {
 }
 
 type NodeConfig struct {
-	URL  string     `yaml:"url"  validate:"required,url"`
-	Auth AuthConfig `yaml:"auth"`
+	URL     string            `yaml:"url"     validate:"required,url"`
+	Auth    AuthConfig        `yaml:"auth"`
+	Headers map[string]string `yaml:"headers"`
 }
 
 type AuthConfig struct {
