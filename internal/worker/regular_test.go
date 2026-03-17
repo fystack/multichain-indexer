@@ -168,7 +168,7 @@ func newTestRegularWorker(chain *stubIndexer, store *stubBlockStore, currentBloc
 			failedChan: make(chan FailedBlockEvent, 1),
 		},
 		currentBlock: currentBlock,
-		blockHashes:  make([]BlockHashEntry, 0, MaxBlockHashSize),
+		blockHashes:  make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize),
 	}
 }
 

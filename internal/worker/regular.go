@@ -18,7 +18,7 @@ import (
 
 
 const (
-	MaxBlockHashSize        = 20
+	MaxBlockHashSize        = 50
 	regularGapRetryAttempts = 2
 	regularGapRetryDelay    = time.Second
 )
@@ -28,12 +28,7 @@ var errRegularRecoveryReorgHandled = errors.New("regular recovery reorg handled"
 type RegularWorker struct {
 	*BaseWorker
 	currentBlock uint64
-	blockHashes  []BlockHashEntry
-}
-
-type BlockHashEntry struct {
-	BlockNumber uint64
-	Hash        string
+	blockHashes  []blockstore.BlockHashEntry
 }
 
 func NewRegularWorker(
@@ -59,7 +54,7 @@ func NewRegularWorker(
 	)
 	rw := &RegularWorker{BaseWorker: worker}
 	rw.currentBlock = rw.determineStartingBlock()
-	rw.blockHashes = make([]BlockHashEntry, 0, MaxBlockHashSize)
+	rw.loadBlockHashes()
 	return rw
 }
 
@@ -261,20 +256,20 @@ func (rw *RegularWorker) isReorgCheckRequired() bool {
 	return networkType == enum.NetworkTypeEVM || networkType == enum.NetworkTypeBtc
 }
 
-// addBlockHash adds a block hash to the array, maintaining max size
+// addBlockHash adds a block hash to the array, maintaining max size, and persists to KV.
 func (rw *RegularWorker) addBlockHash(blockNumber uint64, hash string) {
-	entry := BlockHashEntry{
+	entry := blockstore.BlockHashEntry{
 		BlockNumber: blockNumber,
 		Hash:        hash,
 	}
 
-	// Add to the end
 	rw.blockHashes = append(rw.blockHashes, entry)
 
-	// Remove oldest entries if we exceed max size
 	if len(rw.blockHashes) > MaxBlockHashSize {
 		rw.blockHashes = rw.blockHashes[len(rw.blockHashes)-MaxBlockHashSize:]
 	}
+
+	rw.saveBlockHashes()
 }
 
 // getBlockHash retrieves a block hash by block number
@@ -287,9 +282,37 @@ func (rw *RegularWorker) getBlockHash(blockNumber uint64) string {
 	return ""
 }
 
-// clearBlockHashes clears all block hashes (used on reorg)
+// clearBlockHashes clears all block hashes (used on reorg) and persists the empty state.
 func (rw *RegularWorker) clearBlockHashes() {
-	rw.blockHashes = rw.blockHashes[:0] // Clear slice but keep capacity
+	rw.blockHashes = rw.blockHashes[:0]
+	rw.saveBlockHashes()
+}
+
+// loadBlockHashes loads persisted block hashes from KV store, falling back to an empty slice.
+func (rw *RegularWorker) loadBlockHashes() {
+	hashes, err := rw.blockStore.GetBlockHashes(rw.chain.GetNetworkInternalCode())
+	if err != nil || hashes == nil {
+		rw.blockHashes = make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize)
+		return
+	}
+	if len(hashes) > MaxBlockHashSize {
+		hashes = hashes[len(hashes)-MaxBlockHashSize:]
+	}
+	rw.blockHashes = hashes
+	rw.logger.Info("Loaded persisted block hashes",
+		"chain", rw.chain.GetName(),
+		"count", len(hashes),
+	)
+}
+
+// saveBlockHashes persists block hashes to KV store for reorg detection across restarts.
+func (rw *RegularWorker) saveBlockHashes() {
+	if err := rw.blockStore.SaveBlockHashes(rw.chain.GetNetworkInternalCode(), rw.blockHashes); err != nil {
+		rw.logger.Error("Failed to persist block hashes",
+			"chain", rw.chain.GetName(),
+			"error", err,
+		)
+	}
 }
 
 // skipAheadIfLagging checks if the regular worker is too far behind the chain head.
