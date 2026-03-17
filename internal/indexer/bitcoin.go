@@ -76,6 +76,7 @@ func (b *BitcoinIndexer) GetBlock(ctx context.Context, number uint64) (*types.Bl
 	var btcBlock *bitcoin.Block
 
 	err := b.failover.ExecuteWithRetry(ctx, func(c bitcoin.BitcoinAPI) error {
+		// Verbosity 3 = full transaction details with prevout data included
 		block, err := c.GetBlockByHeight(ctx, number, 3)
 		if err != nil {
 			return err
@@ -473,7 +474,6 @@ func (b *BitcoinIndexer) IsHealthy() bool {
 	_, err := b.GetLatestBlockNumber(ctx)
 	return err == nil
 }
-
 
 // GetMempoolTransactions fetches and processes transactions from the mempool
 // Returns transactions and UTXO events involving monitored addresses with 0 confirmations

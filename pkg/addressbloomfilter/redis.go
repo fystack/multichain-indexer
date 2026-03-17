@@ -67,18 +67,7 @@ func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()
 
-	types := []enum.NetworkType{
-		enum.NetworkTypeEVM,
-		enum.NetworkTypeTron,
-		enum.NetworkTypeBtc,
-		enum.NetworkTypeSol,
-		enum.NetworkTypeSui,
-		enum.NetworkTypeCosmos,
-		enum.NetworkTypeApt,
-		enum.NetworkTypeTon,
-	}
-
-	for _, addrType := range types {
+	for _, addrType := range enum.AllNetworkTypes {
 		key := rbf.getKey(addrType)
 		client := rbf.redisClient.GetClient()
 

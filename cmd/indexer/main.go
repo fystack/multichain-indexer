@@ -186,11 +186,19 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
+	// Build bloom sync config if enabled
+	var bloomSyncCfg *worker.BloomSyncConfig
+	if services.Bloomfilter != nil && services.Bloomfilter.Sync.Enabled && db != nil {
+		c := worker.NewBloomSyncConfig(services.Bloomfilter.Sync)
+		bloomSyncCfg = &c
+	}
+
 	// Create manager with all workers using factory
 	managerCfg := worker.ManagerConfig{
 		Chains:        chains,
 		EnableCatchup: catchup,
 		EnableManual:  manual,
+		BloomSync:     bloomSyncCfg,
 	}
 
 	manager := worker.CreateManagerWithWorkers(
@@ -215,19 +223,21 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	logger.Info("Shutting down indexer...")
 
-	// Shutdown health server
+	// Stop workers first so health endpoint can report during drain
+	manager.Stop()
+
+	// Then shutdown health server
 	if healthServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := healthServer.Shutdown(ctx); err != nil {
+		if err := healthServer.Shutdown(shutdownCtx); err != nil {
 			logger.Error("Health server shutdown failed", "error", err)
 		} else {
 			logger.Info("Health server stopped gracefully")
 		}
 	}
 
-	manager.Stop()
-	logger.Info("✅ Indexer stopped gracefully")
+	logger.Info("Indexer stopped gracefully")
 }
 
 type HealthResponse struct {

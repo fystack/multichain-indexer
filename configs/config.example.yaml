@@ -404,3 +404,7 @@ services:
     in_memory: # alternative config (if not using redis)
       expected_items: 1000000
       false_positive_rate: 0.01
+    sync:
+      enabled: false
+      interval: "1s" # how often to check for new addresses
+      batch_size: 500 # max addresses to fetch per sync cycle

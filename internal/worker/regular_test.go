@@ -168,7 +168,7 @@ func newTestRegularWorker(chain *stubIndexer, store *stubBlockStore, currentBloc
 			failedChan: make(chan FailedBlockEvent, 1),
 		},
 		currentBlock: currentBlock,
-		blockHashes:  make([]BlockHashEntry, 0, MaxBlockHashSize),
+		blockHashes:  make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize),
 	}
 }
 
@@ -265,6 +265,14 @@ func (s *stubBlockStore) GetCatchupProgress(string) ([]blockstore.CatchupRange, 
 }
 
 func (s *stubBlockStore) DeleteCatchupRange(string, uint64, uint64) error {
+	return nil
+}
+
+func (s *stubBlockStore) GetBlockHashes(string) ([]blockstore.BlockHashEntry, error) {
+	return nil, nil
+}
+
+func (s *stubBlockStore) SaveBlockHashes(string, []blockstore.BlockHashEntry) error {
 	return nil
 }
 

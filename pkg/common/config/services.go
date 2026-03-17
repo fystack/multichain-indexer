@@ -74,11 +74,18 @@ type BadgerConfig struct {
 }
 
 type BloomfilterConfig struct {
-	Type              enum.BFType    `yaml:"type"`
-	WalletAddressRepo string         `yaml:"wallet_address_repo"`
-	BatchSize         int            `yaml:"batch_size"`
-	Redis             RedisBFConfig  `yaml:"redis"`
-	InMemory          InMemoryConfig `yaml:"in_memory"`
+	Type              enum.BFType      `yaml:"type"`
+	WalletAddressRepo string           `yaml:"wallet_address_repo"`
+	BatchSize         int              `yaml:"batch_size"`
+	Redis             RedisBFConfig    `yaml:"redis"`
+	InMemory          InMemoryConfig   `yaml:"in_memory"`
+	Sync              BloomSyncConfig  `yaml:"sync"`
+}
+
+type BloomSyncConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	Interval  string `yaml:"interval"`   // e.g. "1s", "5s"
+	BatchSize int    `yaml:"batch_size"` // max addresses per sync cycle
 }
 
 type RedisBFConfig struct {

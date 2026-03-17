@@ -198,7 +198,6 @@ func (mw *MempoolWorker) processMempool() error {
 			"total_tracked", len(mw.seenTxs),
 		)
 	}
-
 	// Sleep until next poll interval
 	select {
 	case <-mw.ctx.Done():
