@@ -3,7 +3,6 @@ package worker
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
@@ -19,7 +18,6 @@ import (
 // Polls the mempool for pending transactions and emits them to NATS
 type MempoolWorker struct {
 	*BaseWorker
-	mu           sync.Mutex
 	seenTxs      map[string]bool // Track seen transactions to avoid duplicates
 	pollInterval time.Duration   // How often to poll mempool
 	btcIndexer   *indexer.BitcoinIndexer
@@ -97,7 +95,6 @@ func (mw *MempoolWorker) processMempool() error {
 	newUTXOCount := 0
 	networkType := mw.chain.GetNetworkType()
 
-	mw.mu.Lock()
 	for _, tx := range transactions {
 		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
 		fromMonitored := mw.config.TwoWayIndexing && tx.FromAddress != "" && mw.pubkeyStore.Exist(networkType, tx.FromAddress)
@@ -201,8 +198,6 @@ func (mw *MempoolWorker) processMempool() error {
 			"total_tracked", len(mw.seenTxs),
 		)
 	}
-	mw.mu.Unlock()
-
 	// Sleep until next poll interval
 	select {
 	case <-mw.ctx.Done():

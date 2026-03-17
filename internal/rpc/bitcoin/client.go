@@ -11,6 +11,10 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
+// DefaultPrevoutConcurrency is the default number of parallel prevout fetches
+// when no concurrency value is provided.
+const DefaultPrevoutConcurrency = 8
+
 // BitcoinClient implements the BitcoinAPI interface
 type BitcoinClient struct {
 	*rpc.BaseClient
@@ -188,7 +192,7 @@ func (c *BitcoinClient) GetTransactionWithPrevouts(ctx context.Context, txid str
 // each input would otherwise require a separate RPC call.
 func (c *BitcoinClient) ResolvePrevouts(ctx context.Context, txs []*Transaction, concurrency int) error {
 	if concurrency <= 0 {
-		concurrency = 8
+		concurrency = DefaultPrevoutConcurrency
 	}
 
 	// Collect all unique prevout txids we need to fetch

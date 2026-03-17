@@ -268,6 +268,14 @@ func (s *stubBlockStore) DeleteCatchupRange(string, uint64, uint64) error {
 	return nil
 }
 
+func (s *stubBlockStore) GetBlockHashes(string) ([]blockstore.BlockHashEntry, error) {
+	return nil, nil
+}
+
+func (s *stubBlockStore) SaveBlockHashes(string, []blockstore.BlockHashEntry) error {
+	return nil
+}
+
 func (s *stubBlockStore) Close() error {
 	return nil
 }
