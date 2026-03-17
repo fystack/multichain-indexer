@@ -58,7 +58,7 @@ func (c *CosmosIndexer) GetName() string                  { return strings.ToUpp
 func (c *CosmosIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeCosmos }
 func (c *CosmosIndexer) GetNetworkInternalCode() string   { return c.config.InternalCode }
 
-func (c *CosmosIndexer) shouldKeepTransfer(sender, recipient string) bool {
+func (c *CosmosIndexer) isMonitoredTransfer(sender, recipient string) bool {
 	if c.pubkeyStore == nil {
 		return true
 	}
@@ -294,7 +294,7 @@ func (c *CosmosIndexer) extractTransferTransactions(
 			if transfer.sender == "" || transfer.recipient == "" || transfer.amount == "" {
 				continue
 			}
-			if !c.shouldKeepTransfer(transfer.sender, transfer.recipient) {
+			if !c.isMonitoredTransfer(transfer.sender, transfer.recipient) {
 				continue
 			}
 

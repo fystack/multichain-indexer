@@ -44,7 +44,7 @@ func (t *TronIndexer) GetNetworkId() string {
 	return t.config.NetworkId
 }
 
-func (t *TronIndexer) shouldKeepTransfer(from, to string) bool {
+func (t *TronIndexer) isMonitoredTransfer(from, to string) bool {
 	if t.pubkeyStore == nil {
 		return true
 	}
@@ -147,7 +147,7 @@ func (t *TronIndexer) processBlock(
 			)
 			if err == nil && len(parsed) > 0 {
 				for _, p := range parsed {
-					if !t.shouldKeepTransfer(p.FromAddress, p.ToAddress) {
+					if !t.isMonitoredTransfer(p.FromAddress, p.ToAddress) {
 						continue
 					}
 					transfers = append(transfers, p)
@@ -218,7 +218,7 @@ func (t *TronIndexer) processBlock(
 			if tr == nil {
 				continue
 			}
-			if !t.shouldKeepTransfer(tr.FromAddress, tr.ToAddress) {
+			if !t.isMonitoredTransfer(tr.FromAddress, tr.ToAddress) {
 				continue
 			}
 

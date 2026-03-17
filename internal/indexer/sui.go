@@ -111,7 +111,7 @@ func (s *SuiIndexer) isMonitoredAddress(addr string) bool {
 	return false
 }
 
-func (s *SuiIndexer) shouldKeepTransfer(from, to string) bool {
+func (s *SuiIndexer) isMonitoredTransfer(from, to string) bool {
 	if s.pubkeyStore == nil {
 		return true
 	}
@@ -290,7 +290,7 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 		if tx.ToAddress == "" {
 			continue
 		}
-		if !s.shouldKeepTransfer(tx.FromAddress, tx.ToAddress) {
+		if !s.isMonitoredTransfer(tx.FromAddress, tx.ToAddress) {
 			continue
 		}
 		txs = append(txs, tx)

@@ -119,7 +119,7 @@ func (t *TonIndexer) GetName() string                  { return strings.ToUpper(
 func (t *TonIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeTon }
 func (t *TonIndexer) GetNetworkInternalCode() string   { return t.cfg.InternalCode }
 
-func (t *TonIndexer) shouldKeepTransfer(from, to string) bool {
+func (t *TonIndexer) isMonitoredTransfer(from, to string) bool {
 	if t.pubkeyStore == nil {
 		return true
 	}
@@ -593,7 +593,7 @@ func (t *TonIndexer) scanShardBlock(
 				if parsed[i].ToAddress == "" {
 					continue
 				}
-				if !t.shouldKeepTransfer(parsed[i].FromAddress, parsed[i].ToAddress) {
+				if !t.isMonitoredTransfer(parsed[i].FromAddress, parsed[i].ToAddress) {
 					continue
 				}
 

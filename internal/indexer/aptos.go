@@ -57,7 +57,7 @@ func (a *AptosIndexer) GetName() string                  { return strings.ToUppe
 func (a *AptosIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeApt }
 func (a *AptosIndexer) GetNetworkInternalCode() string   { return a.config.InternalCode }
 
-func (a *AptosIndexer) shouldKeepTransfer(from, to string) bool {
+func (a *AptosIndexer) isMonitoredTransfer(from, to string) bool {
 	if a.pubkeyStore == nil {
 		return true
 	}
@@ -221,7 +221,7 @@ func (a *AptosIndexer) convertBlock(
 		if !ok {
 			continue
 		}
-		if !a.shouldKeepTransfer(parsed.FromAddress, parsed.ToAddress) {
+		if !a.isMonitoredTransfer(parsed.FromAddress, parsed.ToAddress) {
 			continue
 		}
 		txs = append(txs, parsed)
