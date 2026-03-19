@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math/rand"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +23,26 @@ type EVMIndexer struct {
 	chainName           string
 	config              config.ChainConfig
 	failover            *rpc.Failover[evm.EthereumAPI]
-	maxBatchSize        int         // Maximum batch size to prevent RPC timeouts
-	maxReceiptBatchSize int         // Specific limit for receipt batches (usually smaller)
-	pubkeyStore         PubkeyStore // For selective receipt fetching
+	traceFailover       *rpc.Failover[evm.EthereumAPI] // nil if no debug-capable nodes
+	maxBatchSize        int                             // Maximum batch size to prevent RPC timeouts
+	maxReceiptBatchSize int                             // Specific limit for receipt batches (usually smaller)
+	pubkeyStore         PubkeyStore                     // For selective receipt fetching
+}
+
+// traceModeActive returns true when tracing can actually run right now.
+// Called once per batch in processBlocksAndReceipts (not stored as a field)
+// because provider availability is runtime state — all trace providers may
+// be blacklisted after startup.
+// The result is passed to extractReceiptTxHashes to avoid repeated calls
+// to GetAvailableProviders() in the hot loop.
+// TraceModeActive is the exported version for testing from other packages.
+func (e *EVMIndexer) TraceModeActive() bool {
+	return e.traceModeActive()
+}
+
+func (e *EVMIndexer) traceModeActive() bool {
+	return e.config.DebugTrace && e.traceFailover != nil &&
+		len(e.traceFailover.GetAvailableProviders()) > 0
 }
 
 // PubkeyStore interface for checking if an address is monitored
@@ -32,7 +50,7 @@ type PubkeyStore interface {
 	Exist(addressType enum.NetworkType, address string) bool
 }
 
-func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI], pubkeyStore PubkeyStore) *EVMIndexer {
+func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI], traceFailover *rpc.Failover[evm.EthereumAPI], pubkeyStore PubkeyStore) *EVMIndexer {
 	maxBatchSize := 20 // Default max batch size for blocks
 	if config.Throttle.BatchSize > 0 && config.Throttle.BatchSize < maxBatchSize {
 		maxBatchSize = config.Throttle.BatchSize
@@ -48,6 +66,7 @@ func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Fa
 		chainName:           chainName,
 		config:              config,
 		failover:            failover,
+		traceFailover:       traceFailover,
 		maxBatchSize:        maxBatchSize,
 		maxReceiptBatchSize: maxReceiptBatchSize,
 		pubkeyStore:         pubkeyStore,
@@ -274,6 +293,8 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 ) ([]BlockResult, error) {
 	startTime := time.Now()
 
+	traceActive := e.traceModeActive() // single snapshot per batch
+
 	var (
 		erc20TxHashes map[string]bool
 		missingBlocks map[uint64]*evm.Block
@@ -295,7 +316,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 		})
 	}
 
-	if len(blockNums) > 0 && e.pubkeyStore != nil {
+	if len(blockNums) > 0 && e.pubkeyStore != nil && !traceActive {
 		g.Go(func() error {
 			fromBlock := blockNums[0]
 			toBlock := blockNums[len(blockNums)-1]
@@ -326,7 +347,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	}
 
 	// Extract transaction hashes for native transfers to monitored addresses
-	txHashMap := e.extractReceiptTxHashes(blocks)
+	txHashMap := e.extractReceiptTxHashes(blocks, traceActive)
 	// Add ERC20 transfer tx hashes to the map
 	if len(erc20TxHashes) > 0 {
 		// Use a set to track already added hashes for efficient deduplication
@@ -361,6 +382,16 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 		"count", len(allReceipts),
 	)
 
+	// Fetch traces for successful contract calls
+	var traces map[string]*evm.CallTrace
+	if traceActive {
+		tracesStart := time.Now()
+		traces = e.fetchTraces(ctx, blocks, allReceipts)
+		logger.Debug("[TRACES FETCHED]",
+			"elapsed_ms", time.Since(tracesStart).Milliseconds(),
+			"count", len(traces))
+	}
+
 	totalElapsed := time.Since(startTime)
 	logger.Debug("[PROCESS BLOCKS COMPLETE]",
 		"total_elapsed_ms", totalElapsed.Milliseconds(),
@@ -368,7 +399,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	)
 
 	// Build final results
-	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts), nil
+	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts, traces), nil
 }
 
 // fetchMissingBlocksRaw fetches missing blocks as raw evm.Block objects
@@ -478,35 +509,52 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 	return matchedTxHashes, nil
 }
 
-func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[uint64][]string {
+func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceActive bool) map[uint64][]string {
 	txHashMap := make(map[uint64][]string)
 	totalTxs := 0
 	nativeTransfers := 0
 	safeTransfers := 0
+	traceContractCalls := 0
+
+	// appendHash deduplicates tx hashes within a block. When traceActive is on,
+	// the contract-call branch may append a hash that the monitored-address branch
+	// already appended (e.g., a contract call between two monitored addresses).
+	appendHash := func(blockNum uint64, hash string, seen map[string]bool) {
+		if !seen[hash] {
+			txHashMap[blockNum] = append(txHashMap[blockNum], hash)
+			seen[hash] = true
+		}
+	}
 
 	for blockNum, block := range blocks {
 		if block == nil {
 			continue
 		}
+		seen := make(map[string]bool) // dedup within this block
 		for _, tx := range block.Transactions {
 			totalTxs++
 			isSafeExecution := evm.IsSafeExecTransaction(tx.Input)
-			if !tx.NeedReceipt() && !isSafeExecution {
+			if !tx.NeedReceipt() && !isSafeExecution && !traceActive {
 				continue
 			}
 
-			// If no pubkeyStore, fetch all receipts (backward compatibility)
+			// If no pubkeyStore, fetch receipts based on mode:
+			// - trace active: only contract calls + normal NeedReceipt txs
+			// - trace inactive: all NeedReceipt txs (backward compatibility)
 			if e.pubkeyStore == nil {
-				txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+				if traceActive {
+					isContractCall := tx.Input != "" && tx.Input != "0x"
+					if isContractCall || tx.NeedReceipt() || isSafeExecution {
+						appendHash(blockNum, tx.Hash, seen)
+					}
+				} else {
+					appendHash(blockNum, tx.Hash, seen)
+				}
 				continue
 			}
 
 			if !isSafeExecution {
 				// OPTIMIZATION: Only fetch receipts for native transfers involving monitored addresses.
-				// In two-way mode, include both:
-				// - incoming: tx.To is monitored
-				// - outgoing: tx.From is monitored
-				// Native transfer = tx.To is not empty and tx.Input is empty (no contract call)
 				isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
 
 				if isNativeTransfer {
@@ -514,12 +562,11 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 					fromMonitored := e.config.TwoWayIndexing && tx.From != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.From))
 					if toMonitored || fromMonitored {
 						nativeTransfers++
-						txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+						appendHash(blockNum, tx.Hash, seen)
 					}
 				}
 			} else {
-				// Filter must match ExtractSafeTransfers acceptance criteria to avoid
-				// fetching receipts for txs that will be dropped anyway.
+				// Filter must match ExtractSafeTransfers acceptance criteria.
 				params, err := evm.DecodeGnosisSafeExecTransaction(tx.Input)
 				if err != nil {
 					logger.Debug("[DECODE GNOSIS SAFE EXEC TRANSACTION ERROR]", "error", err)
@@ -529,12 +576,22 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 					continue
 				}
 
-				// In Safe transfers, tx.To (the Safe contract) is the logical sender (FromAddress).
 				toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(params.To))
 				fromMonitored := e.config.TwoWayIndexing && tx.To != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
 				if toMonitored || fromMonitored {
 					safeTransfers++
-					txHashMap[blockNum] = append(txHashMap[blockNum], tx.Hash)
+					appendHash(blockNum, tx.Hash, seen)
+				}
+			}
+
+			// When trace mode is active, fetch receipts for ALL contract calls.
+			// Internal transfers may involve monitored addresses even when
+			// top-level from/to don't (e.g., router/aggregator txs).
+			if traceActive && !isSafeExecution {
+				isContractCall := tx.Input != "" && tx.Input != "0x"
+				if isContractCall {
+					traceContractCalls++
+					appendHash(blockNum, tx.Hash, seen)
 				}
 			}
 		}
@@ -545,10 +602,138 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block) map[ui
 			"total_txs", totalTxs,
 			"native_transfers_matched", nativeTransfers,
 			"safe_transfers_matched", safeTransfers,
+			"trace_contract_calls", traceContractCalls,
 		)
 	}
 
 	return txHashMap
+}
+
+// fetchTraces calls debug_traceTransaction for successful contract calls.
+// Uses the dedicated traceFailover pool (not main failover).
+func (e *EVMIndexer) fetchTraces(
+	ctx context.Context,
+	blocks map[uint64]*evm.Block,
+	receipts map[string]*evm.TxnReceipt,
+) map[string]*evm.CallTrace {
+	if e.traceFailover == nil {
+		return nil
+	}
+
+	// Collect trace candidates: successful contract calls
+	var candidates []evm.Txn
+	for _, block := range blocks {
+		if block == nil {
+			continue
+		}
+		for _, tx := range block.Transactions {
+			receipt := receipts[tx.Hash]
+			if receipt == nil || !receipt.IsSuccessful() {
+				continue
+			}
+			isContractCall := tx.Input != "" && tx.Input != "0x"
+			if !isContractCall {
+				continue
+			}
+			candidates = append(candidates, tx)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	var (
+		mu     sync.Mutex
+		traces = make(map[string]*evm.CallTrace, len(candidates))
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	concurrency := e.config.TraceThrottle.Concurrency
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+	g.SetLimit(concurrency)
+
+	for _, tx := range candidates {
+		g.Go(func() error {
+			trace, err := e.traceWithProviderAwareness(gctx, tx.Hash)
+			if err != nil {
+				logger.Warn("debug_traceTransaction failed", "tx", tx.Hash, "error", err)
+				return nil // don't fail the whole batch
+			}
+			mu.Lock()
+			traces[tx.Hash] = trace
+			mu.Unlock()
+			return nil
+		})
+	}
+	_ = g.Wait()
+	return traces
+}
+
+// traceWithProviderAwareness iterates trace providers with single-attempt execution.
+//
+// Why not ExecuteWithRetryProvider: it wraps in retry.Constant(fn, 5s, 3), so a
+// misconfigured node burns ~10s per tx before we can detect "method not found".
+// Instead, we type-assert provider.Client to evm.EthereumAPI and call
+// DebugTraceTransaction directly — one attempt per provider.
+//
+// On ANY error (capability or transient), we continue to the next provider.
+// Only return lastErr after exhausting the provider list.
+//
+// Providers are shuffled per-call to distribute trace load evenly.
+func (e *EVMIndexer) traceWithProviderAwareness(ctx context.Context, txHash string) (*evm.CallTrace, error) {
+	providers := e.traceFailover.GetAvailableProviders()
+	if len(providers) == 0 {
+		return nil, fmt.Errorf("no available trace providers")
+	}
+
+	// Shuffle to distribute load across trace nodes
+	rand.Shuffle(len(providers), func(i, j int) {
+		providers[i], providers[j] = providers[j], providers[i]
+	})
+
+	var lastErr error
+	for _, provider := range providers {
+		client, ok := provider.Client.(evm.EthereumAPI)
+		if !ok {
+			continue
+		}
+
+		start := time.Now()
+		trace, err := client.DebugTraceTransaction(ctx, txHash)
+		elapsed := time.Since(start)
+
+		if err == nil {
+			e.traceFailover.RecordSuccess(provider, elapsed)
+			return trace, nil
+		}
+
+		lastErr = err
+		errMsg := strings.ToLower(err.Error())
+
+		// Capability error: node doesn't support debug_* — blacklist for 24h.
+		// Primary: JSON-RPC -32601 (Method Not Found). Fallback: provider-specific strings.
+		if strings.Contains(errMsg, "-32601") ||
+			strings.Contains(errMsg, "method not found") ||
+			strings.Contains(errMsg, "method not available") ||
+			strings.Contains(errMsg, "method is not supported") ||
+			strings.Contains(errMsg, "unsupported method") ||
+			strings.Contains(errMsg, "unknown method") ||
+			strings.Contains(errMsg, "does not exist") {
+			logger.Error("trace provider does not support debug_traceTransaction, blacklisting",
+				"provider", provider.Name, "tx", txHash, "error", err)
+			e.traceFailover.HandleCapabilityError(provider, elapsed, 24*time.Hour)
+			continue
+		}
+
+		// All other errors: use the same analyzeError → blacklist/fail path as executeCore.
+		logger.Warn("trace provider returned error, trying next",
+			"provider", provider.Name, "tx", txHash, "error", err)
+		e.traceFailover.AnalyzeAndHandleError(provider, err, elapsed)
+		continue
+	}
+	return nil, lastErr
 }
 
 func (e *EVMIndexer) fetchAllReceipts(
@@ -696,6 +881,7 @@ func (e *EVMIndexer) buildBlockResults(
 	blocks map[uint64]*evm.Block,
 	txHashMap map[uint64][]string,
 	allReceipts map[string]*evm.TxnReceipt,
+	traces map[string]*evm.CallTrace,
 ) []BlockResult {
 	results := make([]BlockResult, 0, len(blockNums))
 
@@ -717,7 +903,7 @@ func (e *EVMIndexer) buildBlockResults(
 			}
 		}
 
-		typesBlock, err := e.convertBlock(block, txReceipts)
+		typesBlock, err := e.convertBlock(block, txReceipts, traces)
 		if err != nil {
 			results = append(results, BlockResult{
 				Number: num,
@@ -807,6 +993,7 @@ func (e *EVMIndexer) IsHealthy() bool {
 func (e *EVMIndexer) convertBlock(
 	eb *evm.Block,
 	receipts map[string]*evm.TxnReceipt,
+	traces map[string]*evm.CallTrace,
 ) (*types.Block, error) {
 	num, _ := utils.ParseHexUint64(eb.Number)
 	ts, _ := utils.ParseHexUint64(eb.Timestamp)
@@ -822,10 +1009,29 @@ func (e *EVMIndexer) convertBlock(
 		}
 		logger.Info("[RECEIPTS]", "tx", tx.Hash, "receipt", receipt)
 		var transfers []types.Transaction
-		if evm.IsSafeExecTransaction(tx.Input) {
-			transfers = append(transfers, evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)...)
+		fee := tx.CalcFee(receipt)
+		traced := false
+
+		// Use pre-fetched trace if available
+		if traces != nil {
+			if trace, ok := traces[tx.Hash]; ok && trace != nil {
+				transfers = append(transfers,
+					evm.ExtractInternalTransfers(trace, tx, fee, e.GetNetworkId(), num, ts)...)
+				traced = true
+			}
 		}
+
+		// Fallback: Safe heuristic when trace not available
+		if !traced && evm.IsSafeExecTransaction(tx.Input) {
+			transfers = append(transfers,
+				evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)...)
+		}
+
+		// Always extract top-level transfers (native + ERC20)
 		transfers = append(transfers, tx.ExtractTransfers(e.GetNetworkId(), receipt, num, ts)...)
+
+		// Cross-source dedup: trace + Safe + ExtractTransfers may overlap
+		transfers = utils.DedupTransfers(transfers)
 		allTransfers = append(allTransfers, transfers...)
 	}
 

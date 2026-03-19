@@ -560,20 +560,28 @@ func (f *Failover[T]) logProviderMetrics(p *Provider, elapsed time.Duration) {
 	}
 	f.lastHealthCheck = now
 
+	// Read provider fields under the provider's lock to avoid data races
+	// when called concurrently from multiple goroutines (e.g., fetchTraces).
+	p.mu.RLock()
+	state := p.State
+	avgResponseTime := p.AverageResponseTime
+	consecutiveErrors := p.ConsecutiveErrors
+	p.mu.RUnlock()
+
 	statusEmoji := map[string]string{
 		StateHealthy:     "✅",
 		StateDegraded:    "⚠️",
 		StateUnhealthy:   "❌",
 		StateBlacklisted: "🚫",
-	}[p.State]
+	}[state]
 
 	logger.Info("Provider metrics",
 		"name", p.Name,
-		"state", p.State,
+		"state", state,
 		"emoji", statusEmoji,
 		"latency_ms", elapsed.Milliseconds(),
-		"avg_latency_ms", p.AverageResponseTime.Milliseconds(),
-		"errors", p.ConsecutiveErrors,
+		"avg_latency_ms", avgResponseTime.Milliseconds(),
+		"errors", consecutiveErrors,
 	)
 }
 
@@ -651,6 +659,52 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 	}
 
 	return issue
+}
+
+// AnalyzeAndHandleError classifies an error and applies the same blacklist/fail
+// policy as executeCore. Also updates failover metrics so trace-pool
+// request/failure totals appear in GetMetrics(). Use this when calling provider
+// clients directly (outside the retry wrapper) but still wanting consistent
+// error handling and observability.
+func (f *Failover[T]) AnalyzeAndHandleError(provider *Provider, err error, elapsed time.Duration) {
+	f.metrics.IncrementTotal()
+	f.metrics.IncrementProviderRequest(provider.Name)
+	f.metrics.IncrementFailure()
+
+	issue := f.analyzeError(err, elapsed)
+	f.metrics.IncrementErrorType(issue.Reason)
+
+	if issue.MarkUnhealthy {
+		f.handleUnhealthyProvider(provider, issue)
+	} else {
+		f.handleProviderFailure(provider, err)
+	}
+
+	f.logProviderMetrics(provider, elapsed)
+}
+
+// RecordSuccess updates provider health state and metrics for a successful direct call.
+// Mirrors executeCore's success path: provider.Success(elapsed) + metric increments.
+func (f *Failover[T]) RecordSuccess(provider *Provider, elapsed time.Duration) {
+	provider.Success(elapsed)
+	f.metrics.IncrementTotal()
+	f.metrics.IncrementProviderRequest(provider.Name)
+	f.metrics.IncrementSuccess()
+	f.logProviderMetrics(provider, elapsed)
+}
+
+// HandleCapabilityError blacklists a provider for a given cooldown AND records
+// metrics. Use for permanent capability errors like "method not found"
+// where the cooldown differs from what analyzeError would assign.
+// Caller is responsible for logging the error before calling this.
+func (f *Failover[T]) HandleCapabilityError(provider *Provider, elapsed time.Duration, cooldown time.Duration) {
+	f.metrics.IncrementTotal()
+	f.metrics.IncrementProviderRequest(provider.Name)
+	f.metrics.IncrementFailure()
+	f.metrics.IncrementErrorType("capability_error")
+	provider.Blacklist(cooldown)
+	f.metrics.IncrementBlacklist()
+	f.logProviderMetrics(provider, elapsed)
 }
 
 // ProviderIssue represents an analyzed error state from a provider

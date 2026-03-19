@@ -46,6 +46,16 @@ chains:
     start_block: 23080871
     poll_interval: "3s" # faster polling for Ethereum
     max_lag: 200 # skip ahead if regular worker falls this many blocks behind chain head (default: 100)
+    # Enable debug_traceTransaction for internal transfer detection.
+    # When enabled, receipts are fetched for all contract calls (not just monitored
+    # addresses); traces are requested only for successful ones. This increases RPC
+    # costs compared to the default selective-receipt mode.
+    # Requires at least one node with debug_trace: true.
+    debug_trace: true
+    trace_throttle:
+      trace_rps: 4          # defaults to main rps / 2 if omitted
+      trace_burst: 8         # defaults to main burst / 2 if omitted
+      trace_concurrency: 4   # max parallel debug_traceTransaction calls (default: 4)
     client:
       timeout: "30s" # override global timeout
     throttle:
@@ -58,7 +68,8 @@ chains:
       - url: "https://eth.rpc.blxrbdn.com"
       - url: "https://eth.llamarpc.com"
       - url: "https://rpc.mevblocker.io"
-      # - url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
+      # - url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
+      #   debug_trace: true  # this node supports debug_* namespace
 
   bnb_mainnet:
     network_id: "bnb_mainnet"

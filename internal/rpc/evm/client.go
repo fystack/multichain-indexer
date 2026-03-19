@@ -145,6 +145,25 @@ func (c *Client) BatchGetBlocksByNumber(
 	return results, nil
 }
 
+// DebugTraceTransaction calls debug_traceTransaction with callTracer to get the full call tree.
+func (c *Client) DebugTraceTransaction(ctx context.Context, txHash string) (*CallTrace, error) {
+	tracerOpts := map[string]interface{}{
+		"tracer": "callTracer",
+		"tracerConfig": map[string]interface{}{
+			"onlyTopCall": false,
+		},
+	}
+	resp, err := c.CallRPC(ctx, "debug_traceTransaction", []any{txHash, tracerOpts})
+	if err != nil {
+		return nil, fmt.Errorf("debug_traceTransaction failed: %w", err)
+	}
+	var trace CallTrace
+	if err := json.Unmarshal(resp.Result, &trace); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal trace: %w", err)
+	}
+	return &trace, nil
+}
+
 // FilterLogs queries event logs matching the filter criteria
 func (c *Client) FilterLogs(ctx context.Context, query FilterQuery) ([]Log, error) {
 	params := map[string]any{

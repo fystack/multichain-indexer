@@ -168,41 +168,73 @@ func BuildWorkers(
 	return workers
 }
 
+func newEVMProvider(chainName string, idx int, node config.NodeConfig, timeout time.Duration,
+	rl *ratelimiter.PooledRateLimiter) *rpc.Provider {
+	client := evm.NewEthereumClient(
+		node.URL,
+		&rpc.AuthConfig{Type: rpc.AuthType(node.Auth.Type), Key: node.Auth.Key, Value: node.Auth.Value},
+		timeout, rl,
+	)
+	if len(node.Headers) > 0 {
+		client.SetCustomHeaders(node.Headers)
+	}
+	return &rpc.Provider{
+		Name:       chainName + "-" + strconv.Itoa(idx),
+		URL:        node.URL,
+		Network:    chainName,
+		ClientType: "rpc",
+		Client:     client,
+		State:      rpc.StateHealthy,
+	}
+}
+
 // buildEVMIndexer constructs an EVM indexer with failover and providers.
 func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
 	failover := rpc.NewFailover[evm.EthereumAPI](nil)
+	var traceFailover *rpc.Failover[evm.EthereumAPI]
 
-	// Shared rate limiter for all workers of this chain (global across regular, catchup, etc.)
+	// Main pool rate limiter
 	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
 		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
 	)
 
-	for i, node := range chainCfg.Nodes {
-		client := evm.NewEthereumClient(
-			node.URL,
-			&rpc.AuthConfig{
-				Type:  rpc.AuthType(node.Auth.Type),
-				Key:   node.Auth.Key,
-				Value: node.Auth.Value,
-			},
-			chainCfg.Client.Timeout,
-			rl,
-		)
-		if len(node.Headers) > 0 {
-			client.SetCustomHeaders(node.Headers)
+	// Trace pool rate limiter — only created when debug_trace is enabled.
+	// Dedicated budget to avoid starving main pool.
+	// Defaults to half the main pool if not explicitly configured.
+	var traceRL *ratelimiter.PooledRateLimiter
+	if chainCfg.DebugTrace {
+		traceRPS := chainCfg.TraceThrottle.RPS
+		traceBurst := chainCfg.TraceThrottle.Burst
+		if traceRPS <= 0 {
+			traceRPS = max(1, chainCfg.Throttle.RPS/2)
 		}
-
-		failover.AddProvider(&rpc.Provider{
-			Name:       chainName + "-" + strconv.Itoa(i+1),
-			URL:        node.URL,
-			Network:    chainName,
-			ClientType: "rpc",
-			Client:     client,
-			State:      rpc.StateHealthy, // Initialize as healthy
-		})
+		if traceBurst <= 0 {
+			traceBurst = max(1, chainCfg.Throttle.Burst/2)
+		}
+		// Note: keyed by chainName (not node URL), so all trace providers for this chain
+		// share one budget. This is intentional — trace_rps/trace_burst is a chain-level
+		// cap, not per-node. Same pattern as the main rate limiter.
+		traceRL = ratelimiter.GetOrCreateScopedPooledRateLimiter(chainName, "trace", traceRPS, traceBurst)
 	}
 
-	return indexer.NewEVMIndexer(chainName, chainCfg, failover, pubkeyStore)
+	for i, node := range chainCfg.Nodes {
+		// Main pool provider
+		failover.AddProvider(newEVMProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+
+		// Trace pool: SEPARATE provider instance — no shared mutable state
+		if node.DebugTrace && chainCfg.DebugTrace {
+			if traceFailover == nil {
+				traceFailover = rpc.NewFailover[evm.EthereumAPI](nil)
+			}
+			traceFailover.AddProvider(newEVMProvider(chainName+"-trace", i+1, node, chainCfg.Client.Timeout, traceRL))
+		}
+	}
+
+	if chainCfg.DebugTrace && traceFailover == nil {
+		logger.Warn("debug_trace enabled but no nodes have debug_trace: true", "chain", chainName)
+	}
+
+	return indexer.NewEVMIndexer(chainName, chainCfg, failover, traceFailover, pubkeyStore)
 }
 
 // buildTronIndexer constructs a Tron indexer with failover and providers.

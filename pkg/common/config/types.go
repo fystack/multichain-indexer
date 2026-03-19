@@ -49,6 +49,8 @@ type ChainConfig struct {
 	MaxLag              uint64           `yaml:"max_lag"`
 	IndexChangeOutput   bool             `yaml:"index_change_output"`
 	IndexUTXO           bool             `yaml:"index_utxo"`
+	DebugTrace          bool             `yaml:"debug_trace"`
+	TraceThrottle       TraceThrottle    `yaml:"trace_throttle"`
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Ton                 TonConfig        `yaml:"ton"`
@@ -78,9 +80,19 @@ type TonConfig struct {
 }
 
 type NodeConfig struct {
-	URL     string            `yaml:"url"     validate:"required,url"`
-	Auth    AuthConfig        `yaml:"auth"`
-	Headers map[string]string `yaml:"headers"`
+	URL        string            `yaml:"url"     validate:"required,url"`
+	Auth       AuthConfig        `yaml:"auth"`
+	Headers    map[string]string `yaml:"headers"`
+	DebugTrace bool              `yaml:"debug_trace"` // node supports debug_* namespace
+}
+
+// TraceThrottle configures rate limiting and concurrency for debug_traceTransaction calls.
+// Separate from main throttle to avoid starving block/receipt RPCs.
+// Defaults: trace_rps = main rps / 2, trace_burst = main burst / 2, trace_concurrency = 4.
+type TraceThrottle struct {
+	RPS         int `yaml:"trace_rps"`
+	Burst       int `yaml:"trace_burst"`
+	Concurrency int `yaml:"trace_concurrency"`
 }
 
 type AuthConfig struct {
