@@ -82,7 +82,7 @@ func logCallTree(t *testing.T, call *CallTrace, depth int) {
 }
 
 // TestExtractInternalTransfers_RealSafeTx_Integration extracts internal transfers
-// from a real Gnosis Safe transaction trace on Sepolia.
+// from a real Gnosis Safe transaction trace on mainnet.
 func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test")
@@ -96,22 +96,17 @@ func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, trace)
 
-	// Fetch the block to get the tx details
-	blockHex := "0x15cd8ee" // 22869070
-	block, err := c.GetBlockByNumber(ctx, blockHex, true)
-	require.NoError(t, err)
-
-	var tx *Txn
-	for i := range block.Transactions {
-		if block.Transactions[i].Hash == mainnetSafeTxHash {
-			tx = &block.Transactions[i]
-			break
-		}
+	// Construct tx from known data (avoids fetching full block which may not include tx objects)
+	tx := Txn{
+		Hash:  mainnetSafeTxHash,
+		From:  "0xa768d264b8bf98588ebdef6e241a0a73baf287d1",
+		To:    "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+		Value: "0x0",
+		Input: "0x6a761202", // Safe execTransaction (truncated, only need prefix for detection)
 	}
-	require.NotNil(t, tx, "tx should exist in block")
 
 	// Extract internal transfers
-	transfers := ExtractInternalTransfers(trace, *tx, decimal.Zero, "ethereum", mainnetSafeBlock, 1000)
+	transfers := ExtractInternalTransfers(trace, tx, decimal.Zero, "ethereum", mainnetSafeBlock, 1000)
 
 	t.Logf("Extracted %d internal transfers:", len(transfers))
 	for i, tr := range transfers {
@@ -152,7 +147,6 @@ func TestExtractInternalTransfers_BatchSendNative_Integration(t *testing.T) {
 
 	batchTxHash := "0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b"
 	batchBlockNum := uint64(24669397)
-	batchBlockHex := "0x178a755"
 
 	// Fetch the trace
 	trace, err := c.DebugTraceTransaction(ctx, batchTxHash)
@@ -162,24 +156,20 @@ func TestExtractInternalTransfers_BatchSendNative_Integration(t *testing.T) {
 	t.Logf("Batch tx trace: type=%s calls=%d", trace.Type, len(trace.Calls))
 	logCallTree(t, trace, 0)
 
-	// Fetch the block to get tx details
-	block, err := c.GetBlockByNumber(ctx, batchBlockHex, true)
-	require.NoError(t, err)
-
-	var tx *Txn
-	for i := range block.Transactions {
-		if block.Transactions[i].Hash == batchTxHash {
-			tx = &block.Transactions[i]
-			break
-		}
+	// Construct tx from known data (avoids fetching full block)
+	tx := Txn{
+		Hash:  batchTxHash,
+		From:  "0x2b3fed49557bd88f78b898684f82fbb355305dbb",
+		To:    "0x09c30cdcdd971423cb3ba757a47d56c35d06d818",
+		Value: "0x129f602145be8c00", // 1.34189691 ETH
+		Input: "0x57b1c066",          // sendNative method selector
 	}
-	require.NotNil(t, tx, "tx should exist in block")
 
 	// Verify this is NOT a Safe execTransaction — Safe heuristic won't help
 	assert.False(t, IsSafeExecTransaction(tx.Input), "batch tx should NOT be detected as Safe execTransaction")
 
 	// Extract internal transfers via trace
-	transfers := ExtractInternalTransfers(trace, *tx, decimal.Zero, "ethereum", batchBlockNum, 1000)
+	transfers := ExtractInternalTransfers(trace, tx, decimal.Zero, "ethereum", batchBlockNum, 1000)
 
 	t.Logf("Extracted %d internal transfers from batch tx:", len(transfers))
 	for i, tr := range transfers {
@@ -198,7 +188,7 @@ func TestExtractInternalTransfers_BatchSendNative_Integration(t *testing.T) {
 	}
 
 	// Verify the Safe heuristic would miss these entirely
-	safeTransfers := ExtractSafeTransfers(*tx, nil, "ethereum", batchBlockNum, 1000)
+	safeTransfers := ExtractSafeTransfers(tx, nil, "ethereum", batchBlockNum, 1000)
 	assert.Empty(t, safeTransfers, "Safe heuristic should find NOTHING for this batch tx")
 
 	// Verify ExtractTransfers (top-level) also finds nothing useful

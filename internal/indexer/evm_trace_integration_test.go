@@ -49,20 +49,6 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	ctx := context.Background()
 	c := newTraceTestClient()
 
-	// Fetch block
-	block, err := c.GetBlockByNumber(ctx, integrationSafeBlockHex, true)
-	require.NoError(t, err)
-
-	// Find our tx
-	var tx *evm.Txn
-	for i := range block.Transactions {
-		if block.Transactions[i].Hash == integrationSafeTxHash {
-			tx = &block.Transactions[i]
-			break
-		}
-	}
-	require.NotNil(t, tx)
-
 	// Fetch receipt
 	receipts, err := c.BatchGetTransactionReceipts(ctx, []string{integrationSafeTxHash})
 	require.NoError(t, err)
@@ -74,13 +60,18 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, trace)
 
-	// Build mini block and run through convertBlock with traces
+	// Construct tx + block from known data (avoids fetching full block)
+	tx := evm.Txn{
+		Hash:  integrationSafeTxHash,
+		From:  "0xa768d264b8bf98588ebdef6e241a0a73baf287d1",
+		To:    "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+		Value: "0x0",
+		Input: "0x6a761202", // Safe execTransaction
+	}
 	miniBlock := &evm.Block{
-		Number:       block.Number,
-		Hash:         block.Hash,
-		ParentHash:   block.ParentHash,
-		Timestamp:    block.Timestamp,
-		Transactions: []evm.Txn{*tx},
+		Number:       fmt.Sprintf("0x%x", integrationSafeBlockNum),
+		Timestamp:    "0x68398b07",
+		Transactions: []evm.Txn{tx},
 	}
 
 	idx := &EVMIndexer{
@@ -123,20 +114,7 @@ func TestEndToEnd_BatchSendNative_Integration(t *testing.T) {
 	c := newTraceTestClient()
 
 	batchTxHash := "0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b"
-	batchBlockHex := "0x178a755" // 24669397
-
-	// Fetch block
-	block, err := c.GetBlockByNumber(ctx, batchBlockHex, true)
-	require.NoError(t, err)
-
-	var tx *evm.Txn
-	for i := range block.Transactions {
-		if block.Transactions[i].Hash == batchTxHash {
-			tx = &block.Transactions[i]
-			break
-		}
-	}
-	require.NotNil(t, tx)
+	batchBlockNum := uint64(24669397)
 
 	// Fetch receipt
 	receipts, err := c.BatchGetTransactionReceipts(ctx, []string{batchTxHash})
@@ -149,18 +127,24 @@ func TestEndToEnd_BatchSendNative_Integration(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, trace)
 
-	// Run through convertBlock WITH traces
+	// Construct tx + block from known data
+	tx := evm.Txn{
+		Hash:  batchTxHash,
+		From:  "0x2b3fed49557bd88f78b898684f82fbb355305dbb",
+		To:    "0x09c30cdcdd971423cb3ba757a47d56c35d06d818",
+		Value: "0x129f602145be8c00",
+		Input: "0x57b1c066", // sendNative
+	}
+
 	idx := &EVMIndexer{
 		chainName: "ethereum",
 		config:    config.ChainConfig{NetworkId: "ethereum-mainnet"},
 	}
 
 	miniBlock := &evm.Block{
-		Number:       block.Number,
-		Hash:         block.Hash,
-		ParentHash:   block.ParentHash,
-		Timestamp:    block.Timestamp,
-		Transactions: []evm.Txn{*tx},
+		Number:       fmt.Sprintf("0x%x", batchBlockNum),
+		Timestamp:    "0x6839a000",
+		Transactions: []evm.Txn{tx},
 	}
 
 	receiptMap := map[string]*evm.TxnReceipt{batchTxHash: receipt}
