@@ -35,6 +35,11 @@ type EVMIndexer struct {
 // be blacklisted after startup.
 // The result is passed to extractReceiptTxHashes to avoid repeated calls
 // to GetAvailableProviders() in the hot loop.
+// TraceModeActive is the exported version for testing from other packages.
+func (e *EVMIndexer) TraceModeActive() bool {
+	return e.traceModeActive()
+}
+
 func (e *EVMIndexer) traceModeActive() bool {
 	return e.config.DebugTrace && e.traceFailover != nil &&
 		len(e.traceFailover.GetAvailableProviders()) > 0
