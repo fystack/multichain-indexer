@@ -506,6 +506,148 @@ func TestTraceModeActive_DebugTraceDisabled(t *testing.T) {
 	assert.False(t, idx.traceModeActive(), "should be false when debug_trace is disabled")
 }
 
+func TestBuildBlockResults_WithTraces(t *testing.T) {
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	txHash := "0xtx1"
+	blockNum := uint64(1)
+
+	blocks := map[uint64]*evm.Block{
+		blockNum: {
+			Number:    "0x1",
+			Timestamp: "0x60000000",
+			Transactions: []evm.Txn{
+				{
+					Hash:     txHash,
+					From:     "0xaaaa",
+					To:       "0xbbbb",
+					Value:    "0x0",
+					Input:    "0x12345678",
+					Gas:      "0x5208",
+					GasPrice: "0x3b9aca00",
+				},
+			},
+		},
+	}
+
+	receipt := &evm.TxnReceipt{
+		TransactionHash:   txHash,
+		Status:            "0x1",
+		GasUsed:           "0x5208",
+		EffectiveGasPrice: "0x3b9aca00",
+	}
+	allReceipts := map[string]*evm.TxnReceipt{txHash: receipt}
+	txHashMap := map[uint64][]string{blockNum: {txHash}}
+
+	traces := map[string]*evm.CallTrace{
+		txHash: {
+			From:  "0xaaaa",
+			To:    "0xbbbb",
+			Value: "0x0",
+			Type:  "CALL",
+			Input: "0x12345678",
+			Calls: []evm.CallTrace{
+				{
+					From:  "0xbbbb",
+					To:    "0xcccc",
+					Value: "0xde0b6b3a7640000", // 1 ETH
+					Type:  "CALL",
+				},
+			},
+		},
+	}
+
+	results := idx.buildBlockResults([]uint64{blockNum}, blocks, txHashMap, allReceipts, traces)
+
+	require.Len(t, results, 1)
+	assert.Nil(t, results[0].Error)
+	require.NotNil(t, results[0].Block)
+
+	// Should contain the internal transfer from trace
+	var nativeCount int
+	for _, tx := range results[0].Block.Transactions {
+		if tx.Type == constant.TxTypeNativeTransfer {
+			nativeCount++
+		}
+	}
+	assert.Equal(t, 1, nativeCount, "trace should produce 1 internal native transfer")
+}
+
+func TestBuildBlockResults_MissingBlock(t *testing.T) {
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	// Block 1 exists, block 2 does not
+	blocks := map[uint64]*evm.Block{
+		1: {
+			Number:       "0x1",
+			Timestamp:    "0x60000000",
+			Transactions: []evm.Txn{},
+		},
+	}
+
+	results := idx.buildBlockResults([]uint64{1, 2}, blocks, nil, nil, nil)
+
+	require.Len(t, results, 2)
+	assert.Nil(t, results[0].Error, "block 1 should succeed")
+	assert.NotNil(t, results[0].Block)
+	assert.NotNil(t, results[1].Error, "block 2 should have error")
+	assert.Equal(t, "block not found", results[1].Error.Message)
+}
+
+func TestBuildBlockResults_NilTraces(t *testing.T) {
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	txHash := "0xtx1"
+	blocks := map[uint64]*evm.Block{
+		1: {
+			Number:    "0x1",
+			Timestamp: "0x60000000",
+			Transactions: []evm.Txn{
+				{
+					Hash:     txHash,
+					From:     "0xaaaa",
+					To:       "0xbbbb",
+					Value:    "0xde0b6b3a7640000",
+					Input:    "",
+					Gas:      "0x5208",
+					GasPrice: "0x3b9aca00",
+				},
+			},
+		},
+	}
+
+	receipt := &evm.TxnReceipt{
+		TransactionHash:   txHash,
+		Status:            "0x1",
+		GasUsed:           "0x5208",
+		EffectiveGasPrice: "0x3b9aca00",
+	}
+
+	results := idx.buildBlockResults(
+		[]uint64{1},
+		blocks,
+		map[uint64][]string{1: {txHash}},
+		map[string]*evm.TxnReceipt{txHash: receipt},
+		nil, // no traces
+	)
+
+	require.Len(t, results, 1)
+	assert.Nil(t, results[0].Error)
+	require.NotNil(t, results[0].Block)
+	// Native transfer from ExtractTransfers should still work
+	assert.Len(t, results[0].Block.Transactions, 1)
+	assert.Equal(t, constant.TxTypeNativeTransfer, results[0].Block.Transactions[0].Type)
+}
+
 func TestConvertBlock_TracesNil_NoNilPanic(t *testing.T) {
 	// Verify nil traces map passes through without panic
 	idx := &EVMIndexer{
