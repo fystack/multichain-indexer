@@ -15,9 +15,11 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/cosmos"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/internal/rpc/stellar"
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
+	"github.com/fystack/multichain-indexer/internal/rpc/xrp"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -449,6 +451,88 @@ func buildTonIndexer(
 	)
 }
 
+// buildXRPIndexer constructs an XRP indexer with failover and providers.
+func buildXRPIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[xrp.XRPLAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := xrp.NewClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+		if len(node.Headers) > 0 {
+			client.SetCustomHeaders(node.Headers)
+		}
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: rpc.ClientTypeRPC,
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewXRPIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
+// buildStellarIndexer constructs a Stellar indexer with failover and providers.
+func buildStellarIndexer(
+	chainName string,
+	chainCfg config.ChainConfig,
+	mode WorkerMode,
+	pubkeyStore pubkeystore.Store,
+) indexer.Indexer {
+	failover := rpc.NewFailover[stellar.StellarAPI](nil)
+
+	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
+		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
+	)
+
+	for i, node := range chainCfg.Nodes {
+		client := stellar.NewClient(
+			node.URL,
+			&rpc.AuthConfig{
+				Type:  rpc.AuthType(node.Auth.Type),
+				Key:   node.Auth.Key,
+				Value: node.Auth.Value,
+			},
+			chainCfg.Client.Timeout,
+			rl,
+		)
+		if len(node.Headers) > 0 {
+			client.SetCustomHeaders(node.Headers)
+		}
+
+		failover.AddProvider(&rpc.Provider{
+			Name:       chainName + "-" + strconv.Itoa(i+1),
+			URL:        node.URL,
+			Network:    chainName,
+			ClientType: rpc.ClientTypeREST,
+			Client:     client,
+			State:      rpc.StateHealthy,
+		})
+	}
+
+	return indexer.NewStellarIndexer(chainName, chainCfg, failover, pubkeyStore)
+}
+
 func preloadTONJettonWallets(
 	ctx context.Context,
 	chainName string,
@@ -771,6 +855,10 @@ func CreateManagerWithWorkers(
 			idxr = buildAptosIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		case enum.NetworkTypeTon:
 			idxr = buildTonIndexer(chainName, chainCfg, pubkeyStore, db, redisClient)
+		case enum.NetworkTypeXRP:
+			idxr = buildXRPIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
+		case enum.NetworkTypeStellar:
+			idxr = buildStellarIndexer(chainName, chainCfg, ModeRegular, pubkeyStore)
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
