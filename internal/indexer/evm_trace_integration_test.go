@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -17,13 +18,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const infuraMainnetRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
+const defaultMainnetRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
 const integrationSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb65193963f6059b1f9"
 const integrationSafeBlockNum = uint64(22869070)
 const integrationSafeBlockHex = "0x15cd8ee"
 
+func traceRPCURL() string {
+	if url := os.Getenv("TRACE_RPC_URL"); url != "" {
+		return url
+	}
+	return defaultMainnetRPC
+}
+
 func newTraceTestClient() *evm.Client {
-	return evm.NewEthereumClient(infuraMainnetRPC, nil, 30*time.Second, nil)
+	return evm.NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
 }
 
 // TestEndToEnd_TraceInConvertBlock_Integration runs the full pipeline:

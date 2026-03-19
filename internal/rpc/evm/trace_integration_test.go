@@ -2,6 +2,7 @@ package evm
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -12,7 +13,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Infura mainnet RPC with debug_traceTransaction support.
+// Mainnet RPC with debug_traceTransaction support.
+// Override with TRACE_RPC_URL env var:
+//
+//	TRACE_RPC_URL=https://your-rpc.example.com go test ./internal/rpc/evm/ -run Integration -v
 const defaultTraceRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
 
 // Mainnet Gnosis Safe tx with internal ETH transfer:
@@ -21,7 +25,9 @@ const mainnetSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb6519
 const mainnetSafeBlock = uint64(22869070)
 
 func traceRPCURL() string {
-	// Could read from env, but keep simple for now
+	if url := os.Getenv("TRACE_RPC_URL"); url != "" {
+		return url
+	}
 	return defaultTraceRPC
 }
 
