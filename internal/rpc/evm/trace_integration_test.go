@@ -14,7 +14,7 @@ import (
 
 // Tenderly Sepolia RPC with debug_traceTransaction support.
 // Set TRACE_RPC_URL env var to override.
-const defaultTraceRPC = "https://sepolia.gateway.tenderly.co/6FBTcZZrgK7wGihhPyarRp"
+const defaultTraceRPC = "https://sepolia.gateway.tenderly.co/1ZTXSdHpdLxTjQ8wt4ppV3"
 
 // Sepolia Gnosis Safe tx with internal ETH transfer:
 // From EOA → Safe contract → 0.1 ETH internal transfer to recipient.

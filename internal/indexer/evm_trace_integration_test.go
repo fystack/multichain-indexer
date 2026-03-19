@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tenderlySepoliaRPC = "https://sepolia.gateway.tenderly.co/6FBTcZZrgK7wGihhPyarRp"
+const tenderlySepoliaRPC = "https://sepolia.gateway.tenderly.co/1ZTXSdHpdLxTjQ8wt4ppV3"
 const integrationSafeTxHash = "0x7694b41ca7105e4080d1d172d3ad99293902c36bf83bb46d2d9bd6a316ba050b"
 const integrationSafeBlockNum = uint64(10356752)
 const integrationSafeBlockHex = "0x9e0f10"
