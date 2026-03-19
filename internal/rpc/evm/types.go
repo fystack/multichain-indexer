@@ -58,6 +58,20 @@ type (
 	}
 )
 
+// CallTrace is the result from debug_traceTransaction with callTracer.
+type CallTrace struct {
+	From    string      `json:"from"`
+	To      string      `json:"to"`
+	Value   string      `json:"value"`    // hex-encoded wei
+	Type    string      `json:"type"`     // CALL, DELEGATECALL, STATICCALL, CREATE, CREATE2
+	Input   string      `json:"input"`
+	Output  string      `json:"output"`
+	Gas     string      `json:"gas"`
+	GasUsed string      `json:"gasUsed"`
+	Error   string      `json:"error,omitempty"`
+	Calls   []CallTrace `json:"calls,omitempty"`
+}
+
 func (l Log) parseERC20Transfers(
 	fee decimal.Decimal,
 	txHash, network string,

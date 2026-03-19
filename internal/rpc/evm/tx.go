@@ -26,9 +26,9 @@ func (t *Txn) NeedReceipt() bool {
 
 const WEI_PER_ETH = 1e18
 
-// calcFee computes the transaction fee from receipt if available, otherwise fallback to Txn Gas*GasPrice.
+// CalcFee computes the transaction fee from receipt if available, otherwise fallback to Txn Gas*GasPrice.
 // Returns the fee in ETH (divided by 1e18 from Wei).
-func (tx Txn) calcFee(receipt *TxnReceipt) decimal.Decimal {
+func (tx Txn) CalcFee(receipt *TxnReceipt) decimal.Decimal {
 	if receipt != nil {
 		if gasUsed, err1 := utils.ParseHexBigInt(receipt.GasUsed); err1 == nil {
 			if gasPrice, err2 := utils.ParseHexBigInt(receipt.EffectiveGasPrice); err2 == nil {
@@ -125,7 +125,7 @@ func (tx Txn) ExtractTransfers(
 	blockNumber, ts uint64,
 ) []types.Transaction {
 	var out []types.Transaction
-	fee := tx.calcFee(receipt)
+	fee := tx.CalcFee(receipt)
 
 	// native transfer
 	if val, _ := utils.ParseHexBigInt(tx.Value); val.Sign() > 0 && tx.To != "" && strings.TrimPrefix(tx.Input, "0x") == "" {

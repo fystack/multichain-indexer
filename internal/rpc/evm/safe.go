@@ -61,7 +61,7 @@ func ExtractSafeTransfers(
 		return nil
 	}
 
-	fee := tx.calcFee(receipt)
+	fee := tx.CalcFee(receipt)
 
 	return []types.Transaction{
 		{

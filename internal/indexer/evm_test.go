@@ -80,7 +80,7 @@ func TestExtractReceiptTxHashes_SelectsSafeOutgoingWhenTwoWayEnabled(t *testing.
 		},
 	}
 
-	got := idx.extractReceiptTxHashes(blocks)
+	got := idx.extractReceiptTxHashes(blocks, false)
 	require.Equal(t, []string{"0xabc123"}, got[blockNum])
 }
 
@@ -142,7 +142,7 @@ func TestParseGnosisSafeETHTransfer(t *testing.T) {
 
 	idx := newTestEVMIndexer()
 	receiptMap := map[string]*evm.TxnReceipt{txHash: receipt}
-	typesBlock, err := idx.convertBlock(miniBlock, receiptMap)
+	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil)
 	require.NoError(t, err)
 
 	t.Logf("Extracted %d transfers from block", len(typesBlock.Transactions))
@@ -235,7 +235,7 @@ func TestParseGnosisSafeETHTransfer_Sepolia(t *testing.T) {
 
 	idx := newTestSepoliaIndexer()
 	receiptMap := map[string]*evm.TxnReceipt{txHash: receipt}
-	typesBlock, err := idx.convertBlock(miniBlock, receiptMap)
+	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil)
 	require.NoError(t, err)
 
 	t.Logf("Extracted %d transfers from block", len(typesBlock.Transactions))
