@@ -262,3 +262,284 @@ func TestParseGnosisSafeETHTransfer_Sepolia(t *testing.T) {
 
 	t.Log("RESULT: Sepolia Gnosis Safe execTransaction with internal ETH transfer IS indexed correctly.")
 }
+
+// --- Trace feature verification tests ---
+
+func TestConvertBlock_DebugTraceDisabled_SafeHeuristicUnchanged(t *testing.T) {
+	// Regression: with debug_trace=false (traces=nil), Safe heuristic still works
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	receipt := &evm.TxnReceipt{
+		TransactionHash: "0xtx1",
+		Status:          "0x1",
+		GasUsed:         "0x5208",
+		EffectiveGasPrice: "0x3b9aca00",
+		Logs: []evm.Log{
+			{
+				Address: "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+				Topics:  []string{evm.SAFE_EXECUTION_SUCCESS_TOPIC, "0x0000000000000000000000000000000000000000000000000000000000000000"},
+			},
+		},
+	}
+
+	block := &evm.Block{
+		Number:    "0x1",
+		Timestamp: "0x60000000",
+		Transactions: []evm.Txn{
+			{
+				Hash:  "0xtx1",
+				From:  "0xsender",
+				To:    "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+				Value: "0x0",
+				Input: safeExecInputTest,
+			},
+		},
+	}
+
+	receiptMap := map[string]*evm.TxnReceipt{"0xtx1": receipt}
+	result, err := idx.convertBlock(block, receiptMap, nil) // traces=nil
+	require.NoError(t, err)
+
+	// Safe heuristic should still extract the transfer
+	var found bool
+	for _, tx := range result.Transactions {
+		if tx.Type == constant.TxTypeNativeTransfer {
+			found = true
+			assert.Equal(t, "100000000000000000", tx.Amount)
+		}
+	}
+	assert.True(t, found, "Safe heuristic should still work when traces=nil")
+}
+
+func TestConvertBlock_TraceOverridesSafeHeuristic(t *testing.T) {
+	// When trace is available for a Safe tx, trace is used instead of Safe heuristic
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	receipt := &evm.TxnReceipt{
+		TransactionHash: "0xtx1",
+		Status:          "0x1",
+		GasUsed:         "0x5208",
+		EffectiveGasPrice: "0x3b9aca00",
+		Logs: []evm.Log{
+			{
+				Address: "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+				Topics:  []string{evm.SAFE_EXECUTION_SUCCESS_TOPIC, "0x0"},
+			},
+		},
+	}
+
+	block := &evm.Block{
+		Number:    "0x1",
+		Timestamp: "0x60000000",
+		Transactions: []evm.Txn{
+			{
+				Hash:  "0xtx1",
+				From:  "0xsender",
+				To:    "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+				Value: "0x0",
+				Input: safeExecInputTest,
+			},
+		},
+	}
+
+	traces := map[string]*evm.CallTrace{
+		"0xtx1": {
+			From:  "0xsender",
+			To:    "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+			Value: "0x0",
+			Type:  "CALL",
+			Input: safeExecInputTest,
+			Calls: []evm.CallTrace{
+				{
+					From:  "0x84ba2321d46814fb1aa69a7b71882efea50f700c",
+					To:    "0xc26dc13d057824342d5480b153f288bd1c5e3e9d",
+					Value: "0x16345785d8a0000", // 0.1 ETH
+					Type:  "CALL",
+				},
+			},
+		},
+	}
+
+	receiptMap := map[string]*evm.TxnReceipt{"0xtx1": receipt}
+	result, err := idx.convertBlock(block, receiptMap, traces)
+	require.NoError(t, err)
+
+	var nativeCount int
+	for _, tx := range result.Transactions {
+		if tx.Type == constant.TxTypeNativeTransfer {
+			nativeCount++
+		}
+	}
+	// Trace provides the transfer, Safe heuristic is skipped, dedup removes any overlap
+	assert.Equal(t, 1, nativeCount, "should have exactly 1 native transfer (trace, no duplicate from Safe)")
+}
+
+func TestExtractReceiptTxHashes_TraceInactive_BackwardCompatible(t *testing.T) {
+	// With traceActive=false, behavior is identical to original code
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+		// pubkeyStore=nil → full-chain mode
+	}
+
+	blocks := map[uint64]*evm.Block{
+		1: {
+			Transactions: []evm.Txn{
+				{Hash: "0x1", From: "0xa", To: "0xb", Value: "0x1", Input: ""},     // native transfer → NeedReceipt=true
+				{Hash: "0x2", From: "0xa", To: "0xb", Value: "0x0", Input: "0xab"}, // contract call → NeedReceipt=false
+			},
+		},
+	}
+
+	result := idx.extractReceiptTxHashes(blocks, false)
+
+	// Only native transfer passes NeedReceipt gate
+	assert.Equal(t, []string{"0x1"}, result[1])
+}
+
+func TestExtractReceiptTxHashes_TraceActive_IncludesContractCalls(t *testing.T) {
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+		// pubkeyStore=nil → full-chain mode
+	}
+
+	blocks := map[uint64]*evm.Block{
+		1: {
+			Transactions: []evm.Txn{
+				{Hash: "0x1", From: "0xa", To: "0xb", Value: "0x1", Input: ""},          // native transfer
+				{Hash: "0x2", From: "0xa", To: "0xc", Value: "0x0", Input: "0xabcdef00"}, // contract call
+				{Hash: "0x3", From: "0xa", To: "0xd", Value: "0x0", Input: "0x"},          // empty input, not contract call
+			},
+		},
+	}
+
+	result := idx.extractReceiptTxHashes(blocks, true)
+
+	// trace active: native transfer (NeedReceipt) + contract call
+	// 0x3 has input "0x" which is NOT a contract call and NeedReceipt returns true for it
+	assert.Contains(t, result[1], "0x1")
+	assert.Contains(t, result[1], "0x2")
+	assert.Contains(t, result[1], "0x3") // "0x" input → NeedReceipt=true
+}
+
+func TestExtractReceiptTxHashes_TraceActive_NoDuplicateHashes(t *testing.T) {
+	// A contract call between two monitored addresses should not be appended twice
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config: config.ChainConfig{
+			NetworkId:      "eth",
+			TwoWayIndexing: true,
+		},
+		pubkeyStore: evmPubkeyStoreStub{
+			addresses: map[string]bool{
+				evm.ToChecksumAddress("0xaaaa"): true,
+				evm.ToChecksumAddress("0xbbbb"): true,
+			},
+		},
+	}
+
+	blocks := map[uint64]*evm.Block{
+		1: {
+			Transactions: []evm.Txn{
+				{
+					Hash:  "0x1",
+					From:  "0xaaaa", // monitored
+					To:    "0xbbbb", // monitored
+					Value: "0x1",
+					Input: "0xabcdef00", // contract call
+				},
+			},
+		},
+	}
+
+	result := idx.extractReceiptTxHashes(blocks, true)
+
+	// Should appear exactly once despite matching both address filter and trace contract-call branch
+	assert.Len(t, result[1], 1)
+	assert.Equal(t, "0x1", result[1][0])
+}
+
+func TestExtractReceiptTxHashes_PubkeyStoreNil_TraceActive_OnlyContractCallsAndNeedReceipt(t *testing.T) {
+	// Full-chain mode + trace active: should NOT fetch receipts for every tx
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+		// pubkeyStore=nil
+	}
+
+	blocks := map[uint64]*evm.Block{
+		1: {
+			Transactions: []evm.Txn{
+				{Hash: "0x1", From: "0xa", To: "0xb", Value: "0x1", Input: ""},          // native → NeedReceipt=true
+				{Hash: "0x2", From: "0xa", To: "0xc", Value: "0x0", Input: "0xabcd1234"}, // contract call
+				{Hash: "0x3", From: "0xa", To: "0xd", Value: "0x0", Input: "0xdeadbeef"}, // another contract call
+			},
+		},
+	}
+
+	result := idx.extractReceiptTxHashes(blocks, true)
+
+	// All 3 should be included: 0x1 via NeedReceipt, 0x2 and 0x3 as contract calls
+	assert.Len(t, result[1], 3)
+}
+
+func TestTraceModeActive_NilTraceFailover(t *testing.T) {
+	idx := &EVMIndexer{
+		config:        config.ChainConfig{DebugTrace: true},
+		traceFailover: nil,
+	}
+	assert.False(t, idx.traceModeActive(), "should be false when traceFailover is nil")
+}
+
+func TestTraceModeActive_DebugTraceDisabled(t *testing.T) {
+	idx := &EVMIndexer{
+		config:        config.ChainConfig{DebugTrace: false},
+		traceFailover: nil,
+	}
+	assert.False(t, idx.traceModeActive(), "should be false when debug_trace is disabled")
+}
+
+func TestConvertBlock_TracesNil_NoNilPanic(t *testing.T) {
+	// Verify nil traces map passes through without panic
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	block := &evm.Block{
+		Number:    "0x1",
+		Timestamp: "0x60000000",
+		Transactions: []evm.Txn{
+			{
+				Hash:     "0xtx1",
+				From:     "0xaaaa",
+				To:       "0xbbbb",
+				Value:    "0xde0b6b3a7640000",
+				Input:    "",
+				Gas:      "0x5208",
+				GasPrice: "0x3b9aca00",
+			},
+		},
+	}
+
+	receipt := &evm.TxnReceipt{
+		TransactionHash: "0xtx1",
+		Status:          "0x1",
+		GasUsed:         "0x5208",
+		EffectiveGasPrice: "0x3b9aca00",
+	}
+
+	result, err := idx.convertBlock(block, map[string]*evm.TxnReceipt{"0xtx1": receipt}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	// Should still extract the native transfer via ExtractTransfers
+	assert.Len(t, result.Transactions, 1)
+	assert.Equal(t, constant.TxTypeNativeTransfer, result.Transactions[0].Type)
+}
