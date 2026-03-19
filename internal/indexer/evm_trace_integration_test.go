@@ -17,13 +17,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const tenderlySepoliaRPC = "https://sepolia.gateway.tenderly.co/1ZTXSdHpdLxTjQ8wt4ppV3"
-const integrationSafeTxHash = "0x7694b41ca7105e4080d1d172d3ad99293902c36bf83bb46d2d9bd6a316ba050b"
-const integrationSafeBlockNum = uint64(10356752)
-const integrationSafeBlockHex = "0x9e0f10"
+const infuraMainnetRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
+const integrationSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb65193963f6059b1f9"
+const integrationSafeBlockNum = uint64(22869070)
+const integrationSafeBlockHex = "0x15cd8ee"
 
 func newTraceTestClient() *evm.Client {
-	return evm.NewEthereumClient(tenderlySepoliaRPC, nil, 30*time.Second, nil)
+	return evm.NewEthereumClient(infuraMainnetRPC, nil, 30*time.Second, nil)
 }
 
 // TestEndToEnd_TraceInConvertBlock_Integration runs the full pipeline:
@@ -71,8 +71,8 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	}
 
 	idx := &EVMIndexer{
-		chainName: "sepolia",
-		config:    config.ChainConfig{NetworkId: "ethereum-sepolia"},
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "ethereum-mainnet"},
 	}
 
 	receiptMap := map[string]*evm.TxnReceipt{integrationSafeTxHash: receipt}
@@ -91,8 +91,8 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	for _, tr := range result.Transactions {
 		if tr.Type == constant.TxTypeNativeTransfer && tr.Amount == "100000000000000000" {
 			found = true
-			assert.Equal(t, evm.ToChecksumAddress("0x13178e59d4b3ca1a06a6dcfa6692e1f6fbdb58c8"), tr.FromAddress)
-			assert.Equal(t, evm.ToChecksumAddress("0x23dc93f83d34f66a96de2623915ce69852f34a13"), tr.ToAddress)
+			assert.Equal(t, evm.ToChecksumAddress("0x84ba2321d46814fb1aa69a7b71882efea50f700c"), tr.FromAddress)
+			assert.Equal(t, evm.ToChecksumAddress("0xc26dC13d057824342D5480b153f288bd1C5e3e9d"), tr.ToAddress)
 		}
 	}
 	assert.True(t, found, "should find 0.1 ETH internal transfer via trace")

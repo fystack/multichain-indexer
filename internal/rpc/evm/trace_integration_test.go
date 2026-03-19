@@ -12,14 +12,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Tenderly Sepolia RPC with debug_traceTransaction support.
-// Set TRACE_RPC_URL env var to override.
-const defaultTraceRPC = "https://sepolia.gateway.tenderly.co/1ZTXSdHpdLxTjQ8wt4ppV3"
+// Infura mainnet RPC with debug_traceTransaction support.
+const defaultTraceRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
 
-// Sepolia Gnosis Safe tx with internal ETH transfer:
-// From EOA → Safe contract → 0.1 ETH internal transfer to recipient.
-const sepoliaSafeTxHash = "0x7694b41ca7105e4080d1d172d3ad99293902c36bf83bb46d2d9bd6a316ba050b"
-const sepoliaSafeBlock = uint64(10356752)
+// Mainnet Gnosis Safe tx with internal ETH transfer:
+// From EOA 0xA768d264... → Safe contract 0x84ba2321... → 0.1 ETH to 0xc26dC13d...
+const mainnetSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb65193963f6059b1f9"
+const mainnetSafeBlock = uint64(22869070)
 
 func traceRPCURL() string {
 	// Could read from env, but keep simple for now
@@ -39,7 +38,7 @@ func TestDebugTraceTransaction_Integration(t *testing.T) {
 	ctx := context.Background()
 	c := newTraceClient()
 
-	trace, err := c.DebugTraceTransaction(ctx, sepoliaSafeTxHash)
+	trace, err := c.DebugTraceTransaction(ctx, mainnetSafeTxHash)
 	require.NoError(t, err, "debug_traceTransaction should succeed on Tenderly")
 	require.NotNil(t, trace)
 
@@ -82,18 +81,18 @@ func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 	c := newTraceClient()
 
 	// Fetch the trace
-	trace, err := c.DebugTraceTransaction(ctx, sepoliaSafeTxHash)
+	trace, err := c.DebugTraceTransaction(ctx, mainnetSafeTxHash)
 	require.NoError(t, err)
 	require.NotNil(t, trace)
 
 	// Fetch the block to get the tx details
-	blockHex := "0x9e0f10" // 10356752
+	blockHex := "0x15cd8ee" // 22869070
 	block, err := c.GetBlockByNumber(ctx, blockHex, true)
 	require.NoError(t, err)
 
 	var tx *Txn
 	for i := range block.Transactions {
-		if block.Transactions[i].Hash == sepoliaSafeTxHash {
+		if block.Transactions[i].Hash == mainnetSafeTxHash {
 			tx = &block.Transactions[i]
 			break
 		}
@@ -101,7 +100,7 @@ func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 	require.NotNil(t, tx, "tx should exist in block")
 
 	// Extract internal transfers
-	transfers := ExtractInternalTransfers(trace, *tx, decimal.Zero, "sepolia", sepoliaSafeBlock, 1000)
+	transfers := ExtractInternalTransfers(trace, *tx, decimal.Zero, "ethereum", mainnetSafeBlock, 1000)
 
 	t.Logf("Extracted %d internal transfers:", len(transfers))
 	for i, tr := range transfers {
@@ -117,8 +116,8 @@ func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 		assert.Equal(t, constant.TxTypeNativeTransfer, tr.Type, "type should be native_transfer")
 		if tr.Amount == "100000000000000000" { // 0.1 ETH
 			found = true
-			safeAddr := ToChecksumAddress("0x13178e59d4b3ca1a06a6dcfa6692e1f6fbdb58c8")
-			recipientAddr := ToChecksumAddress("0x23dc93f83d34f66a96de2623915ce69852f34a13")
+			safeAddr := ToChecksumAddress("0x84ba2321d46814fb1aa69a7b71882efea50f700c")
+			recipientAddr := ToChecksumAddress("0xc26dC13d057824342D5480b153f288bd1C5e3e9d")
 			assert.Equal(t, safeAddr, tr.FromAddress, "from should be Safe contract")
 			assert.Equal(t, recipientAddr, tr.ToAddress, "to should be recipient")
 		}
@@ -137,7 +136,7 @@ func TestCapabilityDetection_Integration(t *testing.T) {
 	c := NewEthereumClient("https://ethereum-sepolia-rpc.publicnode.com", nil, 15*time.Second, nil)
 
 	ctx := context.Background()
-	_, err := c.DebugTraceTransaction(ctx, sepoliaSafeTxHash)
+	_, err := c.DebugTraceTransaction(ctx, mainnetSafeTxHash)
 	require.Error(t, err, "public node should reject debug_traceTransaction")
 
 	t.Logf("Error from non-debug node: %s", err.Error())
