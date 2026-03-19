@@ -98,6 +98,93 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	assert.True(t, found, "should find 0.1 ETH internal transfer via trace")
 }
 
+// TestEndToEnd_BatchSendNative_Integration runs the full pipeline on the sample tx
+// from issue #71: a Revolut batch sendNative with 11 internal ETH transfers.
+// This proves the trace feature catches transfers the Safe heuristic misses.
+func TestEndToEnd_BatchSendNative_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx := context.Background()
+	c := newTraceTestClient()
+
+	batchTxHash := "0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b"
+	batchBlockHex := "0x178a755" // 24669397
+
+	// Fetch block
+	block, err := c.GetBlockByNumber(ctx, batchBlockHex, true)
+	require.NoError(t, err)
+
+	var tx *evm.Txn
+	for i := range block.Transactions {
+		if block.Transactions[i].Hash == batchTxHash {
+			tx = &block.Transactions[i]
+			break
+		}
+	}
+	require.NotNil(t, tx)
+
+	// Fetch receipt
+	receipts, err := c.BatchGetTransactionReceipts(ctx, []string{batchTxHash})
+	require.NoError(t, err)
+	receipt := receipts[batchTxHash]
+	require.NotNil(t, receipt)
+
+	// Fetch trace
+	trace, err := c.DebugTraceTransaction(ctx, batchTxHash)
+	require.NoError(t, err)
+	require.NotNil(t, trace)
+
+	// Run through convertBlock WITH traces
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "ethereum-mainnet"},
+	}
+
+	miniBlock := &evm.Block{
+		Number:       block.Number,
+		Hash:         block.Hash,
+		ParentHash:   block.ParentHash,
+		Timestamp:    block.Timestamp,
+		Transactions: []evm.Txn{*tx},
+	}
+
+	receiptMap := map[string]*evm.TxnReceipt{batchTxHash: receipt}
+	traceMap := map[string]*evm.CallTrace{batchTxHash: trace}
+
+	resultWithTrace, err := idx.convertBlock(miniBlock, receiptMap, traceMap)
+	require.NoError(t, err)
+
+	// Run through convertBlock WITHOUT traces (simulating debug_trace=false)
+	resultWithoutTrace, err := idx.convertBlock(miniBlock, receiptMap, nil)
+	require.NoError(t, err)
+
+	var nativeWithTrace, nativeWithoutTrace int
+	for _, tr := range resultWithTrace.Transactions {
+		if tr.Type == constant.TxTypeNativeTransfer {
+			nativeWithTrace++
+		}
+	}
+	for _, tr := range resultWithoutTrace.Transactions {
+		if tr.Type == constant.TxTypeNativeTransfer {
+			nativeWithoutTrace++
+		}
+	}
+
+	t.Logf("With trace: %d native transfers", nativeWithTrace)
+	t.Logf("Without trace: %d native transfers", nativeWithoutTrace)
+
+	// Without trace: the batch contract call has no Safe heuristic match,
+	// and ExtractTransfers won't emit a native transfer for contract calls with input.
+	// With trace: should find at least 11 internal transfers.
+	assert.GreaterOrEqual(t, nativeWithTrace, 11, "trace should detect at least 11 internal transfers")
+	assert.Greater(t, nativeWithTrace, nativeWithoutTrace, "trace should detect MORE transfers than without trace")
+
+	t.Logf("Trace detected %d more native transfers than without trace",
+		nativeWithTrace-nativeWithoutTrace)
+}
+
 // TestERC20PrequerySkip_Integration verifies that when traceModeActive() is true,
 // the ERC20 prequery (eth_getLogs) is skipped because contract-call receipt expansion
 // already covers all ERC20 transfers.
@@ -170,33 +257,34 @@ func TestRuntimeTracePoolExhaustion(t *testing.T) {
 // TestTransientErrorResilience verifies that traceWithProviderAwareness
 // tries all providers when one fails with a transient error.
 func TestTransientErrorResilience(t *testing.T) {
-	// Create two mock HTTP servers: first returns error, second returns valid trace
-	callCount := 0
+	// Use a single server that fails on first call, succeeds on second.
+	// This avoids shuffle ordering issues with multiple providers.
+	attempt := 0
 
-	server1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt++
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"jsonrpc":"2.0","error":{"code":-32000,"message":"request timeout: backend is overloaded"},"id":1}`)
-	}))
-	defer server1.Close()
-
-	server2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
-		w.Header().Set("Content-Type", "application/json")
+		if attempt == 1 {
+			// First call: transient generic error (not timeout/rate-limit — just a server hiccup)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","error":{"code":-32000,"message":"internal server error"},"id":1}`)
+			return
+		}
+		// Second call: success
 		fmt.Fprintf(w, `{"jsonrpc":"2.0","result":{"from":"0xaaaa","to":"0xbbbb","value":"0x1","type":"CALL","input":"0x","output":"0x","gas":"0x5208","gasUsed":"0x5208"},"id":1}`)
 	}))
-	defer server2.Close()
+	defer server.Close()
 
 	traceFailover := rpc.NewFailover[evm.EthereumAPI](nil)
-	c1 := evm.NewEthereumClient(server1.URL, nil, 5*time.Second, nil)
-	c2 := evm.NewEthereumClient(server2.URL, nil, 5*time.Second, nil)
+	// Add two providers pointing to the same server — first call fails, second succeeds
+	c1 := evm.NewEthereumClient(server.URL, nil, 5*time.Second, nil)
+	c2 := evm.NewEthereumClient(server.URL, nil, 5*time.Second, nil)
 
 	traceFailover.AddProvider(&rpc.Provider{
-		Name: "failing", URL: server1.URL,
+		Name: "provider-1", URL: server.URL,
 		Network: "test", ClientType: "rpc", Client: c1, State: rpc.StateHealthy,
 	})
 	traceFailover.AddProvider(&rpc.Provider{
-		Name: "working", URL: server2.URL,
+		Name: "provider-2", URL: server.URL,
 		Network: "test", ClientType: "rpc", Client: c2, State: rpc.StateHealthy,
 	})
 
@@ -212,7 +300,7 @@ func TestTransientErrorResilience(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, trace)
 	assert.Equal(t, "CALL", trace.Type)
-	assert.GreaterOrEqual(t, callCount, 2, "should have tried at least 2 providers")
+	assert.Equal(t, 2, attempt, "should have made exactly 2 RPC calls (1 fail + 1 success)")
 }
 
 // TestCapabilityErrorBlacklist verifies that a "method not found" error

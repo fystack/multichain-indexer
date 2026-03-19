@@ -125,6 +125,77 @@ func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 	assert.True(t, found, "should find the 0.1 ETH transfer")
 }
 
+// TestExtractInternalTransfers_BatchSendNative_Integration extracts internal transfers
+// from the sample tx in the GitHub issue: a Revolut batch sendNative with 11 internal
+// ETH transfers. This is the key test case — the Safe heuristic CANNOT detect these
+// transfers, only debug_traceTransaction can.
+// Tx: 0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b
+// Block: 24669397
+func TestExtractInternalTransfers_BatchSendNative_Integration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test")
+	}
+
+	ctx := context.Background()
+	c := newTraceClient()
+
+	batchTxHash := "0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b"
+	batchBlockNum := uint64(24669397)
+	batchBlockHex := "0x178a755"
+
+	// Fetch the trace
+	trace, err := c.DebugTraceTransaction(ctx, batchTxHash)
+	require.NoError(t, err)
+	require.NotNil(t, trace)
+
+	t.Logf("Batch tx trace: type=%s calls=%d", trace.Type, len(trace.Calls))
+	logCallTree(t, trace, 0)
+
+	// Fetch the block to get tx details
+	block, err := c.GetBlockByNumber(ctx, batchBlockHex, true)
+	require.NoError(t, err)
+
+	var tx *Txn
+	for i := range block.Transactions {
+		if block.Transactions[i].Hash == batchTxHash {
+			tx = &block.Transactions[i]
+			break
+		}
+	}
+	require.NotNil(t, tx, "tx should exist in block")
+
+	// Verify this is NOT a Safe execTransaction — Safe heuristic won't help
+	assert.False(t, IsSafeExecTransaction(tx.Input), "batch tx should NOT be detected as Safe execTransaction")
+
+	// Extract internal transfers via trace
+	transfers := ExtractInternalTransfers(trace, *tx, decimal.Zero, "ethereum", batchBlockNum, 1000)
+
+	t.Logf("Extracted %d internal transfers from batch tx:", len(transfers))
+	for i, tr := range transfers {
+		t.Logf("  [%d] from=%s to=%s amount=%s", i, tr.FromAddress, tr.ToAddress, tr.Amount)
+	}
+
+	// The batch tx has 11 internal ETH transfers (10 from contract to recipients,
+	// plus 1 hop through an intermediate contract 0x493b7539... → 0xa0327e8a...)
+	// The root CALL also has value (1.34189691 ETH sent to the contract), which
+	// is a contract call with value — NOT skipped by root dedup.
+	require.GreaterOrEqual(t, len(transfers), 11, "should extract at least 11 internal transfers")
+
+	// All should be native_transfer type
+	for _, tr := range transfers {
+		assert.Equal(t, constant.TxTypeNativeTransfer, tr.Type)
+	}
+
+	// Verify the Safe heuristic would miss these entirely
+	safeTransfers := ExtractSafeTransfers(*tx, nil, "ethereum", batchBlockNum, 1000)
+	assert.Empty(t, safeTransfers, "Safe heuristic should find NOTHING for this batch tx")
+
+	// Verify ExtractTransfers (top-level) also finds nothing useful
+	// (the top-level tx has value but it's a contract call, not a plain transfer)
+	topLevel := tx.ExtractTransfers("ethereum", nil, batchBlockNum, 1000)
+	t.Logf("ExtractTransfers found %d top-level transfers", len(topLevel))
+}
+
 // TestCapabilityDetection_Integration verifies that a non-debug node returns
 // an error that matches our capability detection patterns.
 func TestCapabilityDetection_Integration(t *testing.T) {
