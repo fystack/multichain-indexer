@@ -22,6 +22,8 @@ const (
 	NetworkTron    = "tron"    // Tron blockchain
 	NetworkBitcoin = "bitcoin" // Bitcoin blockchain
 	NetworkCosmos  = "cosmos"  // Cosmos SDK / CometBFT chains
+	NetworkXRP     = "xrp"     // XRP Ledger
+	NetworkStellar = "stellar" // Stellar Horizon
 	NetworkGeneric = "generic" // Generic/unknown blockchain type
 )
 

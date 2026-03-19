@@ -42,19 +42,22 @@ const (
 )
 
 type Transaction struct {
-	TxHash        string          `json:"txHash"`
-	NetworkId     string          `json:"networkId"`
-	BlockNumber   uint64          `json:"blockNumber"` // 0 for mempool transactions
-	FromAddress   string          `json:"fromAddress"`
-	ToAddress     string          `json:"toAddress"`
-	AssetAddress  string          `json:"assetAddress"`
-	Amount        string          `json:"amount"`
-	Type          constant.TxType `json:"type"`
-	TxFee         decimal.Decimal `json:"txFee"`
-	Timestamp     uint64          `json:"timestamp"`
-	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
-	Status        string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
-	Direction     string          `json:"direction"`     // "in" (deposit) or "out" (withdrawal)
+	TxHash         string          `json:"txHash"`
+	NetworkId      string          `json:"networkId"`
+	BlockNumber    uint64          `json:"blockNumber"` // 0 for mempool transactions
+	FromAddress    string          `json:"fromAddress"`
+	ToAddress      string          `json:"toAddress"`
+	AssetAddress   string          `json:"assetAddress"`
+	DestinationTag string          `json:"destinationTag,omitempty"`
+	Memo           string          `json:"memo,omitempty"`
+	MemoType       string          `json:"memoType,omitempty"`
+	Amount         string          `json:"amount"`
+	Type           constant.TxType `json:"type"`
+	TxFee          decimal.Decimal `json:"txFee"`
+	Timestamp      uint64          `json:"timestamp"`
+	Confirmations  uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
+	Status         string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
+	Direction      string          `json:"direction"`     // "in" (deposit) or "out" (withdrawal)
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
@@ -99,6 +102,14 @@ func (t Transaction) Hash() string {
 	builder.WriteString(t.FromAddress)
 	builder.WriteByte('|')
 	builder.WriteString(t.ToAddress)
+	builder.WriteByte('|')
+	builder.WriteString(t.AssetAddress)
+	builder.WriteByte('|')
+	builder.WriteString(t.DestinationTag)
+	builder.WriteByte('|')
+	builder.WriteString(t.MemoType)
+	builder.WriteByte('|')
+	builder.WriteString(t.Memo)
 	builder.WriteByte('|')
 	builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
 	builder.WriteByte('|')

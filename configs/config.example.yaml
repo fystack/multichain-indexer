@@ -71,6 +71,27 @@ chains:
       - url: "https://bsc.blockrazor.xyz"
       - url: "https://bnb.rpc.subquery.network/public"
 
+  conflux_mainnet:
+    network_id: "conflux_mainnet"
+    internal_code: "CONFLUX_MAINNET"
+    type: "evm"
+    start_block: 0
+    poll_interval: "3s"
+    nodes:
+      - url: "https://evm.confluxrpc.com"
+      - url: "https://conflux-espace-public.unifra.io"
+      - url: "https://1rpc.io/cfx"
+
+  conflux_testnet:
+    network_id: "conflux_testnet"
+    internal_code: "CONFLUX_TESTNET"
+    type: "evm"
+    start_block: 0
+    poll_interval: "3s"
+    nodes:
+      - url: "https://evmtestnet.confluxrpc.com"
+      - url: "https://conflux-espace-testnet.public.blastapi.io"
+
   bitcoin_testnet:
     network_id: "bitcoin_testnet"
     internal_code: "BTC_TESTNET"
@@ -310,6 +331,86 @@ chains:
       burst: 40
       batch_size: 20
       concurrency: 4
+
+  xrp_mainnet:
+    network_id: "xrp_mainnet"
+    internal_code: "XRP_MAINNET"
+    type: "xrp"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://xrplcluster.com"
+      - url: "https://s1.ripple.com:51234"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "1s"
+    throttle:
+      rps: 40
+      burst: 80
+      batch_size: 20
+      concurrency: 6
+      parallel: true
+
+  xrp_testnet:
+    network_id: "xrp_testnet"
+    internal_code: "XRP_TESTNET"
+    type: "xrp"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://s.altnet.rippletest.net:51234"
+      - url: "https://testnet.xrpl-labs.com"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "1s"
+    throttle:
+      rps: 40
+      burst: 80
+      batch_size: 20
+      concurrency: 6
+      parallel: true
+
+  stellar_mainnet:
+    network_id: "stellar_mainnet"
+    internal_code: "STELLAR_MAINNET"
+    type: "stellar"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://horizon.stellar.org"
+      - url: "https://horizon.publicnode.com"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "1s"
+    throttle:
+      rps: 40
+      burst: 80
+      batch_size: 20
+      concurrency: 6
+      parallel: true
+
+  stellar_testnet:
+    network_id: "stellar_testnet"
+    internal_code: "STELLAR_TESTNET"
+    type: "stellar"
+    start_block: 0
+    poll_interval: "2s"
+    nodes:
+      - url: "https://horizon-testnet.stellar.org"
+      - url: "https://horizon-testnet.publicnode.com"
+    client:
+      timeout: "15s"
+      max_retries: 3
+      retry_delay: "1s"
+    throttle:
+      rps: 40
+      burst: 80
+      batch_size: 20
+      concurrency: 6
+      parallel: true
 
   ton_mainnet:
     network_id: "ton"

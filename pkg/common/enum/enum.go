@@ -19,14 +19,16 @@ const (
 )
 
 const (
-	NetworkTypeEVM    NetworkType = "evm"
-	NetworkTypeTron   NetworkType = "tron"
-	NetworkTypeBtc    NetworkType = "btc"
-	NetworkTypeSol    NetworkType = "sol"
-	NetworkTypeApt    NetworkType = "apt"
-	NetworkTypeSui    NetworkType = "sui"
-	NetworkTypeCosmos NetworkType = "cosmos"
-	NetworkTypeTon    NetworkType = "ton"
+	NetworkTypeEVM     NetworkType = "evm"
+	NetworkTypeTron    NetworkType = "tron"
+	NetworkTypeBtc     NetworkType = "btc"
+	NetworkTypeSol     NetworkType = "sol"
+	NetworkTypeApt     NetworkType = "apt"
+	NetworkTypeSui     NetworkType = "sui"
+	NetworkTypeCosmos  NetworkType = "cosmos"
+	NetworkTypeTon     NetworkType = "ton"
+	NetworkTypeXRP     NetworkType = "xrp"
+	NetworkTypeStellar NetworkType = "stellar"
 )
 
 var AllNetworkTypes = []NetworkType{
@@ -38,6 +40,8 @@ var AllNetworkTypes = []NetworkType{
 	NetworkTypeSui,
 	NetworkTypeCosmos,
 	NetworkTypeTon,
+	NetworkTypeXRP,
+	NetworkTypeStellar,
 }
 
 const (
