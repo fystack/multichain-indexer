@@ -198,27 +198,31 @@ func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerM
 		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,
 	)
 
-	// Trace pool rate limiter — dedicated budget to avoid starving main pool.
+	// Trace pool rate limiter — only created when debug_trace is enabled.
+	// Dedicated budget to avoid starving main pool.
 	// Defaults to half the main pool if not explicitly configured.
-	traceRPS := chainCfg.TraceThrottle.RPS
-	traceBurst := chainCfg.TraceThrottle.Burst
-	if traceRPS <= 0 {
-		traceRPS = max(1, chainCfg.Throttle.RPS/2)
+	var traceRL *ratelimiter.PooledRateLimiter
+	if chainCfg.DebugTrace {
+		traceRPS := chainCfg.TraceThrottle.RPS
+		traceBurst := chainCfg.TraceThrottle.Burst
+		if traceRPS <= 0 {
+			traceRPS = max(1, chainCfg.Throttle.RPS/2)
+		}
+		if traceBurst <= 0 {
+			traceBurst = max(1, chainCfg.Throttle.Burst/2)
+		}
+		// Note: keyed by chainName (not node URL), so all trace providers for this chain
+		// share one budget. This is intentional — trace_rps/trace_burst is a chain-level
+		// cap, not per-node. Same pattern as the main rate limiter.
+		traceRL = ratelimiter.GetOrCreateScopedPooledRateLimiter(chainName, "trace", traceRPS, traceBurst)
 	}
-	if traceBurst <= 0 {
-		traceBurst = max(1, chainCfg.Throttle.Burst/2)
-	}
-	// Note: keyed by chainName (not node URL), so all trace providers for this chain
-	// share one budget. This is intentional — trace_rps/trace_burst is a chain-level
-	// cap, not per-node. Same pattern as the main rate limiter.
-	traceRL := ratelimiter.GetOrCreateScopedPooledRateLimiter(chainName, "trace", traceRPS, traceBurst)
 
 	for i, node := range chainCfg.Nodes {
 		// Main pool provider
 		failover.AddProvider(newEVMProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
 
 		// Trace pool: SEPARATE provider instance — no shared mutable state
-		if node.DebugTrace {
+		if node.DebugTrace && chainCfg.DebugTrace {
 			if traceFailover == nil {
 				traceFailover = rpc.NewFailover[evm.EthereumAPI](nil)
 			}

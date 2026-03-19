@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -266,12 +267,12 @@ func TestRuntimeTracePoolExhaustion(t *testing.T) {
 func TestTransientErrorResilience(t *testing.T) {
 	// Use a single server that fails on first call, succeeds on second.
 	// This avoids shuffle ordering issues with multiple providers.
-	attempt := 0
+	var attempt atomic.Int32
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempt++
+		n := attempt.Add(1)
 		w.Header().Set("Content-Type", "application/json")
-		if attempt == 1 {
+		if n == 1 {
 			// First call: transient generic error (not timeout/rate-limit — just a server hiccup)
 			fmt.Fprintf(w, `{"jsonrpc":"2.0","error":{"code":-32000,"message":"internal server error"},"id":1}`)
 			return
@@ -307,7 +308,7 @@ func TestTransientErrorResilience(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, trace)
 	assert.Equal(t, "CALL", trace.Type)
-	assert.Equal(t, 2, attempt, "should have made exactly 2 RPC calls (1 fail + 1 success)")
+	assert.Equal(t, int32(2), attempt.Load(), "should have made exactly 2 RPC calls (1 fail + 1 success)")
 }
 
 // TestCapabilityErrorBlacklist verifies that a "method not found" error
