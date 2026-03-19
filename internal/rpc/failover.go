@@ -560,20 +560,28 @@ func (f *Failover[T]) logProviderMetrics(p *Provider, elapsed time.Duration) {
 	}
 	f.lastHealthCheck = now
 
+	// Read provider fields under the provider's lock to avoid data races
+	// when called concurrently from multiple goroutines (e.g., fetchTraces).
+	p.mu.RLock()
+	state := p.State
+	avgResponseTime := p.AverageResponseTime
+	consecutiveErrors := p.ConsecutiveErrors
+	p.mu.RUnlock()
+
 	statusEmoji := map[string]string{
 		StateHealthy:     "✅",
 		StateDegraded:    "⚠️",
 		StateUnhealthy:   "❌",
 		StateBlacklisted: "🚫",
-	}[p.State]
+	}[state]
 
 	logger.Info("Provider metrics",
 		"name", p.Name,
-		"state", p.State,
+		"state", state,
 		"emoji", statusEmoji,
 		"latency_ms", elapsed.Milliseconds(),
-		"avg_latency_ms", p.AverageResponseTime.Milliseconds(),
-		"errors", p.ConsecutiveErrors,
+		"avg_latency_ms", avgResponseTime.Milliseconds(),
+		"errors", consecutiveErrors,
 	)
 }
 
