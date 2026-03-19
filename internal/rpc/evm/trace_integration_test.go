@@ -14,29 +14,39 @@ import (
 )
 
 // Mainnet RPC with debug_traceTransaction support.
-// Override with TRACE_RPC_URL env var:
+// Must be set via TRACE_RPC_URL env var:
 //
 //	TRACE_RPC_URL=https://your-rpc.example.com go test ./internal/rpc/evm/ -run Integration -v
-const defaultTraceRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
+//
+// Optionally set TRACE_RPC_ORIGIN and TRACE_RPC_REFERER for RPCs that require custom headers.
 
 // Mainnet Gnosis Safe tx with internal ETH transfer:
 // From EOA 0xA768d264... → Safe contract 0x84ba2321... → 0.1 ETH to 0xc26dC13d...
 const mainnetSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb65193963f6059b1f9"
 const mainnetSafeBlock = uint64(22869070)
 
-func traceRPCURL() string {
-	if url := os.Getenv("TRACE_RPC_URL"); url != "" {
-		return url
+func traceRPCURL(t *testing.T) string {
+	t.Helper()
+	url := os.Getenv("TRACE_RPC_URL")
+	if url == "" {
+		t.Skip("TRACE_RPC_URL not set, skipping integration test")
 	}
-	return defaultTraceRPC
+	return url
 }
 
-func newTraceClient() *Client {
-	c := NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
-	c.SetCustomHeaders(map[string]string{
-		"Referer": "https://app.uniswap.org/",
-		"Origin":  "https://app.uniswap.org",
-	})
+func newTraceClient(t *testing.T) *Client {
+	t.Helper()
+	c := NewEthereumClient(traceRPCURL(t), nil, 30*time.Second, nil)
+	headers := make(map[string]string)
+	if origin := os.Getenv("TRACE_RPC_ORIGIN"); origin != "" {
+		headers["Origin"] = origin
+	}
+	if referer := os.Getenv("TRACE_RPC_REFERER"); referer != "" {
+		headers["Referer"] = referer
+	}
+	if len(headers) > 0 {
+		c.SetCustomHeaders(headers)
+	}
 	return c
 }
 
@@ -47,7 +57,7 @@ func TestDebugTraceTransaction_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	c := newTraceClient()
+	c := newTraceClient(t)
 
 	trace, err := c.DebugTraceTransaction(ctx, mainnetSafeTxHash)
 	require.NoError(t, err, "debug_traceTransaction should succeed on Tenderly")
@@ -89,7 +99,7 @@ func TestExtractInternalTransfers_RealSafeTx_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	c := newTraceClient()
+	c := newTraceClient(t)
 
 	// Fetch the trace
 	trace, err := c.DebugTraceTransaction(ctx, mainnetSafeTxHash)
@@ -143,7 +153,7 @@ func TestExtractInternalTransfers_BatchSendNative_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	c := newTraceClient()
+	c := newTraceClient(t)
 
 	batchTxHash := "0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b"
 	batchBlockNum := uint64(24669397)
@@ -237,10 +247,11 @@ func TestProviderIsolation_Integration(t *testing.T) {
 	}
 	mainFailover.AddProvider(mainProvider)
 
-	// Trace pool: Tenderly (debug support)
-	traceClient := NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
+	// Trace pool: debug-capable node
+	traceURL := traceRPCURL(t)
+	traceClient := NewEthereumClient(traceURL, nil, 30*time.Second, nil)
 	traceProvider := &rpc.Provider{
-		Name: "sepolia-trace", URL: traceRPCURL(),
+		Name: "trace-node", URL: traceURL,
 		Network: "sepolia", ClientType: "rpc", Client: traceClient, State: rpc.StateHealthy,
 	}
 	traceFailover.AddProvider(traceProvider)

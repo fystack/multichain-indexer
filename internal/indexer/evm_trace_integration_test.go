@@ -18,24 +18,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const defaultMainnetRPC = "https://mainnet.infura.io/v3/099fc58e0de9451d80b18d7c74caa7c1"
+// Must be set via TRACE_RPC_URL env var.
+// Optionally set TRACE_RPC_ORIGIN and TRACE_RPC_REFERER for RPCs that require custom headers.
 const integrationSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb65193963f6059b1f9"
 const integrationSafeBlockNum = uint64(22869070)
 const integrationSafeBlockHex = "0x15cd8ee"
 
-func traceRPCURL() string {
-	if url := os.Getenv("TRACE_RPC_URL"); url != "" {
-		return url
+func traceRPCURL(t *testing.T) string {
+	t.Helper()
+	url := os.Getenv("TRACE_RPC_URL")
+	if url == "" {
+		t.Skip("TRACE_RPC_URL not set, skipping integration test")
 	}
-	return defaultMainnetRPC
+	return url
 }
 
-func newTraceTestClient() *evm.Client {
-	c := evm.NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
-	c.SetCustomHeaders(map[string]string{
-		"Referer": "https://app.uniswap.org/",
-		"Origin":  "https://app.uniswap.org",
-	})
+func newTraceTestClient(t *testing.T) *evm.Client {
+	t.Helper()
+	c := evm.NewEthereumClient(traceRPCURL(t), nil, 30*time.Second, nil)
+	headers := make(map[string]string)
+	if origin := os.Getenv("TRACE_RPC_ORIGIN"); origin != "" {
+		headers["Origin"] = origin
+	}
+	if referer := os.Getenv("TRACE_RPC_REFERER"); referer != "" {
+		headers["Referer"] = referer
+	}
+	if len(headers) > 0 {
+		c.SetCustomHeaders(headers)
+	}
 	return c
 }
 
@@ -47,7 +57,7 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	c := newTraceTestClient()
+	c := newTraceTestClient(t)
 
 	// Fetch receipt
 	receipts, err := c.BatchGetTransactionReceipts(ctx, []string{integrationSafeTxHash})
@@ -111,7 +121,7 @@ func TestEndToEnd_BatchSendNative_Integration(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	c := newTraceTestClient()
+	c := newTraceTestClient(t)
 
 	batchTxHash := "0x3659bdb7f7ee48701603159e20357986bdfc3da87428d505841475f212a8369b"
 	batchBlockNum := uint64(24669397)
