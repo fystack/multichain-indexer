@@ -32,7 +32,12 @@ func traceRPCURL() string {
 }
 
 func newTraceClient() *Client {
-	return NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
+	c := NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
+	c.SetCustomHeaders(map[string]string{
+		"Referer": "https://app.uniswap.org/",
+		"Origin":  "https://app.uniswap.org",
+	})
+	return c
 }
 
 // TestDebugTraceTransaction_Integration verifies the RPC call returns a valid CallTrace.

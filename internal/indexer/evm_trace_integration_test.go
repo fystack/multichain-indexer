@@ -31,7 +31,12 @@ func traceRPCURL() string {
 }
 
 func newTraceTestClient() *evm.Client {
-	return evm.NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
+	c := evm.NewEthereumClient(traceRPCURL(), nil, 30*time.Second, nil)
+	c.SetCustomHeaders(map[string]string{
+		"Referer": "https://app.uniswap.org/",
+		"Origin":  "https://app.uniswap.org",
+	})
+	return c
 }
 
 // TestEndToEnd_TraceInConvertBlock_Integration runs the full pipeline:
