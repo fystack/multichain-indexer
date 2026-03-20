@@ -62,18 +62,20 @@ func ExtractSafeTransfers(
 	}
 
 	fee := tx.CalcFee(receipt)
+	txIdx := hexIndexToDecimal(tx.TransactionIndex)
 
 	return []types.Transaction{
 		{
-			TxHash:      tx.Hash,
-			NetworkId:   network,
-			BlockNumber: blockNumber,
-			FromAddress: ToChecksumAddress(tx.To), // Safe contract is the sender
-			ToAddress:   params.To,                // decoded recipient
-			Amount:      params.Value.String(),
-			Type:        constant.TxTypeNativeTransfer,
-			TxFee:       fee,
-			Timestamp:   ts,
+			TxHash:        tx.Hash,
+			NetworkId:     network,
+			BlockNumber:   blockNumber,
+			TransferIndex: txIdx + ":safe:0",
+			FromAddress:   ToChecksumAddress(tx.To), // Safe contract is the sender
+			ToAddress:     params.To,                // decoded recipient
+			Amount:        params.Value.String(),
+			Type:          constant.TxTypeNativeTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
 		},
 	}
 }

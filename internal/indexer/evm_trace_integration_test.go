@@ -19,17 +19,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Must be set via TRACE_RPC_URL env var.
-// Optionally set TRACE_RPC_ORIGIN and TRACE_RPC_REFERER for RPCs that require custom headers.
+// Must be set via RPC_URL env var.
+// Optionally set RPC_ORIGIN and RPC_REFERER for RPCs that require custom headers.
 const integrationSafeTxHash = "0x7c98ff7c910b025736b11d2f70db001d5c2ec25df6de9fb65193963f6059b1f9"
 const integrationSafeBlockNum = uint64(22869070)
 const integrationSafeBlockHex = "0x15cd8ee"
 
 func traceRPCURL(t *testing.T) string {
 	t.Helper()
-	url := os.Getenv("TRACE_RPC_URL")
+	url := os.Getenv("RPC_URL")
 	if url == "" {
-		t.Skip("TRACE_RPC_URL not set, skipping integration test")
+		t.Skip("RPC_URL not set, skipping integration test")
 	}
 	return url
 }
@@ -38,10 +38,10 @@ func newTraceTestClient(t *testing.T) *evm.Client {
 	t.Helper()
 	c := evm.NewEthereumClient(traceRPCURL(t), nil, 30*time.Second, nil)
 	headers := make(map[string]string)
-	if origin := os.Getenv("TRACE_RPC_ORIGIN"); origin != "" {
+	if origin := os.Getenv("RPC_ORIGIN"); origin != "" {
 		headers["Origin"] = origin
 	}
-	if referer := os.Getenv("TRACE_RPC_REFERER"); referer != "" {
+	if referer := os.Getenv("RPC_REFERER"); referer != "" {
 		headers["Referer"] = referer
 	}
 	if len(headers) > 0 {

@@ -4,11 +4,29 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
+	"strconv"
 	"strings"
 
+	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"golang.org/x/crypto/sha3"
 )
+
+// hexIndexToDecimal converts a hex string like "0x5" to decimal string "5".
+// Used for TransactionIndex and LogIndex in TransferIndex construction.
+// On malformed input, returns the raw string to preserve uniqueness and logs a warning.
+func hexIndexToDecimal(hex string) string {
+	val, err := utils.ParseHexUint64(hex)
+	if err != nil {
+		if hex == "" {
+			return "0"
+		}
+		slog.Warn("hexIndexToDecimal: malformed hex index, using raw value", "hex", hex)
+		return hex
+	}
+	return strconv.FormatUint(val, 10)
+}
 
 // DecodeERC20TransferInput parses ERC20 transfer(address,uint256)
 func DecodeERC20TransferInput(input string) (string, *big.Int, error) {

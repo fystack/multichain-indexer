@@ -1,6 +1,7 @@
 package evm
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
@@ -32,8 +33,10 @@ func ExtractInternalTransfers(
 	isPlainNativeTransfer := tx.To != "" && (strings.TrimPrefix(tx.Input, "0x") == "")
 	skipRoot := isPlainNativeTransfer
 
+	txIdx := hexIndexToDecimal(tx.TransactionIndex)
+	counter := 0
 	var out []types.Transaction
-	walkCallTrace(trace, tx.Hash, fee, networkId, blockNumber, timestamp, skipRoot, true, &out)
+	walkCallTrace(trace, tx.Hash, fee, networkId, blockNumber, timestamp, skipRoot, true, &out, txIdx, &counter)
 	return out
 }
 
@@ -47,6 +50,8 @@ func walkCallTrace(
 	skipRoot bool,
 	isRoot bool,
 	out *[]types.Transaction,
+	txIdx string,
+	counter *int,
 ) {
 	if call == nil {
 		return
@@ -71,21 +76,23 @@ func walkCallTrace(
 		val, err := utils.ParseHexBigInt(call.Value)
 		if err == nil && val.Sign() > 0 {
 			*out = append(*out, types.Transaction{
-				TxHash:      txHash,
-				NetworkId:   networkId,
-				BlockNumber: blockNumber,
-				FromAddress: ToChecksumAddress(call.From),
-				ToAddress:   ToChecksumAddress(call.To),
-				Amount:      val.String(),
-				Type:        constant.TxTypeNativeTransfer,
-				TxFee:       fee,
-				Timestamp:   timestamp,
+				TxHash:        txHash,
+				NetworkId:     networkId,
+				BlockNumber:   blockNumber,
+				TransferIndex: txIdx + ":trace:" + strconv.Itoa(*counter),
+				FromAddress:   ToChecksumAddress(call.From),
+				ToAddress:     ToChecksumAddress(call.To),
+				Amount:        val.String(),
+				Type:          constant.TxTypeNativeTransfer,
+				TxFee:         fee,
+				Timestamp:     timestamp,
 			})
+			*counter++
 		}
 	}
 
 	// Recurse into child calls
 	for i := range call.Calls {
-		walkCallTrace(&call.Calls[i], txHash, fee, networkId, blockNumber, timestamp, false, false, out)
+		walkCallTrace(&call.Calls[i], txHash, fee, networkId, blockNumber, timestamp, false, false, out, txIdx, counter)
 	}
 }

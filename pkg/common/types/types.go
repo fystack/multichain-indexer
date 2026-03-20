@@ -45,6 +45,8 @@ type Transaction struct {
 	TxHash        string          `json:"txHash"`
 	NetworkId     string          `json:"networkId"`
 	BlockNumber   uint64          `json:"blockNumber"` // 0 for mempool transactions
+	BlockHash     string          `json:"blockHash"`     // block hash for reorg-aware idempotency
+	TransferIndex string          `json:"transferIndex"` // unique position within tx (EVM only)
 	FromAddress   string          `json:"fromAddress"`
 	ToAddress     string          `json:"toAddress"`
 	AssetAddress  string          `json:"assetAddress"`
@@ -88,21 +90,41 @@ func (t Transaction) String() string {
 	)
 }
 
-// Hash generates a deterministic hash for the transaction that can be used as an idempotent key.
-// Direction is included so that internal transfers (both addresses monitored) produce distinct hashes.
+// Hash generates a deterministic hash used as the NATS idempotency key (Event Instance Identity).
+//
+// When TransferIndex is set (EVM): NetworkId|TxHash|BlockHash|TransferIndex|Direction
+// When TransferIndex is empty (non-EVM fallback): NetworkId|TxHash|BlockHash|From|To|Timestamp|Direction
+//
+// BlockHash ensures reorgs produce new hashes so consumers get updated data.
+// Direction ensures two-way-indexed in/out events don't collide.
 func (t Transaction) Hash() string {
 	var builder strings.Builder
 	builder.WriteString(t.NetworkId)
 	builder.WriteByte('|')
 	builder.WriteString(t.TxHash)
 	builder.WriteByte('|')
-	builder.WriteString(t.FromAddress)
+	builder.WriteString(t.BlockHash)
 	builder.WriteByte('|')
-	builder.WriteString(t.ToAddress)
-	builder.WriteByte('|')
-	builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
-	builder.WriteByte('|')
-	builder.WriteString(t.Direction)
+
+	if t.TransferIndex != "" {
+		// EVM (or any chain that populates TransferIndex):
+		// Exact positional identity — reorg-aware via BlockHash.
+		builder.WriteString(t.TransferIndex)
+		builder.WriteByte('|')
+		builder.WriteString(t.Direction)
+	} else {
+		// Non-EVM fallback: preserve current hash behavior.
+		// Uses addresses + timestamp to distinguish multiple transfers
+		// from the same tx until that chain populates TransferIndex.
+		builder.WriteString(t.FromAddress)
+		builder.WriteByte('|')
+		builder.WriteString(t.ToAddress)
+		builder.WriteByte('|')
+		builder.WriteString(strconv.FormatUint(t.Timestamp, 10))
+		builder.WriteByte('|')
+		builder.WriteString(t.Direction)
+	}
+
 	hash := sha256.Sum256([]byte(builder.String()))
 	return fmt.Sprintf("%x", hash)
 }

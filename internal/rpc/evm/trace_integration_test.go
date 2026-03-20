@@ -14,11 +14,11 @@ import (
 )
 
 // Mainnet RPC with debug_traceTransaction support.
-// Must be set via TRACE_RPC_URL env var:
+// Must be set via RPC_URL env var:
 //
-//	TRACE_RPC_URL=https://your-rpc.example.com go test ./internal/rpc/evm/ -run Integration -v
+//	RPC_URL=https://your-rpc.example.com go test ./internal/rpc/evm/ -run Integration -v
 //
-// Optionally set TRACE_RPC_ORIGIN and TRACE_RPC_REFERER for RPCs that require custom headers.
+// Optionally set RPC_ORIGIN and RPC_REFERER for RPCs that require custom headers.
 
 // Mainnet Gnosis Safe tx with internal ETH transfer:
 // From EOA 0xA768d264... → Safe contract 0x84ba2321... → 0.1 ETH to 0xc26dC13d...
@@ -27,9 +27,9 @@ const mainnetSafeBlock = uint64(22869070)
 
 func traceRPCURL(t *testing.T) string {
 	t.Helper()
-	url := os.Getenv("TRACE_RPC_URL")
+	url := os.Getenv("RPC_URL")
 	if url == "" {
-		t.Skip("TRACE_RPC_URL not set, skipping integration test")
+		t.Skip("RPC_URL not set, skipping integration test")
 	}
 	return url
 }
@@ -38,10 +38,10 @@ func newTraceClient(t *testing.T) *Client {
 	t.Helper()
 	c := NewEthereumClient(traceRPCURL(t), nil, 30*time.Second, nil)
 	headers := make(map[string]string)
-	if origin := os.Getenv("TRACE_RPC_ORIGIN"); origin != "" {
+	if origin := os.Getenv("RPC_ORIGIN"); origin != "" {
 		headers["Origin"] = origin
 	}
-	if referer := os.Getenv("TRACE_RPC_REFERER"); referer != "" {
+	if referer := os.Getenv("RPC_REFERER"); referer != "" {
 		headers["Referer"] = referer
 	}
 	if len(headers) > 0 {
