@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,14 @@ type SuiIndexer struct {
 
 const suiMistPerSUI = 1_000_000_000
 const suiNativeCoinType = "0x2::sui::SUI"
+const suiSystemPackage = "0x3"
+const suiZeroAddress = "0x0"
+
+type suiBalanceDelta struct {
+	Address  string
+	CoinType string
+	Amount   *big.Int
+}
 
 func isSuiNativeCoinType(coinType string) bool {
 	coinType = strings.TrimSpace(coinType)
@@ -66,6 +76,375 @@ func normalizeSuiAddress(addr string) string {
 		hex = "0"
 	}
 	return "0x" + hex
+}
+
+func normalizeSuiIdentifier(v string) string {
+	return strings.ToLower(strings.TrimSpace(v))
+}
+
+func sameSuiAddress(a, b string) bool {
+	return normalizeSuiAddress(a) == normalizeSuiAddress(b)
+}
+
+func isSuiSystemSender(addr string) bool {
+	return sameSuiAddress(addr, suiZeroAddress)
+}
+
+func makeSuiBaseTransaction(execTx *v2.ExecutedTransaction, networkID string, blockNumber, blockTs uint64) types.Transaction {
+	t := types.Transaction{
+		TxHash:      execTx.GetDigest(),
+		NetworkId:   networkID,
+		BlockNumber: blockNumber,
+		Timestamp:   blockTs,
+	}
+
+	if execTx.Transaction != nil {
+		t.FromAddress = execTx.Transaction.GetSender()
+	}
+
+	if execTx.Effects != nil && execTx.Effects.GasUsed != nil {
+		g := execTx.Effects.GasUsed
+		cost := uint64(0)
+		if g.StorageCost != nil {
+			cost += *g.StorageCost
+		}
+		if g.ComputationCost != nil {
+			cost += *g.ComputationCost
+		}
+		if g.NonRefundableStorageFee != nil {
+			cost += *g.NonRefundableStorageFee
+		}
+		if g.StorageRebate != nil {
+			if cost > *g.StorageRebate {
+				cost -= *g.StorageRebate
+			} else {
+				cost = 0
+			}
+		}
+		t.TxFee = decimal.NewFromBigInt(new(big.Int).SetUint64(cost), 0).Div(decimal.NewFromInt(suiMistPerSUI))
+	}
+
+	return t
+}
+
+func parseSuiBalanceChanges(changes []*v2.BalanceChange) []suiBalanceDelta {
+	deltas := make([]suiBalanceDelta, 0, len(changes))
+	for _, bc := range changes {
+		if bc == nil {
+			continue
+		}
+		amt, ok := new(big.Int).SetString(bc.GetAmount(), 10)
+		if !ok || amt.Sign() == 0 {
+			continue
+		}
+		deltas = append(deltas, suiBalanceDelta{
+			Address:  bc.GetAddress(),
+			CoinType: bc.GetCoinType(),
+			Amount:   amt,
+		})
+	}
+	return deltas
+}
+
+func biggestPositiveDelta(deltas []suiBalanceDelta, skipAddr string) (suiBalanceDelta, bool) {
+	var best suiBalanceDelta
+	found := false
+	for _, delta := range deltas {
+		if skipAddr != "" && sameSuiAddress(delta.Address, skipAddr) {
+			continue
+		}
+		if delta.Amount.Sign() <= 0 {
+			continue
+		}
+		if !found || delta.Amount.Cmp(best.Amount) > 0 {
+			best = delta
+			found = true
+		}
+	}
+	return best, found
+}
+
+func parseBigIntString(v string) (*big.Int, bool) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, false
+	}
+	n, ok := new(big.Int).SetString(v, 10)
+	return n, ok
+}
+
+func classifySuiTransferType(coinType string) (constant.TxType, string) {
+	if isSuiNativeCoinType(coinType) {
+		return constant.TxTypeNativeTransfer, suiNativeCoinType
+	}
+	return constant.TxTypeTokenTransfer, coinType
+}
+
+func eventJSONMap(evt *v2.Event) map[string]any {
+	if evt == nil || evt.GetJson() == nil {
+		return nil
+	}
+	raw := evt.GetJson().AsInterface()
+	m, _ := raw.(map[string]any)
+	return m
+}
+
+func jsonString(m map[string]any, keys ...string) string {
+	for _, key := range keys {
+		v, ok := m[key]
+		if !ok || v == nil {
+			continue
+		}
+		switch val := v.(type) {
+		case string:
+			return strings.TrimSpace(val)
+		case float64:
+			if val == float64(int64(val)) {
+				return strconv.FormatInt(int64(val), 10)
+			}
+		}
+	}
+	return ""
+}
+
+func eventAmountString(m map[string]any) string {
+	for _, key := range []string{"amount", "value", "qty"} {
+		if v := jsonString(m, key); v != "" {
+			if n, ok := parseBigIntString(v); ok {
+				return n.String()
+			}
+		}
+	}
+	return "0"
+}
+
+func eventCoinType(evt *v2.Event, m map[string]any) string {
+	if coinType := jsonString(m, "coinType", "coin_type", "type", "asset", "tokenType"); coinType != "" {
+		return coinType
+	}
+	eventType := evt.GetEventType()
+	if parts := strings.Split(eventType, "::"); len(parts) >= 3 {
+		return strings.Join(parts[:3], "::")
+	}
+	return ""
+}
+
+func isSuiSwapModule(module string) bool {
+	module = normalizeSuiIdentifier(module)
+	for _, keyword := range []string{"pool", "router", "amm", "clmm"} {
+		if strings.Contains(module, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSuiSwapFunction(function string) bool {
+	function = normalizeSuiIdentifier(function)
+	for _, keyword := range []string{"swap", "swap_exact", "swap_x", "swap_y", "swap_a", "swap_b"} {
+		if strings.Contains(function, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSuiSwapEvent(evt *v2.Event) bool {
+	if evt == nil {
+		return false
+	}
+	eventType := normalizeSuiIdentifier(evt.GetEventType())
+	module := normalizeSuiIdentifier(evt.GetModule())
+
+	switch {
+	case strings.Contains(eventType, "::swapevent"),
+		strings.Contains(eventType, "::swap_event"),
+		strings.Contains(eventType, "::swapexecutedevent"),
+		strings.Contains(eventType, "::swap_executed_event"),
+		strings.Contains(eventType, "::swapcompletedevent"),
+		strings.Contains(eventType, "::swap_completed_event"):
+		return true
+	case isSuiSwapModule(module):
+		return strings.Contains(eventType, "swap")
+	default:
+		return false
+	}
+}
+
+func isSuiValidatorStakeEvent(evt *v2.Event) bool {
+	if evt == nil {
+		return false
+	}
+	eventType := normalizeSuiIdentifier(evt.GetEventType())
+	module := normalizeSuiIdentifier(evt.GetModule())
+	return strings.Contains(eventType, "::validator::stakingrequestevent") ||
+		(module == "validator" && strings.Contains(eventType, "stakingrequest"))
+}
+
+func isSuiValidatorUnstakeEvent(evt *v2.Event) bool {
+	if evt == nil {
+		return false
+	}
+	eventType := normalizeSuiIdentifier(evt.GetEventType())
+	module := normalizeSuiIdentifier(evt.GetModule())
+	return (module == "validator" || strings.Contains(eventType, "::validator::")) &&
+		(strings.Contains(eventType, "withdrawstake") ||
+			strings.Contains(eventType, "unstake") ||
+			strings.Contains(eventType, "withdrawal"))
+}
+
+func commandSummary(tx *v2.Transaction) (moveCalls []*v2.MoveCall) {
+	if tx == nil || tx.GetKind() == nil {
+		return
+	}
+	pt := tx.GetKind().GetProgrammableTransaction()
+	if pt == nil {
+		return
+	}
+	for _, cmd := range pt.GetCommands() {
+		if cmd.GetMoveCall() != nil {
+			moveCalls = append(moveCalls, cmd.GetMoveCall())
+		}
+	}
+	return
+}
+
+func classifyMoveCall(mc *v2.MoveCall) constant.TxType {
+	if mc == nil {
+		return ""
+	}
+	module := normalizeSuiIdentifier(mc.GetModule())
+	function := normalizeSuiIdentifier(mc.GetFunction())
+	pkg := normalizeSuiAddress(mc.GetPackage())
+
+	switch {
+	case pkg == suiSystemPackage && module == "sui_system" &&
+		(strings.Contains(function, "add_stake") || strings.Contains(function, "request_add_stake")):
+		return constant.TxTypeStake
+	case pkg == suiSystemPackage && module == "sui_system" &&
+		(strings.Contains(function, "withdraw_stake") || strings.Contains(function, "request_withdraw_stake") || strings.Contains(function, "unstake")):
+		return constant.TxTypeUnstake
+	case isSuiSwapModule(module) && isSuiSwapFunction(function):
+		return constant.TxTypeSwap
+	default:
+		return ""
+	}
+}
+
+func uniqueTransactions(txs []types.Transaction) []types.Transaction {
+	if len(txs) <= 1 {
+		return txs
+	}
+
+	out := make([]types.Transaction, 0, len(txs))
+	seen := make(map[string]struct{}, len(txs))
+	for _, tx := range txs {
+		key := strings.Join([]string{
+			tx.TxHash,
+			string(tx.Type),
+			normalizeSuiAddress(tx.FromAddress),
+			normalizeSuiAddress(tx.ToAddress),
+			tx.AssetAddress,
+			tx.Amount,
+		}, "|")
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tx)
+	}
+
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Type != out[j].Type {
+			return out[i].Type < out[j].Type
+		}
+		if out[i].AssetAddress != out[j].AssetAddress {
+			return out[i].AssetAddress < out[j].AssetAddress
+		}
+		if out[i].ToAddress != out[j].ToAddress {
+			return out[i].ToAddress < out[j].ToAddress
+		}
+		return out[i].Amount < out[j].Amount
+	})
+
+	return out
+}
+
+func (s *SuiIndexer) transferTransactionsFromBalanceChanges(base types.Transaction, deltas []suiBalanceDelta) []types.Transaction {
+	out := make([]types.Transaction, 0, len(deltas))
+	for _, delta := range deltas {
+		if delta.Amount.Sign() <= 0 || sameSuiAddress(delta.Address, base.FromAddress) {
+			continue
+		}
+		tx := base
+		tx.ToAddress = delta.Address
+		tx.Amount = delta.Amount.String()
+		tx.Type, tx.AssetAddress = classifySuiTransferType(delta.CoinType)
+		out = append(out, tx)
+	}
+	return out
+}
+
+func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.ExecutedTransaction) []types.Transaction {
+	if execTx.GetEvents() == nil {
+		return nil
+	}
+
+	var out []types.Transaction
+	for _, evt := range execTx.GetEvents().GetEvents() {
+		if evt == nil {
+			continue
+		}
+		eventType := normalizeSuiIdentifier(evt.GetEventType())
+		data := eventJSONMap(evt)
+
+		switch {
+		case isSuiValidatorStakeEvent(evt):
+			tx := base
+			tx.Type = constant.TxTypeStake
+			tx.ToAddress = jsonString(data, "validator_address", "validator", "pool_id")
+			if tx.ToAddress == "" {
+				tx.ToAddress = base.FromAddress
+			}
+			tx.AssetAddress = suiNativeCoinType
+			tx.Amount = eventAmountString(data)
+			out = append(out, tx)
+		case isSuiValidatorUnstakeEvent(evt):
+			tx := base
+			tx.Type = constant.TxTypeUnstake
+			tx.ToAddress = base.FromAddress
+			tx.AssetAddress = suiNativeCoinType
+			tx.Amount = eventAmountString(data)
+			out = append(out, tx)
+		case isSuiSwapEvent(evt):
+			tx := base
+			tx.Type = constant.TxTypeSwap
+			tx.ToAddress = base.FromAddress
+			tx.AssetAddress = eventCoinType(evt, data)
+			tx.Amount = eventAmountString(data)
+			out = append(out, tx)
+		case strings.Contains(eventType, "::transfer"):
+			tx := base
+			tx.FromAddress = jsonString(data, "from", "sender")
+			if tx.FromAddress == "" {
+				tx.FromAddress = base.FromAddress
+			}
+			tx.ToAddress = jsonString(data, "to", "recipient", "receiver", "owner")
+			if tx.ToAddress == "" {
+				continue
+			}
+			tx.AssetAddress = eventCoinType(evt, data)
+			tx.Amount = eventAmountString(data)
+			if tx.AssetAddress != "" {
+				tx.Type, tx.AssetAddress = classifySuiTransferType(tx.AssetAddress)
+			} else {
+				tx.Type = constant.TxTypeTokenTransfer
+			}
+			out = append(out, tx)
+		}
+	}
+
+	return out
 }
 
 func NewSuiIndexer(chainName string, cfg config.ChainConfig, f *rpc.Failover[sui.SuiAPI], pubkeyStore PubkeyStore) *SuiIndexer {
@@ -286,14 +665,15 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 
 	txs := make([]types.Transaction, 0, len(cp.GetTransactions()))
 	for _, execTx := range cp.GetTransactions() {
-		tx := s.convertTransaction(execTx, cp.SequenceNumber(), ts)
-		if tx.ToAddress == "" {
-			continue
+		for _, tx := range s.convertTransactions(execTx, cp.SequenceNumber(), ts) {
+			if tx.ToAddress == "" {
+				continue
+			}
+			if !s.isMonitoredTransfer(tx.FromAddress, tx.ToAddress) {
+				continue
+			}
+			txs = append(txs, tx)
 		}
-		if !s.isMonitoredTransfer(tx.FromAddress, tx.ToAddress) {
-			continue
-		}
-		txs = append(txs, tx)
 	}
 
 	return &types.Block{
@@ -306,80 +686,54 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 }
 
 func (s *SuiIndexer) convertTransaction(execTx *v2.ExecutedTransaction, blockNumber, blockTs uint64) types.Transaction {
-	t := types.Transaction{
-		TxHash:      execTx.GetDigest(),
-		NetworkId:   s.cfg.InternalCode,
-		BlockNumber: blockNumber,
-		Timestamp:   blockTs,
+	txs := s.convertTransactions(execTx, blockNumber, blockTs)
+	if len(txs) == 0 {
+		return types.Transaction{}
+	}
+	return txs[0]
+}
+
+func (s *SuiIndexer) convertTransactions(execTx *v2.ExecutedTransaction, blockNumber, blockTs uint64) []types.Transaction {
+	base := makeSuiBaseTransaction(execTx, s.cfg.InternalCode, blockNumber, blockTs)
+	if base.FromAddress == "" || isSuiSystemSender(base.FromAddress) {
+		return nil
 	}
 
-	// 1. Sender
-	if execTx.Transaction != nil {
-		t.FromAddress = execTx.Transaction.GetSender()
-	}
+	deltas := parseSuiBalanceChanges(execTx.GetBalanceChanges())
+	var out []types.Transaction
 
-	// 2. TxFee
-	// Cost = StorageCost + ComputationCost + NonRefundableStorageFee - StorageRebate
-	if execTx.Effects != nil && execTx.Effects.GasUsed != nil {
-		g := execTx.Effects.GasUsed
-		cost := uint64(0)
-		if g.StorageCost != nil {
-			cost += *g.StorageCost
-		}
-		if g.ComputationCost != nil {
-			cost += *g.ComputationCost
-		}
-		if g.NonRefundableStorageFee != nil {
-			cost += *g.NonRefundableStorageFee
-		}
-		if g.StorageRebate != nil {
-			if cost > *g.StorageRebate {
-				cost -= *g.StorageRebate
-			} else {
-				cost = 0
-			}
-		}
-		t.TxFee = decimal.NewFromBigInt(new(big.Int).SetUint64(cost), 0).Div(decimal.NewFromInt(suiMistPerSUI))
-	}
+	out = append(out, s.transferTransactionsFromBalanceChanges(base, deltas)...)
 
-	// 3. Amount and ToAddress
-	// This is a heuristic: find the largest positive balance change to a non-sender
-	// Note: Sui PTBs can have multiple transfers. This maps to a single "main" action.
-	var maxAmount uint64
-	var maxAsset string
-	var receiver string
+	moveCalls := commandSummary(execTx.GetTransaction())
 
-	for _, bc := range execTx.BalanceChanges {
-		if bc.GetAddress() == t.FromAddress {
+	for _, mc := range moveCalls {
+		eventType := classifyMoveCall(mc)
+		if eventType == "" {
 			continue
 		}
+		tx := base
+		tx.Type = eventType
+		tx.ToAddress = base.FromAddress
+		tx.Amount = "0"
 
-		// Amount is string in proto, need to parse
-		amtStr := bc.GetAmount()
-		amtInt, ok := new(big.Int).SetString(amtStr, 10)
-		// Only look for positive amounts (deposits)
-		if ok && amtInt.Sign() > 0 {
-			val := amtInt.Uint64()
-			if val > maxAmount {
-				maxAmount = val
-				maxAsset = bc.GetCoinType()
-				receiver = bc.GetAddress()
+		switch eventType {
+		case constant.TxTypeSwap:
+			if delta, ok := biggestPositiveDelta(deltas, ""); ok {
+				tx.ToAddress = base.FromAddress
+				tx.Amount = delta.Amount.String()
+				tx.AssetAddress = delta.CoinType
+			}
+		case constant.TxTypeStake, constant.TxTypeUnstake:
+			if delta, ok := biggestPositiveDelta(deltas, ""); ok {
+				tx.AssetAddress = delta.CoinType
+				tx.Amount = delta.Amount.String()
 			}
 		}
+
+		out = append(out, tx)
 	}
 
-	if receiver != "" {
-		t.ToAddress = receiver
-		amount := decimal.NewFromBigInt(new(big.Int).SetUint64(maxAmount), 0)
-		t.AssetAddress = maxAsset
-		if isSuiNativeCoinType(maxAsset) {
-			t.AssetAddress = suiNativeCoinType
-			t.Type = constant.TxTypeNativeTransfer
-		} else {
-			t.Type = constant.TxTypeTokenTransfer
-		}
-		t.Amount = amount.String()
-	}
+	out = append(out, s.eventTransactions(base, execTx)...)
 
-	return t
+	return uniqueTransactions(out)
 }
