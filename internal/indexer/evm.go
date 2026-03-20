@@ -1035,6 +1035,12 @@ func (e *EVMIndexer) convertBlock(
 		allTransfers = append(allTransfers, transfers...)
 	}
 
+	// Set BlockHash on all transfers — extractors don't have block context.
+	// This enables reorg-aware idempotency in Transaction.Hash().
+	for i := range allTransfers {
+		allTransfers[i].BlockHash = eb.Hash
+	}
+
 	return &types.Block{
 		Number:       num,
 		Hash:         eb.Hash,

@@ -52,6 +52,7 @@ func (tx Txn) parseERC20Input(
 	fee decimal.Decimal,
 	network string,
 	blockNumber, ts uint64,
+	txIdx string,
 ) *types.Transaction {
 	// 10 = 2+8
 	//"0x" prefix = 2 characters,
@@ -68,16 +69,17 @@ func (tx Txn) parseERC20Input(
 			return nil
 		}
 		return &types.Transaction{
-			TxHash:       tx.Hash,
-			NetworkId:    network,
-			BlockNumber:  blockNumber,
-			FromAddress:  ToChecksumAddress(tx.From),
-			ToAddress:    to,
-			AssetAddress: ToChecksumAddress(tx.To),
-			Amount:       amount.String(),
-			Type:         constant.TxTypeTokenTransfer,
-			TxFee:        fee,
-			Timestamp:    ts,
+			TxHash:        tx.Hash,
+			NetworkId:     network,
+			BlockNumber:   blockNumber,
+			TransferIndex: txIdx,
+			FromAddress:   ToChecksumAddress(tx.From),
+			ToAddress:     to,
+			AssetAddress:  ToChecksumAddress(tx.To),
+			Amount:        amount.String(),
+			Type:          constant.TxTypeTokenTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
 		}
 
 	case ERC20_TRANSFER_FROM_SIG:
@@ -86,16 +88,17 @@ func (tx Txn) parseERC20Input(
 			return nil
 		}
 		return &types.Transaction{
-			TxHash:       tx.Hash,
-			NetworkId:    network,
-			BlockNumber:  blockNumber,
-			FromAddress:  from,
-			ToAddress:    to,
-			AssetAddress: ToChecksumAddress(tx.To),
-			Amount:       amount.String(),
-			Type:         constant.TxTypeTokenTransfer,
-			TxFee:        fee,
-			Timestamp:    ts,
+			TxHash:        tx.Hash,
+			NetworkId:     network,
+			BlockNumber:   blockNumber,
+			TransferIndex: txIdx,
+			FromAddress:   from,
+			ToAddress:     to,
+			AssetAddress:  ToChecksumAddress(tx.To),
+			Amount:        amount.String(),
+			Type:          constant.TxTypeTokenTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
 		}
 	}
 	return nil
@@ -108,9 +111,10 @@ func (tx Txn) parseERC20Logs(
 	logs []Log,
 	blockNumber, ts uint64,
 ) []types.Transaction {
+	txIdx := hexIndexToDecimal(tx.TransactionIndex)
 	var transfers []types.Transaction
 	for _, log := range logs {
-		parsed, err := log.parseERC20Transfers(fee, txHash, network, blockNumber, ts)
+		parsed, err := log.parseERC20Transfers(fee, txHash, network, blockNumber, ts, txIdx)
 		if err != nil {
 			continue
 		}
@@ -126,25 +130,27 @@ func (tx Txn) ExtractTransfers(
 ) []types.Transaction {
 	var out []types.Transaction
 	fee := tx.CalcFee(receipt)
+	txIdx := hexIndexToDecimal(tx.TransactionIndex)
 
 	// native transfer
 	if val, _ := utils.ParseHexBigInt(tx.Value); val.Sign() > 0 && tx.To != "" && strings.TrimPrefix(tx.Input, "0x") == "" {
 		out = append(out, types.Transaction{
-			TxHash:      tx.Hash,
-			NetworkId:   network,
-			BlockNumber: blockNumber,
-			FromAddress: ToChecksumAddress(tx.From),
-			ToAddress:   ToChecksumAddress(tx.To),
-			Amount:      val.String(),
-			Type:        constant.TxTypeNativeTransfer,
-			TxFee:       fee,
-			Timestamp:   ts,
+			TxHash:        tx.Hash,
+			NetworkId:     network,
+			BlockNumber:   blockNumber,
+			TransferIndex: txIdx,
+			FromAddress:   ToChecksumAddress(tx.From),
+			ToAddress:     ToChecksumAddress(tx.To),
+			Amount:        val.String(),
+			Type:          constant.TxTypeNativeTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
 		})
 	}
 	// ERC20
 	if receipt != nil {
 		out = append(out, tx.parseERC20Logs(fee, network, tx.Hash, receipt.Logs, blockNumber, ts)...)
-	} else if erc20 := tx.parseERC20Input(fee, network, blockNumber, ts); erc20 != nil {
+	} else if erc20 := tx.parseERC20Input(fee, network, blockNumber, ts, txIdx); erc20 != nil {
 		out = append(out, *erc20)
 	}
 	return utils.DedupTransfers(out)
