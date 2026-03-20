@@ -132,7 +132,7 @@ func TestConvertTransactionClassifiesTokenTransfer(t *testing.T) {
 	require.Equal(t, "0x2::usdc::USDC", tx.AssetAddress)
 }
 
-func TestConvertTransactionsClassifiesPhaseEvents(t *testing.T) {
+func TestConvertTransactionsNormalizesPhaseEventsIntoMovements(t *testing.T) {
 	t.Parallel()
 
 	s := &SuiIndexer{
@@ -186,6 +186,7 @@ func TestConvertTransactionsClassifiesPhaseEvents(t *testing.T) {
 
 	typesSeen := map[constant.TxType]typesFixture{}
 	for _, tx := range txs {
+		require.Contains(t, []constant.TxType{constant.TxTypeNativeTransfer, constant.TxTypeTokenTransfer}, tx.Type)
 		typesSeen[tx.Type] = typesFixture{
 			To:     tx.ToAddress,
 			Asset:  tx.AssetAddress,
@@ -194,9 +195,7 @@ func TestConvertTransactionsClassifiesPhaseEvents(t *testing.T) {
 	}
 
 	require.Contains(t, typesSeen, constant.TxTypeNativeTransfer)
-	require.Contains(t, typesSeen, constant.TxTypeStake)
-	require.Contains(t, typesSeen, constant.TxTypeUnstake)
-	require.Contains(t, typesSeen, constant.TxTypeSwap)
+	require.Contains(t, typesSeen, constant.TxTypeTokenTransfer)
 }
 
 func TestConvertTransactionsEmitsAllPositiveBalanceChanges(t *testing.T) {
@@ -234,7 +233,7 @@ func TestConvertTransactionsEmitsAllPositiveBalanceChanges(t *testing.T) {
 	require.Equal(t, constant.TxTypeTokenTransfer, got[r2])
 }
 
-func TestConvertTransactionsUsesMoveEventsForMoneySemantics(t *testing.T) {
+func TestConvertTransactionsUsesMoveEventsForMovementSemantics(t *testing.T) {
 	t.Parallel()
 
 	s := &SuiIndexer{
@@ -277,14 +276,20 @@ func TestConvertTransactionsUsesMoveEventsForMoneySemantics(t *testing.T) {
 	txs := s.convertTransactions(execTx, 1, 1)
 	require.NotEmpty(t, txs)
 
-	seen := make(map[constant.TxType]typesFixture)
+	var foundSwapMovement bool
+	var foundTransferMovement bool
 	for _, tx := range txs {
-		seen[tx.Type] = typesFixture{To: tx.ToAddress, Asset: tx.AssetAddress, Amount: tx.Amount}
+		require.Contains(t, []constant.TxType{constant.TxTypeNativeTransfer, constant.TxTypeTokenTransfer}, tx.Type)
+		if tx.ToAddress == receiver && tx.Amount == "9" && tx.AssetAddress == "0x2::custom::COIN" && tx.Type == constant.TxTypeTokenTransfer {
+			foundTransferMovement = true
+		}
+		if tx.ToAddress == sender && tx.Amount == "42" && tx.AssetAddress == "0x2::usdc::USDC" && tx.Type == constant.TxTypeTokenTransfer {
+			foundSwapMovement = true
+		}
 	}
 
-	require.Equal(t, "42", seen[constant.TxTypeSwap].Amount)
-	require.Equal(t, receiver, seen[constant.TxTypeTokenTransfer].To)
-	require.Equal(t, "9", seen[constant.TxTypeTokenTransfer].Amount)
+	require.True(t, foundSwapMovement)
+	require.True(t, foundTransferMovement)
 }
 
 func TestConvertTransactionsUsesValidatorEventsForStake(t *testing.T) {
@@ -325,7 +330,7 @@ func TestConvertTransactionsUsesValidatorEventsForStake(t *testing.T) {
 
 	txs := s.convertTransactions(execTx, 1, 1)
 	require.Len(t, txs, 1)
-	require.Equal(t, constant.TxTypeStake, txs[0].Type)
+	require.Equal(t, constant.TxTypeNativeTransfer, txs[0].Type)
 	require.Equal(t, suiNativeCoinType, txs[0].AssetAddress)
 	require.Equal(t, "13000000000", txs[0].Amount)
 	require.Equal(t, validator, txs[0].ToAddress)
@@ -394,19 +399,16 @@ func TestSuiMainnetFetchAndParseTransactions(t *testing.T) {
 			want:   constant.TxTypeTokenTransfer,
 		},
 		{
-			name:   "swap",
+			name:   "swap movement",
 			digest: strings.TrimSpace("9ygJwFE8zJ6jS6Qj2v4cDhZBzAtFP9t6aa1b89NeQ8vB"),
-			want:   constant.TxTypeSwap,
 		},
 		{
-			name:   "stake",
+			name:   "stake movement",
 			digest: strings.TrimSpace("7Nno5YH6oM2azMKkBoxAnKz1bVxPknUaUfz4saz8kiP6"),
-			want:   constant.TxTypeStake,
 		},
 		{
-			name:   "unstake",
+			name:   "unstake movement",
 			digest: strings.TrimSpace("Eu27uF1FMZRuKZnEaQrUUFQYApVeUmkELbU2s4gZJ9af"),
-			want:   constant.TxTypeUnstake,
 		},
 	}
 
@@ -455,6 +457,7 @@ func TestSuiMainnetFetchAndParseTransactions(t *testing.T) {
 			}
 
 			for _, item := range parsed {
+				require.Contains(t, []constant.TxType{constant.TxTypeNativeTransfer, constant.TxTypeTokenTransfer}, item.Type)
 				require.NotEmpty(t, item.Type)
 				require.NotEmpty(t, item.TxHash)
 				require.NotEmpty(t, item.FromAddress)

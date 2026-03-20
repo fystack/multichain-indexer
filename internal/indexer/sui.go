@@ -34,6 +34,9 @@ const suiMistPerSUI = 1_000_000_000
 const suiNativeCoinType = "0x2::sui::SUI"
 const suiSystemPackage = "0x3"
 const suiZeroAddress = "0x0"
+const suiMoveCallStake = "stake"
+const suiMoveCallUnstake = "unstake"
+const suiMoveCallSwap = "swap"
 
 type suiBalanceDelta struct {
 	Address  string
@@ -180,6 +183,13 @@ func classifySuiTransferType(coinType string) (constant.TxType, string) {
 	return constant.TxTypeTokenTransfer, coinType
 }
 
+func normalizeSuiMovementType(tx *types.Transaction) {
+	if tx == nil {
+		return
+	}
+	tx.Type, tx.AssetAddress = classifySuiTransferType(tx.AssetAddress)
+}
+
 func eventJSONMap(evt *v2.Event) map[string]any {
 	if evt == nil || evt.GetJson() == nil {
 		return nil
@@ -309,7 +319,7 @@ func commandSummary(tx *v2.Transaction) (moveCalls []*v2.MoveCall) {
 	return
 }
 
-func classifyMoveCall(mc *v2.MoveCall) constant.TxType {
+func classifyMoveCall(mc *v2.MoveCall) string {
 	if mc == nil {
 		return ""
 	}
@@ -320,12 +330,12 @@ func classifyMoveCall(mc *v2.MoveCall) constant.TxType {
 	switch {
 	case pkg == suiSystemPackage && module == "sui_system" &&
 		(strings.Contains(function, "add_stake") || strings.Contains(function, "request_add_stake")):
-		return constant.TxTypeStake
+		return suiMoveCallStake
 	case pkg == suiSystemPackage && module == "sui_system" &&
 		(strings.Contains(function, "withdraw_stake") || strings.Contains(function, "request_withdraw_stake") || strings.Contains(function, "unstake")):
-		return constant.TxTypeUnstake
+		return suiMoveCallUnstake
 	case isSuiSwapModule(module) && isSuiSwapFunction(function):
-		return constant.TxTypeSwap
+		return suiMoveCallSwap
 	default:
 		return ""
 	}
@@ -401,27 +411,27 @@ func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.Execut
 		switch {
 		case isSuiValidatorStakeEvent(evt):
 			tx := base
-			tx.Type = constant.TxTypeStake
 			tx.ToAddress = jsonString(data, "validator_address", "validator", "pool_id")
 			if tx.ToAddress == "" {
 				tx.ToAddress = base.FromAddress
 			}
 			tx.AssetAddress = suiNativeCoinType
 			tx.Amount = eventAmountString(data)
+			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
 		case isSuiValidatorUnstakeEvent(evt):
 			tx := base
-			tx.Type = constant.TxTypeUnstake
 			tx.ToAddress = base.FromAddress
 			tx.AssetAddress = suiNativeCoinType
 			tx.Amount = eventAmountString(data)
+			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
 		case isSuiSwapEvent(evt):
 			tx := base
-			tx.Type = constant.TxTypeSwap
 			tx.ToAddress = base.FromAddress
 			tx.AssetAddress = eventCoinType(evt, data)
 			tx.Amount = eventAmountString(data)
+			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
 		case strings.Contains(eventType, "::transfer"):
 			tx := base
@@ -435,11 +445,7 @@ func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.Execut
 			}
 			tx.AssetAddress = eventCoinType(evt, data)
 			tx.Amount = eventAmountString(data)
-			if tx.AssetAddress != "" {
-				tx.Type, tx.AssetAddress = classifySuiTransferType(tx.AssetAddress)
-			} else {
-				tx.Type = constant.TxTypeTokenTransfer
-			}
+			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
 		}
 	}
@@ -712,24 +718,24 @@ func (s *SuiIndexer) convertTransactions(execTx *v2.ExecutedTransaction, blockNu
 			continue
 		}
 		tx := base
-		tx.Type = eventType
 		tx.ToAddress = base.FromAddress
 		tx.Amount = "0"
 
 		switch eventType {
-		case constant.TxTypeSwap:
+		case suiMoveCallSwap:
 			if delta, ok := biggestPositiveDelta(deltas, ""); ok {
 				tx.ToAddress = base.FromAddress
 				tx.Amount = delta.Amount.String()
 				tx.AssetAddress = delta.CoinType
 			}
-		case constant.TxTypeStake, constant.TxTypeUnstake:
+		case suiMoveCallStake, suiMoveCallUnstake:
 			if delta, ok := biggestPositiveDelta(deltas, ""); ok {
 				tx.AssetAddress = delta.CoinType
 				tx.Amount = delta.Amount.String()
 			}
 		}
 
+		normalizeSuiMovementType(&tx)
 		out = append(out, tx)
 	}
 

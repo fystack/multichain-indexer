@@ -21,9 +21,6 @@ const (
 
 	TxTypeTokenTransfer  TxType = "token_transfer"
 	TxTypeNativeTransfer TxType = "native_transfer"
-	TxTypeStake          TxType = "stake"
-	TxTypeUnstake        TxType = "unstake"
-	TxTypeSwap           TxType = "swap"
 
 	// Transaction confirmation status
 	TxnStatusPending    = "pending"    // 0 confirmations (mempool)
