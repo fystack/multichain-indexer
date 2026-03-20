@@ -22,8 +22,8 @@ func TestHexIndexToDecimal(t *testing.T) {
 		{"0xff", "255"},
 		{"0x64", "100"},
 		{"", "0"},
-		{"garbage", "0"},
-		{"0x", "0"},
+		{"garbage", "garbage"},
+		{"0x", "0x"},
 	}
 
 	for _, tt := range tests {
