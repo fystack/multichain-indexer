@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strconv"
 	"strings"
@@ -14,11 +15,15 @@ import (
 
 // hexIndexToDecimal converts a hex string like "0x5" to decimal string "5".
 // Used for TransactionIndex and LogIndex in TransferIndex construction.
-// Falls back to "0" on empty/malformed input.
+// On malformed input, returns the raw string to preserve uniqueness and logs a warning.
 func hexIndexToDecimal(hex string) string {
 	val, err := utils.ParseHexUint64(hex)
 	if err != nil {
-		return "0"
+		if hex == "" {
+			return "0"
+		}
+		slog.Warn("hexIndexToDecimal: malformed hex index, using raw value", "hex", hex)
+		return hex
 	}
 	return strconv.FormatUint(val, 10)
 }
