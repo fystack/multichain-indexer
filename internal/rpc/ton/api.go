@@ -29,6 +29,8 @@ type TonAPI interface {
 		addr *address.Address,
 		lt uint64,
 	) (*tlb.Transaction, error)
+	GetAccount(ctx context.Context, block *tonlib.BlockIDExt, addr *address.Address) (*tlb.Account, error)
+	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)
 	ResolveJettonWalletAddress(
 		ctx context.Context,
 		jettonMaster string,
