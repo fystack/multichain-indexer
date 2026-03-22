@@ -13,9 +13,8 @@ func DedupTransfers(in []types.Transaction) []types.Transaction {
 	seen := make(map[string]struct{}, len(in))
 	var out []types.Transaction
 	for _, t := range in {
-		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s|%s|%s|%s|%s",
-			t.TxHash, t.Type, t.AssetAddress, t.FromAddress, t.ToAddress, t.Amount, t.BlockNumber, t.TransferIndex,
-			t.GetMetadataString("flow_id"), t.GetMetadataString("subtype"), t.GetMetadataString("protocol"), t.GetMetadataString("related_address"))
+		key := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s",
+			t.TxHash, t.Type, t.AssetAddress, t.FromAddress, t.ToAddress, t.Amount, t.BlockNumber, t.TransferIndex)
 		if _, ok := seen[key]; ok {
 			continue
 		}
