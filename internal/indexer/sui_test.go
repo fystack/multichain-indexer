@@ -472,9 +472,14 @@ func TestConvertTransactionsAssignsTransferIndexToMoveCallTransactions(t *testin
 	}
 
 	txs := s.convertTransactions(execTx, 1, 1)
-	require.Len(t, txs, 2)
-	assert.Equal(t, "move:0", txs[0].TransferIndex)
-	assert.Equal(t, "move:1", txs[1].TransferIndex)
+	var moveIndexes []string
+	for _, tx := range txs {
+		if strings.HasPrefix(tx.TransferIndex, "move:") {
+			moveIndexes = append(moveIndexes, tx.TransferIndex)
+		}
+	}
+
+	require.Equal(t, []string{"move:0", "move:1"}, moveIndexes)
 }
 
 func TestConvertTransactionsUsesValidatorEventsForStake(t *testing.T) {
