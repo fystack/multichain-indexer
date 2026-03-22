@@ -183,6 +183,23 @@ func (c *Client) GetTransaction(
 	return c.api.GetTransaction(ctx, block, addr, lt)
 }
 
+func (c *Client) GetAccount(ctx context.Context, block *tonlib.BlockIDExt, addr *address.Address) (*tlb.Account, error) {
+	if c == nil || c.api == nil {
+		return nil, fmt.Errorf("ton client not initialized")
+	}
+	if block == nil {
+		return nil, fmt.Errorf("ton block is nil")
+	}
+	return c.api.WaitForBlock(block.SeqNo).GetAccount(ctx, block, addr)
+}
+
+func (c *Client) ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error) {
+	if c == nil || c.api == nil {
+		return nil, fmt.Errorf("ton client not initialized")
+	}
+	return c.api.ListTransactions(ctx, addr, num, lt, txHash)
+}
+
 func (c *Client) ResolveJettonWalletAddress(
 	ctx context.Context,
 	jettonMaster string,

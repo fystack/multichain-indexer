@@ -16,7 +16,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/common/utils"
-	"github.com/shopspring/decimal"
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	tonlib "github.com/xssnick/tonutils-go/ton"
@@ -204,7 +203,12 @@ func (t *TonIndexer) GetBlock(ctx context.Context, number uint64) (*types.Block,
 	if err != nil {
 		return nil, err
 	}
+	allTxs = t.correlateTONTransactions(allTxs)
 	allTxs = utils.DedupTransfers(allTxs)
+	blockHash := masterBlockHash(master)
+	for i := range allTxs {
+		allTxs[i].BlockHash = blockHash
+	}
 
 	blockTS := uint64(time.Now().Unix())
 	if len(allTxs) > 0 {
@@ -767,9 +771,6 @@ func (t *TonIndexer) parseMatchedTransactions(
 	if !ok || intMsg == nil {
 		return nil
 	}
-	if intMsg.Bounced {
-		return nil
-	}
 	opcode, hasOpcode := messageOpcode(intMsg)
 
 	toAddress := normalizeTONAddressFromObj(intMsg.DstAddr)
@@ -784,17 +785,39 @@ func (t *TonIndexer) parseMatchedTransactions(
 		FromAddress:  fromAddress,
 		ToAddress:    toAddress,
 		AssetAddress: "",
-		TxFee: decimal.NewFromBigInt(
-			tx.TotalFees.Coins.Nano(),
-			0,
-		).Div(decimal.NewFromInt(1_000_000_000)),
-		Timestamp: uint64(tx.Now),
+		TxFee:        txFeeDecimal(tx),
+		Timestamp:    uint64(tx.Now),
+	}
+	assignTransferIndexes := func(out []types.Transaction) []types.Transaction {
+		if len(out) == 0 {
+			return out
+		}
+		baseIndex := fmt.Sprintf("%d", tx.LT)
+		if len(out) == 1 {
+			out[0].TransferIndex = baseIndex
+			return out
+		}
+		for i := range out {
+			out[i].TransferIndex = fmt.Sprintf("%s:%d", baseIndex, i)
+		}
+		return out
 	}
 
-	// Jetton transfer call to jetton wallet. Destination owner is encoded in payload body.
-	// This allows bloom check on owner wallet even when message destination is a jetton wallet.
+	if intMsg.Bounced {
+		nativeAmount := nativeTONAmount(intMsg)
+		if nativeAmount == "" || nativeAmount == "0" {
+			return nil
+		}
+
+		base.Type = constant.TxTypeNativeTransfer
+		base.Amount = nativeAmount
+		base.SetMetadataString("subtype", "bounced")
+		base.SetMetadataString("flow_id", buildTONFlowID(0, base))
+		return assignTransferIndexes([]types.Transaction{base})
+	}
+
 	if hasOpcode && opcode == tonJettonTransferOpcode {
-		amount, destination, ok := parseJettonTransferBody(intMsg)
+		amount, destination, _, env, ok := parseJettonTransferEnvelope(intMsg)
 		destinationOwner := normalizeTONAddressFromObj(destination)
 		if !ok || amount == "" || amount == "0" || destinationOwner == "" {
 			return nil
@@ -809,11 +832,20 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.Amount = amount
 		base.ToAddress = destinationOwner
 		base.AssetAddress = t.resolveJettonMasterAddress(ctx, jettonWallet)
-		return []types.Transaction{base}
+		base.SetMetadataString("related_address", jettonWallet)
+		base.SetMetadataString("subtype", "transfer")
+		protocol, subtype := classifyTONJettonProtocol(env.forwardPayload)
+		base.SetMetadataString("protocol", protocol)
+		if subtype == "" {
+			subtype = "transfer"
+		}
+		base.SetMetadataString("subtype", subtype)
+		base.SetMetadataString("flow_id", buildTONFlowID(env.queryID, base))
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonTransferNotificationOpcode {
-		amount, sender, ok := parseJettonTransferBody(intMsg)
+		queryID, amount, sender, ok := parseJettonTransferNotificationBody(intMsg)
 		if !ok || amount == "" || amount == "0" {
 			return nil
 		}
@@ -828,11 +860,15 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.Type = constant.TxTypeTokenTransfer
 		base.Amount = amount
 		base.AssetAddress = t.resolveJettonMasterAddress(ctx, jettonWallet)
-		return []types.Transaction{base}
+		base.SetMetadataString("related_address", jettonWallet)
+		base.SetMetadataString("protocol", "tep74")
+		base.SetMetadataString("subtype", "transfer_notification")
+		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonInternalTransferOpcode {
-		amount, sender, ok := parseJettonTransferBody(intMsg)
+		queryID, amount, sender, _, ok := parseJettonInternalTransferBody(intMsg)
 		if !ok || amount == "" || amount == "0" {
 			return nil
 		}
@@ -855,7 +891,72 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.Type = constant.TxTypeTokenTransfer
 		base.Amount = amount
 		base.AssetAddress = t.resolveJettonMasterAddress(ctx, jettonWallet)
-		return []types.Transaction{base}
+		base.SetMetadataString("related_address", jettonWallet)
+		base.SetMetadataString("protocol", "tep74")
+		base.SetMetadataString("subtype", "internal_transfer")
+		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
+		return assignTransferIndexes([]types.Transaction{base})
+	}
+
+	if hasOpcode && opcode == tonJettonExcessesOpcode {
+		queryID, ok := parseJettonExcessesBody(intMsg)
+		nativeAmount := nativeTONAmount(intMsg)
+		if !ok || nativeAmount == "" || nativeAmount == "0" {
+			return nil
+		}
+
+		base.Type = constant.TxTypeNativeTransfer
+		base.Amount = nativeAmount
+		base.SetMetadataString("protocol", "tep74")
+		base.SetMetadataString("subtype", "excesses")
+		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
+		return assignTransferIndexes([]types.Transaction{base})
+	}
+
+	if hasOpcode && opcode == tonJettonBurnOpcode {
+		queryID, amount, _, ok := parseJettonBurnBody(intMsg)
+		if !ok || amount == "" || amount == "0" {
+			return nil
+		}
+
+		jettonWallet := normalizeTONAddressFromObj(intMsg.DstAddr)
+		if jettonWallet == "" {
+			return nil
+		}
+
+		if owner := t.resolveJettonOwnerAddress(ctx, jettonWallet); owner != "" {
+			base.FromAddress = owner
+		}
+		base.Type = constant.TxTypeTokenTransfer
+		base.Amount = amount
+		base.AssetAddress = t.resolveJettonMasterAddress(ctx, jettonWallet)
+		base.SetMetadataString("related_address", jettonWallet)
+		base.SetMetadataString("protocol", "tep74")
+		base.SetMetadataString("subtype", "burn")
+		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
+		return assignTransferIndexes([]types.Transaction{base})
+	}
+
+	if hasOpcode && opcode == tonJettonBurnNotificationOpcode {
+		queryID, amount, owner, _, ok := parseJettonBurnNotificationBody(intMsg)
+		if !ok || amount == "" || amount == "0" {
+			return nil
+		}
+		if owner != nil {
+			if normalizedOwner := normalizeTONAddressFromObj(owner); normalizedOwner != "" {
+				base.FromAddress = normalizedOwner
+			}
+		}
+
+		jettonWallet := normalizeTONAddressFromObj(intMsg.SrcAddr)
+		base.Type = constant.TxTypeTokenTransfer
+		base.Amount = amount
+		base.AssetAddress = t.resolveJettonMasterAddress(ctx, jettonWallet)
+		base.SetMetadataString("related_address", jettonWallet)
+		base.SetMetadataString("protocol", "tep74")
+		base.SetMetadataString("subtype", "burn_notification")
+		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if !isSimpleTransferMessage(intMsg) {
@@ -869,7 +970,9 @@ func (t *TonIndexer) parseMatchedTransactions(
 
 	base.Type = constant.TxTypeNativeTransfer
 	base.Amount = nativeAmount
-	return []types.Transaction{base}
+	base.SetMetadataString("subtype", "transfer")
+	base.SetMetadataString("flow_id", buildTONFlowID(0, base))
+	return assignTransferIndexes([]types.Transaction{base})
 }
 
 func (t *TonIndexer) resolveJettonOwnerAddress(ctx context.Context, walletAddress string) string {
@@ -1152,32 +1255,6 @@ func isSimpleTransferMessage(msg *tlb.InternalMessage) bool {
 
 	// Simple TON transfer with optional text comment.
 	return opcode == 0
-}
-
-func parseJettonTransferBody(msg *tlb.InternalMessage) (string, *address.Address, bool) {
-	if msg == nil || msg.Body == nil {
-		return "", nil, false
-	}
-
-	bodySlice := msg.Body.BeginParse()
-	if _, err := bodySlice.LoadUInt(32); err != nil { // opcode
-		return "", nil, false
-	}
-	if _, err := bodySlice.LoadUInt(64); err != nil { // query_id
-		return "", nil, false
-	}
-
-	jettonAmount, err := bodySlice.LoadVarUInt(16)
-	if err != nil {
-		return "", nil, false
-	}
-
-	sender, err := bodySlice.LoadAddr()
-	if err != nil {
-		return "", nil, false
-	}
-
-	return jettonAmount.String(), sender, true
 }
 
 func tonAddressCandidates(input string) []string {

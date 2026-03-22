@@ -120,6 +120,8 @@ func (c *SuiClient) subscribe(ctx context.Context) error {
 		"checkpoint.transactions",
 		"checkpoint.transactions.transaction",
 		"checkpoint.transactions.effects",
+		"checkpoint.transactions.effects.changed_objects",
+		"checkpoint.transactions.events",
 		"checkpoint.transactions.balance_changes",
 	)
 	if err != nil {
@@ -230,6 +232,8 @@ func (c *SuiClient) GetCheckpoint(ctx context.Context, sequenceNumber uint64) (*
 				"transactions",
 				"transactions.transaction",
 				"transactions.effects",
+				"transactions.effects.changed_objects",
+				"transactions.events",
 				"transactions.balance_changes",
 			},
 		},
@@ -278,6 +282,25 @@ func (c *SuiClient) GetTransaction(ctx context.Context, digest string) (*Transac
 
 	req := &v2.GetTransactionRequest{
 		Digest: &digest,
+		ReadMask: &fieldmaskpb.FieldMask{
+			Paths: []string{
+				"digest",
+				"transaction",
+				"transaction.kind",
+				"transaction.kind.programmable_transaction",
+				"transaction.kind.programmable_transaction.inputs",
+				"transaction.kind.programmable_transaction.commands",
+				"transaction.sender",
+				"effects",
+				"effects.status",
+				"effects.gas_used",
+				"effects.changed_objects",
+				"events",
+				"balance_changes",
+				"checkpoint",
+				"timestamp",
+			},
+		},
 	}
 
 	resp, err := c.ledgerClient.GetTransaction(ctx, req)
