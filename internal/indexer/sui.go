@@ -390,6 +390,11 @@ func uniqueTransactions(txs []types.Transaction) []types.Transaction {
 		if out[i].ToAddress != out[j].ToAddress {
 			return out[i].ToAddress < out[j].ToAddress
 		}
+		ia, iok := new(big.Int).SetString(out[i].Amount, 10)
+		ja, jok := new(big.Int).SetString(out[j].Amount, 10)
+		if iok && jok {
+			return ia.Cmp(ja) < 0
+		}
 		return out[i].Amount < out[j].Amount
 	})
 
@@ -421,6 +426,7 @@ func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.Execut
 	}
 
 	var out []types.Transaction
+	eventIdx := 0
 	for _, evt := range execTx.GetEvents().GetEvents() {
 		if evt == nil {
 			continue
@@ -431,6 +437,7 @@ func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.Execut
 		switch {
 		case isSuiValidatorStakeEvent(evt):
 			tx := base
+			tx.TransferIndex = fmt.Sprintf("event:%d", eventIdx)
 			tx.ToAddress = jsonString(data, "validator_address", "validator", "pool_id")
 			if tx.ToAddress == "" {
 				tx.ToAddress = base.FromAddress
@@ -439,22 +446,28 @@ func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.Execut
 			tx.Amount = eventAmountString(data)
 			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
+			eventIdx++
 		case isSuiValidatorUnstakeEvent(evt):
 			tx := base
+			tx.TransferIndex = fmt.Sprintf("event:%d", eventIdx)
 			tx.ToAddress = base.FromAddress
 			tx.AssetAddress = suiNativeCoinType
 			tx.Amount = eventAmountString(data)
 			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
+			eventIdx++
 		case isSuiSwapEvent(evt):
 			tx := base
+			tx.TransferIndex = fmt.Sprintf("event:%d", eventIdx)
 			tx.ToAddress = base.FromAddress
 			tx.AssetAddress = eventCoinType(evt, data)
 			tx.Amount = eventAmountString(data)
 			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
+			eventIdx++
 		case strings.Contains(eventType, "::transfer"):
 			tx := base
+			tx.TransferIndex = fmt.Sprintf("event:%d", eventIdx)
 			tx.FromAddress = jsonString(data, "from", "sender")
 			if tx.FromAddress == "" {
 				tx.FromAddress = base.FromAddress
@@ -467,6 +480,7 @@ func (s *SuiIndexer) eventTransactions(base types.Transaction, execTx *v2.Execut
 			tx.Amount = eventAmountString(data)
 			normalizeSuiMovementType(&tx)
 			out = append(out, tx)
+			eventIdx++
 		}
 	}
 
@@ -733,12 +747,14 @@ func (s *SuiIndexer) convertTransactions(execTx *v2.ExecutedTransaction, blockNu
 
 	moveCalls := commandSummary(execTx.GetTransaction())
 
+	moveIdx := 0
 	for _, mc := range moveCalls {
 		eventType := classifyMoveCall(mc)
 		if eventType == "" {
 			continue
 		}
 		tx := base
+		tx.TransferIndex = fmt.Sprintf("move:%d", moveIdx)
 		tx.ToAddress = base.FromAddress
 		tx.Amount = "0"
 
@@ -758,6 +774,7 @@ func (s *SuiIndexer) convertTransactions(execTx *v2.ExecutedTransaction, blockNu
 
 		normalizeSuiMovementType(&tx)
 		out = append(out, tx)
+		moveIdx++
 	}
 
 	out = append(out, s.eventTransactions(base, execTx)...)

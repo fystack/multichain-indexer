@@ -3,7 +3,6 @@ package indexer
 import (
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
@@ -220,20 +219,10 @@ func correlateTONJettonTransferFlow(group []types.Transaction) []types.Transacti
 
 func buildTONFlowID(queryID uint64, tx types.Transaction) string {
 	subtype := tx.GetMetadataString("subtype")
-	protocol := tx.GetMetadataString("protocol")
 	if queryID == 0 {
 		return fmt.Sprintf("tx:%s:%s", tx.TxHash, subtype)
 	}
-
-	parts := []string{
-		strconv.FormatUint(queryID, 10),
-		string(tx.Type),
-		tx.AssetAddress,
-		tx.FromAddress,
-		tx.ToAddress,
-		protocol,
-	}
-	return "q:" + strings.Join(parts, "|")
+	return fmt.Sprintf("q:%d", queryID)
 }
 
 func classifyTONJettonProtocol(payload *cell.Cell) (protocol string, subtype string) {

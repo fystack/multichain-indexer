@@ -813,7 +813,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.Amount = nativeAmount
 		base.SetMetadataString("subtype", "bounced")
 		base.SetMetadataString("flow_id", buildTONFlowID(0, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonTransferOpcode {
@@ -841,7 +841,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		}
 		base.SetMetadataString("subtype", subtype)
 		base.SetMetadataString("flow_id", buildTONFlowID(env.queryID, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonTransferNotificationOpcode {
@@ -864,7 +864,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.SetMetadataString("protocol", "tep74")
 		base.SetMetadataString("subtype", "transfer_notification")
 		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonInternalTransferOpcode {
@@ -895,7 +895,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.SetMetadataString("protocol", "tep74")
 		base.SetMetadataString("subtype", "internal_transfer")
 		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonExcessesOpcode {
@@ -910,7 +910,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.SetMetadataString("protocol", "tep74")
 		base.SetMetadataString("subtype", "excesses")
 		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonBurnOpcode {
@@ -934,7 +934,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.SetMetadataString("protocol", "tep74")
 		base.SetMetadataString("subtype", "burn")
 		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if hasOpcode && opcode == tonJettonBurnNotificationOpcode {
@@ -956,7 +956,7 @@ func (t *TonIndexer) parseMatchedTransactions(
 		base.SetMetadataString("protocol", "tep74")
 		base.SetMetadataString("subtype", "burn_notification")
 		base.SetMetadataString("flow_id", buildTONFlowID(queryID, base))
-			return assignTransferIndexes([]types.Transaction{base})
+		return assignTransferIndexes([]types.Transaction{base})
 	}
 
 	if !isSimpleTransferMessage(intMsg) {
@@ -972,8 +972,8 @@ func (t *TonIndexer) parseMatchedTransactions(
 	base.Amount = nativeAmount
 	base.SetMetadataString("subtype", "transfer")
 	base.SetMetadataString("flow_id", buildTONFlowID(0, base))
-		return assignTransferIndexes([]types.Transaction{base})
-	}
+	return assignTransferIndexes([]types.Transaction{base})
+}
 
 func (t *TonIndexer) resolveJettonOwnerAddress(ctx context.Context, walletAddress string) string {
 	if walletAddress == "" {

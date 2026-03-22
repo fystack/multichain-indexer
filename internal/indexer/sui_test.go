@@ -10,6 +10,7 @@ import (
 	v2 "github.com/fystack/multichain-indexer/internal/rpc/sui/rpc/v2"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -388,6 +389,92 @@ func TestConvertTransactionsUsesMoveEventsForMovementSemantics(t *testing.T) {
 
 	require.True(t, foundSwapMovement)
 	require.True(t, foundTransferMovement)
+}
+
+func TestConvertTransactionsAssignsTransferIndexToEventTransactions(t *testing.T) {
+	t.Parallel()
+
+	s := &SuiIndexer{
+		cfg: config.ChainConfig{InternalCode: "sui_mainnet"},
+	}
+
+	sender := "0xsender"
+	receiverA := "0xreceivera"
+	receiverB := "0xreceiverb"
+
+	mustStruct := func(m map[string]any) *structpb.Value {
+		v, err := structpb.NewValue(m)
+		require.NoError(t, err)
+		return v
+	}
+
+	execTx := &v2.ExecutedTransaction{
+		Digest: strPtr("event-transfer-index"),
+		Transaction: &v2.Transaction{
+			Sender: &sender,
+		},
+		Events: &v2.TransactionEvents{
+			Events: []*v2.Event{
+				{
+					EventType: strPtr("0xtoken::wallet::Transfer"),
+					Json:      mustStruct(map[string]any{"from": sender, "to": receiverA, "amount": "9", "coinType": "0x2::custom::COIN"}),
+				},
+				{
+					EventType: strPtr("0xtoken::wallet::Transfer"),
+					Json:      mustStruct(map[string]any{"from": sender, "to": receiverB, "amount": "9", "coinType": "0x2::custom::COIN"}),
+				},
+			},
+		},
+	}
+
+	txs := s.convertTransactions(execTx, 1, 1)
+	require.Len(t, txs, 2)
+	assert.Equal(t, "event:0", txs[0].TransferIndex)
+	assert.Equal(t, "event:1", txs[1].TransferIndex)
+}
+
+func TestConvertTransactionsAssignsTransferIndexToMoveCallTransactions(t *testing.T) {
+	t.Parallel()
+
+	s := &SuiIndexer{
+		cfg: config.ChainConfig{InternalCode: "sui_mainnet"},
+	}
+
+	sender := "0xsender"
+
+	execTx := &v2.ExecutedTransaction{
+		Digest: strPtr("move-transfer-index"),
+		Transaction: &v2.Transaction{
+			Sender: &sender,
+			Kind: &v2.TransactionKind{
+				Kind: txKindPtr(v2.TransactionKind_PROGRAMMABLE_TRANSACTION),
+				Data: &v2.TransactionKind_ProgrammableTransaction{
+					ProgrammableTransaction: &v2.ProgrammableTransaction{
+						Commands: []*v2.Command{
+							{Command: &v2.Command_MoveCall{MoveCall: &v2.MoveCall{
+								Package:  strPtr("0xswap"),
+								Module:   strPtr("pool"),
+								Function: strPtr("swap_exact_in"),
+							}}},
+							{Command: &v2.Command_MoveCall{MoveCall: &v2.MoveCall{
+								Package:  strPtr("0x3"),
+								Module:   strPtr("sui_system"),
+								Function: strPtr("request_add_stake"),
+							}}},
+						},
+					},
+				},
+			},
+		},
+		BalanceChanges: []*v2.BalanceChange{
+			{Address: &sender, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("25")},
+		},
+	}
+
+	txs := s.convertTransactions(execTx, 1, 1)
+	require.Len(t, txs, 2)
+	assert.Equal(t, "move:0", txs[0].TransferIndex)
+	assert.Equal(t, "move:1", txs[1].TransferIndex)
 }
 
 func TestConvertTransactionsUsesValidatorEventsForStake(t *testing.T) {

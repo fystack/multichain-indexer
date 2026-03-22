@@ -47,6 +47,37 @@ func TestEncodeTONTxHash(t *testing.T) {
 	assert.Equal(t, hash, decoded)
 }
 
+func TestBuildTONFlowID_UsesOnlyQueryIDForCorrelatedFlows(t *testing.T) {
+	t.Parallel()
+
+	txA := types.Transaction{
+		TxHash:       "a",
+		FromAddress:  "user",
+		ToAddress:    "wallet",
+		AssetAddress: "jettonA",
+		Type:         constant.TxTypeTokenTransfer,
+		Metadata: map[string]any{
+			"protocol": "dedust",
+			"subtype":  "transfer",
+		},
+	}
+	txB := types.Transaction{
+		TxHash:       "b",
+		FromAddress:  "vault",
+		ToAddress:    "user",
+		AssetAddress: "jettonB",
+		Type:         constant.TxTypeTokenTransfer,
+		Metadata: map[string]any{
+			"protocol": "tep74",
+			"subtype":  "transfer_notification",
+		},
+	}
+
+	assert.Equal(t, "q:77", buildTONFlowID(77, txA))
+	assert.Equal(t, "q:77", buildTONFlowID(77, txB))
+	assert.Equal(t, "tx:a:transfer", buildTONFlowID(0, txA))
+}
+
 func TestNewTonIndexerWorkerKnobs(t *testing.T) {
 	t.Parallel()
 
@@ -221,7 +252,7 @@ func TestTonParseJettonTransferWithDeDustForwardPayload(t *testing.T) {
 	assert.Equal(t, "dedust_swap", got[0].GetMetadataString("subtype"))
 	assert.Equal(t, recipient.StringRaw(), got[0].ToAddress)
 	assert.Equal(t, master.StringRaw(), got[0].AssetAddress)
-	assert.Contains(t, got[0].GetMetadataString("flow_id"), "q:77|")
+	assert.Equal(t, "q:77", got[0].GetMetadataString("flow_id"))
 }
 
 func TestTonParseJettonExcessesAsNativeRefund(t *testing.T) {
@@ -237,7 +268,7 @@ func TestTonParseJettonExcessesAsNativeRefund(t *testing.T) {
 	require.Len(t, got, 1)
 	assert.Equal(t, constant.TxTypeNativeTransfer, got[0].Type)
 	assert.Equal(t, "excesses", got[0].GetMetadataString("subtype"))
-	assert.Contains(t, got[0].GetMetadataString("flow_id"), "q:42|")
+	assert.Equal(t, "q:42", got[0].GetMetadataString("flow_id"))
 	assert.Equal(t, "0", got[0].TransferIndex)
 }
 
