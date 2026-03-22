@@ -969,6 +969,65 @@ func TestExtractCosmosTransfers_BatchTransferEvent(t *testing.T) {
 	assert.Equal(t, "ibc/XYZ", transfers[2].denom)
 }
 
+func TestCosmosConvertBlock_SetsBlockHashAndTransferIndex(t *testing.T) {
+	txPayload := []byte("tx-blockhash-transferindex")
+	txEncoded := base64.StdEncoding.EncodeToString(txPayload)
+
+	idx := &CosmosIndexer{
+		chainName: "cosmoshub_mainnet",
+		config: config.ChainConfig{
+			NetworkId:   "cosmoshub-4",
+			NativeDenom: "uatom",
+		},
+	}
+
+	blockData := &cosmos.BlockResponse{
+		BlockID: cosmos.BlockID{Hash: "BLOCK_HASH"},
+		Block: cosmos.Block{
+			Header: cosmos.BlockHeader{
+				Height: "310",
+				Time:   "2026-02-24T00:00:10Z",
+				LastBlockID: cosmos.LastBlockID{
+					Hash: "PARENT_HASH",
+				},
+			},
+			Data: cosmos.BlockData{
+				Txs: []string{txEncoded},
+			},
+		},
+	}
+
+	blockResults := &cosmos.BlockResultsResponse{
+		Height: "310",
+		TxsResults: []cosmos.TxResult{
+			{
+				Code: 0,
+				Events: []cosmos.Event{
+					{
+						Type: "transfer",
+						Attributes: []cosmos.EventAttribute{
+							{Key: "sender", Value: "cosmos1sender"},
+							{Key: "recipient", Value: "cosmos1recipienta"},
+							{Key: "amount", Value: "100uatom"},
+							{Key: "sender", Value: "cosmos1sender"},
+							{Key: "recipient", Value: "cosmos1recipientb"},
+							{Key: "amount", Value: "7ibc/XYZ"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	block, err := idx.convertBlock(blockData, blockResults)
+	require.NoError(t, err)
+	require.Len(t, block.Transactions, 2)
+	assert.Equal(t, "BLOCK_HASH", block.Transactions[0].BlockHash)
+	assert.Equal(t, "0:0", block.Transactions[0].TransferIndex)
+	assert.Equal(t, "BLOCK_HASH", block.Transactions[1].BlockHash)
+	assert.Equal(t, "0:1", block.Transactions[1].TransferIndex)
+}
+
 func TestCosmosConvertBlock_ParsesBatchTransferEvent(t *testing.T) {
 	txPayload := []byte("tx-batch-transfer")
 	txEncoded := base64.StdEncoding.EncodeToString(txPayload)

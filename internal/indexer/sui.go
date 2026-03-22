@@ -167,6 +167,21 @@ func biggestPositiveDelta(deltas []suiBalanceDelta, skipAddr string) (suiBalance
 	return best, found
 }
 
+func biggestNegativeDeltaByCoinType(deltas []suiBalanceDelta, coinType string) (suiBalanceDelta, bool) {
+	var best suiBalanceDelta
+	found := false
+	for _, delta := range deltas {
+		if delta.Amount.Sign() >= 0 || delta.CoinType != coinType {
+			continue
+		}
+		if !found || delta.Amount.Cmp(best.Amount) < 0 {
+			best = delta
+			found = true
+		}
+	}
+	return best, found
+}
+
 func parseBigIntString(v string) (*big.Int, bool) {
 	v = strings.TrimSpace(v)
 	if v == "" {
@@ -356,6 +371,7 @@ func uniqueTransactions(txs []types.Transaction) []types.Transaction {
 			normalizeSuiAddress(tx.ToAddress),
 			tx.AssetAddress,
 			tx.Amount,
+			tx.TransferIndex,
 		}, "|")
 		if _, ok := seen[key]; ok {
 			continue
@@ -382,14 +398,18 @@ func uniqueTransactions(txs []types.Transaction) []types.Transaction {
 
 func (s *SuiIndexer) transferTransactionsFromBalanceChanges(base types.Transaction, deltas []suiBalanceDelta) []types.Transaction {
 	out := make([]types.Transaction, 0, len(deltas))
-	for _, delta := range deltas {
-		if delta.Amount.Sign() <= 0 || sameSuiAddress(delta.Address, base.FromAddress) {
+	for i, delta := range deltas {
+		if delta.Amount.Sign() <= 0 {
 			continue
 		}
 		tx := base
+		if senderDelta, ok := biggestNegativeDeltaByCoinType(deltas, delta.CoinType); ok {
+			tx.FromAddress = senderDelta.Address
+		}
 		tx.ToAddress = delta.Address
 		tx.Amount = delta.Amount.String()
 		tx.Type, tx.AssetAddress = classifySuiTransferType(delta.CoinType)
+		tx.TransferIndex = fmt.Sprintf("balance:%d", i)
 		out = append(out, tx)
 	}
 	return out
@@ -678,6 +698,7 @@ func (s *SuiIndexer) convertCheckpoint(cp *sui.Checkpoint) *types.Block {
 			if !s.isMonitoredTransfer(tx.FromAddress, tx.ToAddress) {
 				continue
 			}
+			tx.BlockHash = cp.Digest()
 			txs = append(txs, tx)
 		}
 	}

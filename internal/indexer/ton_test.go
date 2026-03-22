@@ -238,6 +238,7 @@ func TestTonParseJettonExcessesAsNativeRefund(t *testing.T) {
 	assert.Equal(t, constant.TxTypeNativeTransfer, got[0].Type)
 	assert.Equal(t, "excesses", got[0].GetMetadataString("subtype"))
 	assert.Contains(t, got[0].GetMetadataString("flow_id"), "q:42|")
+	assert.Equal(t, "0", got[0].TransferIndex)
 }
 
 func TestTonParseJettonBurn(t *testing.T) {
@@ -264,6 +265,29 @@ func TestTonParseJettonBurn(t *testing.T) {
 	assert.Equal(t, "burn", got[0].GetMetadataString("subtype"))
 	assert.Equal(t, user.StringRaw(), got[0].FromAddress)
 	assert.Equal(t, master.StringRaw(), got[0].AssetAddress)
+	assert.Equal(t, "0", got[0].TransferIndex)
+}
+
+func TestTonGetBlockSetsBlockHashOnTransactions(t *testing.T) {
+	t.Parallel()
+
+	api := &tonAPIStub{
+		masterBySeq: map[uint32]*tonlib.BlockIDExt{
+			100: testMasterBlockID(100),
+		},
+		shardsByMasterSeq: map[uint32][]*tonlib.BlockIDExt{
+			100: {},
+		},
+	}
+
+	idx := NewTonIndexer("ton_mainnet", config.ChainConfig{InternalCode: "TON_MAINNET"}, api, nil, nil)
+	block, err := idx.GetBlock(context.Background(), 100)
+	require.NoError(t, err)
+	require.NotNil(t, block)
+	assert.Equal(t, masterBlockHash(testMasterBlockID(100)), block.Hash)
+	for _, tx := range block.Transactions {
+		assert.Equal(t, block.Hash, tx.BlockHash)
+	}
 }
 
 func TestTonCorrelateJettonTransferFlow(t *testing.T) {

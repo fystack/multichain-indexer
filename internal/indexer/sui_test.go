@@ -12,6 +12,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func strPtr(v string) *string                                      { return &v }
@@ -233,6 +234,103 @@ func TestConvertTransactionsEmitsAllPositiveBalanceChanges(t *testing.T) {
 	require.Equal(t, constant.TxTypeTokenTransfer, got[r2])
 }
 
+func TestConvertTransactionsEmitsSameTokenMultiSend(t *testing.T) {
+	t.Parallel()
+
+	s := &SuiIndexer{
+		cfg: config.ChainConfig{InternalCode: "sui_mainnet"},
+	}
+
+	sender := "0xsender"
+	r1 := "0xreceiver1"
+	r2 := "0xreceiver2"
+
+	execTx := &v2.ExecutedTransaction{
+		Digest: strPtr("same-token-multi-send"),
+		Transaction: &v2.Transaction{
+			Sender: &sender,
+		},
+		BalanceChanges: []*v2.BalanceChange{
+			{Address: &sender, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("-1000")},
+			{Address: &r1, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("600")},
+			{Address: &r2, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("400")},
+		},
+	}
+
+	txs := s.convertTransactions(execTx, 1, 1)
+	require.Len(t, txs, 2)
+
+	got := map[string]string{}
+	for _, tx := range txs {
+		got[tx.ToAddress] = tx.Amount
+		require.Equal(t, constant.TxTypeNativeTransfer, tx.Type)
+		require.Equal(t, "0x2::sui::SUI", tx.AssetAddress)
+		require.Equal(t, sender, tx.FromAddress)
+		require.NotEmpty(t, tx.TransferIndex)
+	}
+
+	require.Equal(t, "600", got[r1])
+	require.Equal(t, "400", got[r2])
+}
+
+func TestConvertTransactionsInfersSenderFromBalanceChangesForSponsoredTransfer(t *testing.T) {
+	t.Parallel()
+
+	s := &SuiIndexer{
+		cfg: config.ChainConfig{InternalCode: "sui_mainnet"},
+	}
+
+	sponsor := "0xsponsor"
+	actualSender := "0xactualsender"
+	receiver := "0xreceiver"
+
+	execTx := &v2.ExecutedTransaction{
+		Digest: strPtr("sponsored-transfer"),
+		Transaction: &v2.Transaction{
+			Sender: &sponsor,
+		},
+		BalanceChanges: []*v2.BalanceChange{
+			{Address: &sponsor, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("-10")},
+			{Address: &actualSender, CoinType: strPtr("0x2::usdc::USDC"), Amount: strPtr("-500")},
+			{Address: &receiver, CoinType: strPtr("0x2::usdc::USDC"), Amount: strPtr("500")},
+		},
+	}
+
+	txs := s.convertTransactions(execTx, 1, 1)
+	require.Len(t, txs, 1)
+	require.Equal(t, actualSender, txs[0].FromAddress)
+	require.Equal(t, receiver, txs[0].ToAddress)
+	require.Equal(t, "500", txs[0].Amount)
+	require.Equal(t, constant.TxTypeTokenTransfer, txs[0].Type)
+}
+
+func TestConvertTransactionsKeepsMintToSenderBalanceChange(t *testing.T) {
+	t.Parallel()
+
+	s := &SuiIndexer{
+		cfg: config.ChainConfig{InternalCode: "sui_mainnet"},
+	}
+
+	sender := "0xsender"
+
+	execTx := &v2.ExecutedTransaction{
+		Digest: strPtr("mint-to-sender"),
+		Transaction: &v2.Transaction{
+			Sender: &sender,
+		},
+		BalanceChanges: []*v2.BalanceChange{
+			{Address: &sender, CoinType: strPtr("0x2::custom::COIN"), Amount: strPtr("700")},
+		},
+	}
+
+	txs := s.convertTransactions(execTx, 1, 1)
+	require.Len(t, txs, 1)
+	require.Equal(t, sender, txs[0].ToAddress)
+	require.Equal(t, sender, txs[0].FromAddress)
+	require.Equal(t, "700", txs[0].Amount)
+	require.Equal(t, constant.TxTypeTokenTransfer, txs[0].Type)
+}
+
 func TestConvertTransactionsUsesMoveEventsForMovementSemantics(t *testing.T) {
 	t.Parallel()
 
@@ -356,6 +454,48 @@ func TestConvertTransactionsIgnoresSystemEpochTransactions(t *testing.T) {
 	}
 
 	require.Nil(t, s.convertTransactions(execTx, 1, 1))
+}
+
+func TestConvertCheckpointSetsBlockHashOnTransactions(t *testing.T) {
+	t.Parallel()
+
+	s := &SuiIndexer{
+		cfg: config.ChainConfig{InternalCode: "sui_mainnet"},
+	}
+
+	seq := uint64(42)
+	digest := "checkpoint-digest"
+	prevDigest := "prev-digest"
+	sender := "0xsender"
+	receiver := "0xreceiver"
+
+	cp := &sui.Checkpoint{
+		Checkpoint: &v2.Checkpoint{
+			SequenceNumber: &seq,
+			Digest:         &digest,
+			Summary: &v2.CheckpointSummary{
+				PreviousDigest: &prevDigest,
+				Timestamp:      &timestamppb.Timestamp{Seconds: 1710000000},
+			},
+			Transactions: []*v2.ExecutedTransaction{
+				{
+					Digest: strPtr("tx-digest"),
+					Transaction: &v2.Transaction{
+						Sender: &sender,
+					},
+					BalanceChanges: []*v2.BalanceChange{
+						{Address: &sender, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("-10")},
+						{Address: &receiver, CoinType: strPtr("0x2::sui::SUI"), Amount: strPtr("10")},
+					},
+				},
+			},
+		},
+	}
+
+	block := s.convertCheckpoint(cp)
+	require.NotNil(t, block)
+	require.Len(t, block.Transactions, 1)
+	require.Equal(t, digest, block.Transactions[0].BlockHash)
 }
 
 func TestClassifyMoveCallAvoidsGenericExchangeFalsePositive(t *testing.T) {
