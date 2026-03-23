@@ -248,6 +248,7 @@ func (c *CosmosIndexer) convertBlock(
 
 	txs := c.extractTransferTransactions(
 		height,
+		blockData.BlockID.Hash,
 		ts,
 		txHashes,
 		blockResults,
@@ -264,6 +265,7 @@ func (c *CosmosIndexer) convertBlock(
 
 func (c *CosmosIndexer) extractTransferTransactions(
 	blockNumber uint64,
+	blockHash string,
 	timestamp uint64,
 	txHashes []string,
 	blockResults *cosmos.BlockResultsResponse,
@@ -290,7 +292,7 @@ func (c *CosmosIndexer) extractTransferTransactions(
 		transfers := extractCosmosTransfers(txResult.Events)
 
 		feeAssigned := false
-		for _, transfer := range transfers {
+		for transferIndex, transfer := range transfers {
 			if transfer.sender == "" || transfer.recipient == "" || transfer.amount == "" {
 				continue
 			}
@@ -303,6 +305,8 @@ func (c *CosmosIndexer) extractTransferTransactions(
 				TxHash:        txHashes[i],
 				NetworkId:     c.config.NetworkId,
 				BlockNumber:   blockNumber,
+				BlockHash:     blockHash,
+				TransferIndex: fmt.Sprintf("%d:%d", i, transferIndex),
 				FromAddress:   transfer.sender,
 				ToAddress:     transfer.recipient,
 				AssetAddress:  assetAddress,

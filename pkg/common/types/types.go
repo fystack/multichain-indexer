@@ -57,6 +57,38 @@ type Transaction struct {
 	Confirmations uint64          `json:"confirmations"` // Number of confirmations (0 = mempool/unconfirmed)
 	Status        string          `json:"status"`        // "pending" (0 conf), "confirmed" (1+ conf)
 	Direction     string          `json:"direction"`     // "in" (deposit) or "out" (withdrawal)
+	Metadata      map[string]any  `json:"metadata,omitempty"`
+}
+
+func (t *Transaction) SetMetadata(key string, value any) {
+	if t.Metadata == nil {
+		t.Metadata = make(map[string]any)
+	}
+	t.Metadata[key] = value
+}
+
+func (t Transaction) GetMetadata(key string) (any, bool) {
+	if t.Metadata == nil {
+		return nil, false
+	}
+	val, ok := t.Metadata[key]
+	return val, ok
+}
+
+func (t *Transaction) SetMetadataString(key, value string) {
+	if value == "" {
+		return
+	}
+	t.SetMetadata(key, value)
+}
+
+func (t Transaction) GetMetadataString(key string) string {
+	val, ok := t.GetMetadata(key)
+	if !ok {
+		return ""
+	}
+	s, _ := val.(string)
+	return s
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
