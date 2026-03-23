@@ -54,6 +54,27 @@ func GetOutputAddress(output *Output) string {
 	return ""
 }
 
+// GetOutputAddresses returns all addresses from an output's scriptPubKey.
+// For standard outputs this returns a single address. For bare multisig (P2MS)
+// it returns all participant addresses. Returns nil for unspendable outputs.
+func GetOutputAddresses(output *Output) []string {
+	if output == nil {
+		return nil
+	}
+
+	if output.ScriptPubKey.Address != "" {
+		return []string{output.ScriptPubKey.Address}
+	}
+
+	if len(output.ScriptPubKey.Addresses) > 0 {
+		result := make([]string, len(output.ScriptPubKey.Addresses))
+		copy(result, output.ScriptPubKey.Addresses)
+		return result
+	}
+
+	return nil
+}
+
 // GetInputAddress extracts the address from an input's previous output
 func GetInputAddress(input *Input) string {
 	if input == nil || input.PrevOut == nil {

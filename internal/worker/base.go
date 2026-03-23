@@ -197,7 +197,15 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 	addressType := bw.chain.GetNetworkType()
 	for _, tx := range block.Transactions {
 		toMonitored := tx.ToAddress != "" && bw.pubkeyStore.Exist(addressType, tx.ToAddress)
-		fromMonitored := bw.config.TwoWayIndexing && tx.FromAddress != "" && bw.pubkeyStore.Exist(addressType, tx.FromAddress)
+		fromMonitored := false
+		if bw.config.TwoWayIndexing {
+			for _, addr := range tx.AllSenderAddresses() {
+				if bw.pubkeyStore.Exist(addressType, addr) {
+					fromMonitored = true
+					break
+				}
+			}
+		}
 
 		if toMonitored {
 			inTx := tx

@@ -97,7 +97,15 @@ func (mw *MempoolWorker) processMempool() error {
 
 	for _, tx := range transactions {
 		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
-		fromMonitored := mw.config.TwoWayIndexing && tx.FromAddress != "" && mw.pubkeyStore.Exist(networkType, tx.FromAddress)
+		fromMonitored := false
+		if mw.config.TwoWayIndexing {
+			for _, addr := range tx.AllSenderAddresses() {
+				if mw.pubkeyStore.Exist(networkType, addr) {
+					fromMonitored = true
+					break
+				}
+			}
+		}
 
 		if !toMonitored && !fromMonitored {
 			continue

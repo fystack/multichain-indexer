@@ -89,7 +89,6 @@ chains:
     start_block: 4440000 # recent testnet block
     poll_interval: "60s" # Bitcoin blocks ~10 minutes
     reorg_rollback_window: 100
-    index_change_output: false # Enable change output event extraction and emission (Bitcoin only)
     index_utxo: false # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-testnet-rpc.publicnode.com"
@@ -112,7 +111,6 @@ chains:
     start_block: 850000
     poll_interval: "60s"
     reorg_rollback_window: 100
-    index_change_output: false
     index_utxo: false # Enable UTXO event extraction and emission (Bitcoin only)
     nodes:
       - url: "https://bitcoin-rpc.publicnode.com"
