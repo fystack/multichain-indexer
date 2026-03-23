@@ -108,7 +108,14 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 		if tx.IsCoinbase() {
 			continue
 		}
-		if len(tx.Vin) > 0 && tx.Vin[0].PrevOut == nil && tx.Vin[0].TxID != "" {
+		needsAny := false
+		for _, vin := range tx.Vin {
+			if vin.TxID != "" && vin.PrevOut == nil {
+				needsAny = true
+				break
+			}
+		}
+		if needsAny {
 			needsResolution = append(needsResolution, i)
 		}
 	}
@@ -171,7 +178,7 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 			continue
 		}
 
-		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
+		transfers := b.extractTransfersFromTx(tx, btcBlock.Hash, btcBlock.Height, btcBlock.Time, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 
 		if b.config.IndexUTXO {
@@ -276,6 +283,7 @@ func (b *BitcoinIndexer) GetBlocksByNumbers(
 // extractTransfersFromTx extracts all transfers from a transaction.
 func (b *BitcoinIndexer) extractTransfersFromTx(
 	tx *bitcoin.Transaction,
+	blockHash string,
 	blockNumber, ts, latestBlock uint64,
 ) []types.Transaction {
 	var transfers []types.Transaction
@@ -293,39 +301,19 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 		status = types.StatusConfirmed
 	}
 
-	fromAddr := b.getFirstInputAddress(tx)
-
-	// Build set of all normalized input addresses for change output detection.
-	inputAddrs := make(map[string]bool, len(tx.Vin))
-	for _, vin := range tx.Vin {
-		addr := bitcoin.GetInputAddress(&vin)
-		if addr == "" {
-			continue
-		}
-		if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
-			addr = normalized
-		}
-		inputAddrs[addr] = true
+	allInputAddrs := b.getAllInputAddresses(tx)
+	fromAddr := ""
+	if len(allInputAddrs) > 0 {
+		fromAddr = allInputAddrs[0]
 	}
 
 	feeAssigned := false
-	for _, vout := range tx.Vout {
-		toAddr := bitcoin.GetOutputAddress(&vout)
-		if toAddr == "" {
+	for voutIdx, vout := range tx.Vout {
+		toAddrs := bitcoin.GetOutputAddresses(&vout)
+		if len(toAddrs) == 0 {
 			continue // Skip unspendable outputs (OP_RETURN, etc.)
 		}
 
-		if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
-			toAddr = normalized
-		}
-
-		// For Transfer events, respect index_change_output config
-		// (This filters what goes to transfer.event.dispatch)
-		if !b.config.IndexChangeOutput && len(inputAddrs) > 0 && inputAddrs[toAddr] {
-			continue
-		}
-
-		// Convert BTC to satoshis (multiply by 1e8)
 		amountSat := satoshisFromFloat(vout.Value)
 
 		txFee := decimal.Zero
@@ -334,22 +322,30 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			feeAssigned = true
 		}
 
-		transfer := types.Transaction{
-			TxHash:        tx.TxID,
-			NetworkId:     b.config.NetworkId,
-			BlockNumber:   blockNumber,
-			FromAddress:   fromAddr,
-			ToAddress:     toAddr,
-			AssetAddress:  "", // Empty for native BTC
-			Amount:        strconv.FormatInt(amountSat, 10),
-			Type:          constant.TxTypeNativeTransfer,
-			TxFee:         txFee,
-			Timestamp:     ts,
-			Confirmations: confirmations,
-			Status:        status,
-		}
+		for addrIdx, toAddr := range toAddrs {
+			if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
+				toAddr = normalized
+			}
 
-		transfers = append(transfers, transfer)
+			transfer := types.Transaction{
+				TxHash:        tx.TxID,
+				NetworkId:     b.config.NetworkId,
+				BlockHash:     blockHash,
+				BlockNumber:   blockNumber,
+				TransferIndex: fmt.Sprintf("%d:%d", voutIdx, addrIdx),
+				FromAddress:   fromAddr,
+				FromAddresses: allInputAddrs,
+				ToAddress:     toAddr,
+				AssetAddress:  "",
+				Amount:        strconv.FormatInt(amountSat, 10),
+				Type:          constant.TxTypeNativeTransfer,
+				TxFee:         txFee,
+				Timestamp:     ts,
+				Confirmations: confirmations,
+				Status:        status,
+			}
+			transfers = append(transfers, transfer)
+		}
 	}
 
 	return transfers
@@ -371,24 +367,26 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 	// Extract ALL created UTXOs (vouts) without filtering
 	// Filtering happens at emission level based on monitored addresses
 	for i, vout := range tx.Vout {
-		addr := bitcoin.GetOutputAddress(&vout)
-		if addr == "" {
+		addrs := bitcoin.GetOutputAddresses(&vout)
+		if len(addrs) == 0 {
 			continue
-		}
-
-		if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
-			addr = normalized
 		}
 
 		amountSat := satoshisFromFloat(vout.Value)
 
-		created = append(created, types.UTXO{
-			TxHash:       tx.TxID,
-			Vout:         uint32(i),
-			Address:      addr,
-			Amount:       strconv.FormatInt(amountSat, 10),
-			ScriptPubKey: vout.ScriptPubKey.Hex,
-		})
+		for _, addr := range addrs {
+			if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
+				addr = normalized
+			}
+
+			created = append(created, types.UTXO{
+				TxHash:       tx.TxID,
+				Vout:         uint32(i),
+				Address:      addr,
+				Amount:       strconv.FormatInt(amountSat, 10),
+				ScriptPubKey: vout.ScriptPubKey.Hex,
+			})
+		}
 	}
 
 	// Extract ALL spent UTXOs (vins) without filtering
@@ -445,16 +443,25 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 	}
 }
 
-func (b *BitcoinIndexer) getFirstInputAddress(tx *bitcoin.Transaction) string {
+// getAllInputAddresses returns deduplicated, normalized input addresses for a transaction,
+// preserving the order of first appearance. Returns an empty slice if no inputs have prevout data.
+func (b *BitcoinIndexer) getAllInputAddresses(tx *bitcoin.Transaction) []string {
+	seen := make(map[string]bool)
+	var addrs []string
 	for _, vin := range tx.Vin {
-		if addr := bitcoin.GetInputAddress(&vin); addr != "" {
-			if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
-				return normalized
-			}
-			return addr
+		addr := bitcoin.GetInputAddress(&vin)
+		if addr == "" {
+			continue
+		}
+		if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
+			addr = normalized
+		}
+		if !seen[addr] {
+			seen[addr] = true
+			addrs = append(addrs, addr)
 		}
 	}
-	return ""
+	return addrs
 }
 
 // calculateConfirmations calculates the number of confirmations for a transaction
@@ -513,7 +520,7 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 			continue
 		}
 
-		transfers := b.extractTransfersFromTx(tx, 0, currentTime, latestBlock)
+		transfers := b.extractTransfersFromTx(tx, "", 0, currentTime, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 
 		if b.config.IndexUTXO {

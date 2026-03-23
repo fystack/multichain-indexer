@@ -47,7 +47,6 @@ type ChainConfig struct {
 	TwoWayIndexing      bool             `yaml:"two_way_indexing"`
 	Confirmations       uint64           `yaml:"confirmations"`
 	MaxLag              uint64           `yaml:"max_lag"`
-	IndexChangeOutput   bool             `yaml:"index_change_output"`
 	IndexUTXO           bool             `yaml:"index_utxo"`
 	DebugTrace          bool             `yaml:"debug_trace"`
 	TraceThrottle       TraceThrottle    `yaml:"trace_throttle"`

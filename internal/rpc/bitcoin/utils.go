@@ -18,15 +18,24 @@ func NormalizeBTCAddress(addr string) (string, error) {
 		return "", fmt.Errorf("empty address")
 	}
 
-	// Check for Bech32 addresses (SegWit)
-	if strings.HasPrefix(addr, "bc1") || strings.HasPrefix(addr, "tb1") {
+	laddr := strings.ToLower(addr)
+
+	// Fast-path for P2TR (witness v1, bech32m / BIP-350).
+	// btcutil v1.0.2's bech32.Decode only supports witness v0 (BIP-173).
+	// The address is already validated by the node; just normalize case.
+	if strings.HasPrefix(laddr, "bc1p") || strings.HasPrefix(laddr, "tb1p") {
+		return laddr, nil
+	}
+
+	// Check for Bech32 addresses (SegWit, witness v0)
+	if strings.HasPrefix(laddr, "bc1") || strings.HasPrefix(laddr, "tb1") {
 		// Bech32 validation
-		_, _, err := bech32.Decode(addr)
+		_, _, err := bech32.Decode(laddr)
 		if err != nil {
 			return "", fmt.Errorf("invalid bech32 address: %w", err)
 		}
 		// Return lowercase normalized form
-		return strings.ToLower(addr), nil
+		return laddr, nil
 	}
 
 	// Base58Check validation for legacy addresses

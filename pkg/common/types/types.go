@@ -48,6 +48,7 @@ type Transaction struct {
 	BlockHash     string          `json:"blockHash"`     // block hash for reorg-aware idempotency
 	TransferIndex string          `json:"transferIndex"` // unique position within tx (EVM only)
 	FromAddress   string          `json:"fromAddress"`
+	FromAddresses []string        `json:"fromAddresses,omitempty"`
 	ToAddress     string          `json:"toAddress"`
 	AssetAddress  string          `json:"assetAddress"`
 	Amount        string          `json:"amount"`
@@ -89,6 +90,19 @@ func (t Transaction) GetMetadataString(key string) string {
 	}
 	s, _ := val.(string)
 	return s
+}
+
+// AllSenderAddresses returns all sender addresses for this transaction.
+// For multi-input Bitcoin transactions this returns all input addresses.
+// For single-sender chains it falls back to a slice containing FromAddress.
+func (t Transaction) AllSenderAddresses() []string {
+	if len(t.FromAddresses) > 0 {
+		return t.FromAddresses
+	}
+	if t.FromAddress != "" {
+		return []string{t.FromAddress}
+	}
+	return nil
 }
 
 func (t Transaction) MarshalBinary() ([]byte, error) {
