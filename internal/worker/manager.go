@@ -22,7 +22,6 @@ type Manager struct {
 	blockStore  blockstore.Store
 	emitter     events.Emitter
 	pubkeyStore pubkeystore.Store
-	failedChan  chan FailedBlockEvent
 }
 
 func NewManager(
@@ -31,7 +30,6 @@ func NewManager(
 	blockStore blockstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
-	failedChan chan FailedBlockEvent,
 ) *Manager {
 	return &Manager{
 		ctx:         ctx,
@@ -39,7 +37,6 @@ func NewManager(
 		blockStore:  blockStore,
 		emitter:     emitter,
 		pubkeyStore: pubkeyStore,
-		failedChan:  failedChan,
 	}
 }
 

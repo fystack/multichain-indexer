@@ -772,9 +772,8 @@ func CreateManagerWithWorkers(
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
 	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
-	failedChan := make(chan FailedBlockEvent, 100)
 
-	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore, failedChan)
+	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore)
 
 	// Loop each chain
 	for _, chainName := range managerCfg.Chains {
@@ -806,6 +805,8 @@ func CreateManagerWithWorkers(
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
+
+		failedChan := make(chan FailedBlockEvent, 100)
 
 		// Worker deps
 		deps := WorkerDeps{
