@@ -358,7 +358,7 @@ func TestBitcoinExtractTransfers_SingleInputSingleOutput(t *testing.T) {
 		Vout: []bitcoin.Output{btcOutput("recipient_bob", 0.49, 0)},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, "sender_alice", transfers[0].FromAddress)
@@ -386,7 +386,7 @@ func TestBitcoinExtractTransfers_OutputToSenderAddressIsEmitted(t *testing.T) {
 		},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 2, "both outputs must be emitted; the output to sender_bob is a net payment, not change")
 	toAddrs := map[string]bool{transfers[0].ToAddress: true, transfers[1].ToAddress: true}
@@ -408,7 +408,7 @@ func TestBitcoinExtractTransfers_MultiInput_FromAddresses(t *testing.T) {
 		Vout: []bitcoin.Output{btcOutput("recipient", 0.59, 0)},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, "sender_first", transfers[0].FromAddress,
@@ -430,7 +430,7 @@ func TestBitcoinExtractTransfers_MultisigOutput_AllAddresses(t *testing.T) {
 		},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 3, "one transfer per multisig participant address")
 	toAddrs := map[string]bool{}
@@ -453,7 +453,7 @@ func TestBitcoinExtractTransfers_FeeOnFirstOutputOnly(t *testing.T) {
 		},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 2)
 	assert.True(t, transfers[0].TxFee.IsPositive(), "fee attached to first transfer")
@@ -467,7 +467,7 @@ func TestBitcoinExtractTransfers_Coinbase_ReturnsEmpty(t *testing.T) {
 		Vin:  []bitcoin.Input{{Vout: 0xffffffff}},
 		Vout: []bitcoin.Output{btcOutput("miner", 3.125, 0)},
 	}
-	assert.Empty(t, idx.extractTransfersFromTx(coinbase, 100, 1_000_000, 100))
+	assert.Empty(t, idx.extractTransfersFromTx(coinbase, "testhash", 100, 1_000_000, 100))
 }
 
 func TestBitcoinExtractTransfers_OPReturn_Skipped(t *testing.T) {
@@ -481,7 +481,7 @@ func TestBitcoinExtractTransfers_OPReturn_Skipped(t *testing.T) {
 		},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, "recipient", transfers[0].ToAddress)
@@ -496,13 +496,13 @@ func TestBitcoinExtractTransfers_ConfirmationStatus(t *testing.T) {
 	}
 
 	// 1 confirmation
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 	require.Len(t, transfers, 1)
 	assert.Equal(t, uint64(1), transfers[0].Confirmations)
 	assert.Equal(t, "confirmed", transfers[0].Status)
 
 	// mempool (blockNumber=0)
-	transfers = idx.extractTransfersFromTx(tx, 0, 1_000_000, 100)
+	transfers = idx.extractTransfersFromTx(tx, "", 0, 1_000_000, 100)
 	require.Len(t, transfers, 1)
 	assert.Equal(t, uint64(0), transfers[0].Confirmations)
 	assert.Equal(t, "pending", transfers[0].Status)
@@ -516,7 +516,7 @@ func TestBitcoinExtractTransfers_Amount_Satoshis(t *testing.T) {
 		Vout: []bitcoin.Output{btcOutput("recipient", 0.1, 0)},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 	require.Len(t, transfers, 1)
 	assert.Equal(t, "10000000", transfers[0].Amount, "0.1 BTC = 10000000 sat (no float truncation)")
 }
@@ -529,11 +529,70 @@ func TestBitcoinExtractTransfers_NoPrevout_EmptyFromAddr(t *testing.T) {
 		Vout: []bitcoin.Output{btcOutput("recipient", 0.49, 0)},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, "", transfers[0].FromAddress, "no prevout → empty FromAddress")
 	assert.Empty(t, transfers[0].FromAddresses)
+}
+
+func TestBitcoinExtractTransfers_BlockHashAndTransferIndex(t *testing.T) {
+	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
+	tx := &bitcoin.Transaction{
+		TxID: "dedup_test",
+		Vin:  []bitcoin.Input{btcInput("p1", 0, "sender", 1.0)},
+		Vout: []bitcoin.Output{
+			btcOutput("recip_a", 0.3, 0),
+			btcOutput("recip_b", 0.3, 1),
+			btcOutput("recip_a", 0.39, 2), // same address as vout 0 — would collide without TransferIndex
+		},
+	}
+
+	transfers := idx.extractTransfersFromTx(tx, "blockhash_abc", 100, 1_000_000, 100)
+
+	require.Len(t, transfers, 3)
+
+	// All transfers must carry the block hash
+	for _, tr := range transfers {
+		assert.Equal(t, "blockhash_abc", tr.BlockHash)
+	}
+
+	// TransferIndex must be unique across all transfers (voutIdx:addrIdx)
+	assert.Equal(t, "0:0", transfers[0].TransferIndex)
+	assert.Equal(t, "1:0", transfers[1].TransferIndex)
+	assert.Equal(t, "2:0", transfers[2].TransferIndex)
+
+	// NATS Hash() must be unique even for same-address outputs
+	hashes := map[string]bool{}
+	for _, tr := range transfers {
+		h := tr.Hash()
+		assert.False(t, hashes[h], "Hash() collision: %s", h)
+		hashes[h] = true
+	}
+}
+
+func TestBitcoinExtractTransfers_MultisigTransferIndex(t *testing.T) {
+	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
+	tx := &bitcoin.Transaction{
+		TxID: "multisig_index",
+		Vin:  []bitcoin.Input{btcInput("p1", 0, "sender", 1.0)},
+		Vout: []bitcoin.Output{
+			btcMultisigOutput([]string{"ms_a", "ms_b"}, 0.99, 0),
+		},
+	}
+
+	transfers := idx.extractTransfersFromTx(tx, "blockhash_xyz", 100, 1_000_000, 100)
+
+	require.Len(t, transfers, 2)
+	assert.Equal(t, "0:0", transfers[0].TransferIndex)
+	assert.Equal(t, "0:1", transfers[1].TransferIndex)
+
+	hashes := map[string]bool{}
+	for _, tr := range transfers {
+		h := tr.Hash()
+		assert.False(t, hashes[h], "Hash() collision: %s", h)
+		hashes[h] = true
+	}
 }
 
 // ─── real-fixture transfer tests ─────────────────────────────────────────────
@@ -544,7 +603,7 @@ func TestBitcoinExtractTransfers_RealConsolidation(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
 	tx := fixtureMultiInputConsolidation()
 
-	transfers := idx.extractTransfersFromTx(tx, btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
 
 	require.Len(t, transfers, 1)
 
@@ -567,7 +626,7 @@ func TestBitcoinExtractTransfers_RealBatchPayment(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
 	tx := fixtureBatchPaymentWithChange()
 
-	transfers := idx.extractTransfersFromTx(tx, btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
 
 	require.Len(t, transfers, 3,
 		"all 3 outputs must be emitted; the change output back to sender is no longer filtered")
@@ -604,7 +663,7 @@ func TestBitcoinExtractTransfers_RealStressMultiSender(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
 	tx := fixtureStressMultiSender()
 
-	transfers := idx.extractTransfersFromTx(tx, btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
 
 	require.Len(t, transfers, 3, "all 3 outputs must be emitted")
 
@@ -809,7 +868,7 @@ func TestBitcoinNormalize_TaprootFallback_TransferNotMissed(t *testing.T) {
 		}},
 	}
 
-	transfers := idx.extractTransfersFromTx(tx, 100, 1_000_000, 100)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 1, "transfer to P2TR address must not be lost")
 	assert.Equal(t, taprootRecipient, transfers[0].ToAddress)
@@ -905,7 +964,7 @@ func TestBitcoinExtract_Integration_KnownConsolidationTx(t *testing.T) {
 	require.NoError(t, err)
 
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
-	transfers := idx.extractTransfersFromTx(tx, btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, addrConsolidationSender, transfers[0].FromAddress)
@@ -931,7 +990,7 @@ func TestBitcoinExtract_Integration_KnownBatchPaymentTx(t *testing.T) {
 	require.NoError(t, err)
 
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
-	transfers := idx.extractTransfersFromTx(tx, btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
 
 	require.Len(t, transfers, 3,
 		"all 3 outputs emitted: 2 payments + 1 change back to sender (Bug #2 fix)")
@@ -968,7 +1027,7 @@ func TestBitcoinExtract_Integration_KnownStressMultiSenderTx(t *testing.T) {
 	assert.Equal(t, addrStressSenderA, addrs[0])
 	assert.Equal(t, addrStressSenderB, addrs[1])
 
-	transfers := idx.extractTransfersFromTx(tx, btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
+	transfers := idx.extractTransfersFromTx(tx, "testhash", btcIntegrationBlock, 1_000_000, btcIntegrationBlock)
 	require.Len(t, transfers, 3)
 
 	for _, tr := range transfers {
@@ -1004,7 +1063,7 @@ func TestBitcoinExtract_Integration_CoinbaseNotInTransfers(t *testing.T) {
 	require.True(t, coinbase.IsCoinbase())
 
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
-	assert.Empty(t, idx.extractTransfersFromTx(coinbase, block.Height, block.Time, block.Height))
+	assert.Empty(t, idx.extractTransfersFromTx(coinbase, block.Hash, block.Height, block.Time, block.Height))
 }
 
 func TestBitcoinExtract_Integration_UTXOEventStructure(t *testing.T) {

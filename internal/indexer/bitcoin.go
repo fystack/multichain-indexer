@@ -178,7 +178,7 @@ func (b *BitcoinIndexer) convertBlockWithPrevoutResolution(ctx context.Context, 
 			continue
 		}
 
-		transfers := b.extractTransfersFromTx(tx, btcBlock.Height, btcBlock.Time, latestBlock)
+		transfers := b.extractTransfersFromTx(tx, btcBlock.Hash, btcBlock.Height, btcBlock.Time, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 
 		if b.config.IndexUTXO {
@@ -283,6 +283,7 @@ func (b *BitcoinIndexer) GetBlocksByNumbers(
 // extractTransfersFromTx extracts all transfers from a transaction.
 func (b *BitcoinIndexer) extractTransfersFromTx(
 	tx *bitcoin.Transaction,
+	blockHash string,
 	blockNumber, ts, latestBlock uint64,
 ) []types.Transaction {
 	var transfers []types.Transaction
@@ -307,7 +308,7 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	}
 
 	feeAssigned := false
-	for _, vout := range tx.Vout {
+	for voutIdx, vout := range tx.Vout {
 		toAddrs := bitcoin.GetOutputAddresses(&vout)
 		if len(toAddrs) == 0 {
 			continue // Skip unspendable outputs (OP_RETURN, etc.)
@@ -321,7 +322,7 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			feeAssigned = true
 		}
 
-		for _, toAddr := range toAddrs {
+		for addrIdx, toAddr := range toAddrs {
 			if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
 				toAddr = normalized
 			}
@@ -329,7 +330,9 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			transfer := types.Transaction{
 				TxHash:        tx.TxID,
 				NetworkId:     b.config.NetworkId,
+				BlockHash:     blockHash,
 				BlockNumber:   blockNumber,
+				TransferIndex: fmt.Sprintf("%d:%d", voutIdx, addrIdx),
 				FromAddress:   fromAddr,
 				FromAddresses: allInputAddrs,
 				ToAddress:     toAddr,
@@ -517,7 +520,7 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 			continue
 		}
 
-		transfers := b.extractTransfersFromTx(tx, 0, currentTime, latestBlock)
+		transfers := b.extractTransfersFromTx(tx, "", 0, currentTime, latestBlock)
 		allTransfers = append(allTransfers, transfers...)
 
 		if b.config.IndexUTXO {
