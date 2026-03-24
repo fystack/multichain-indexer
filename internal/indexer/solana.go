@@ -466,7 +466,7 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 
 func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
 	out := make([]types.Transaction, 0)
-	for _, tx := range b.Transactions {
+	for txIdx, tx := range b.Transactions {
 		if tx.Meta == nil {
 			continue
 		}
@@ -509,22 +509,27 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 			}
 		}
 
+		transferIdx := 0
+
 		appendNative := func(from, to string, lamports uint64) {
 			if !s.isMonitoredTransfer(from, to) {
 				return
 			}
 			out = append(out, types.Transaction{
-				TxHash:       txHash,
-				NetworkId:    networkID,
-				BlockNumber:  slot,
-				FromAddress:  from,
-				ToAddress:    to,
-				AssetAddress: "",
-				Amount:       strconv.FormatUint(lamports, 10),
-				Type:         constant.TxTypeNativeTransfer,
-				TxFee:        fee,
-				Timestamp:    ts,
+				TxHash:        txHash,
+				NetworkId:     networkID,
+				BlockNumber:   slot,
+				BlockHash:     b.Blockhash,
+				TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
+				FromAddress:   from,
+				ToAddress:     to,
+				AssetAddress:  "",
+				Amount:        strconv.FormatUint(lamports, 10),
+				Type:          constant.TxTypeNativeTransfer,
+				TxFee:         fee,
+				Timestamp:     ts,
 			})
+			transferIdx++
 		}
 
 		appendSPL := func(srcTokenAcc, dstTokenAcc, mint string, amount uint64) {
@@ -546,17 +551,20 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 			}
 
 			out = append(out, types.Transaction{
-				TxHash:       txHash,
-				NetworkId:    networkID,
-				BlockNumber:  slot,
-				FromAddress:  fromOwner,
-				ToAddress:    toOwner,
-				AssetAddress: mint,
-				Amount:       strconv.FormatUint(amount, 10),
-				Type:         constant.TxTypeTokenTransfer,
-				TxFee:        fee,
-				Timestamp:    ts,
+				TxHash:        txHash,
+				NetworkId:     networkID,
+				BlockNumber:   slot,
+				BlockHash:     b.Blockhash,
+				TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
+				FromAddress:   fromOwner,
+				ToAddress:     toOwner,
+				AssetAddress:  mint,
+				Amount:        strconv.FormatUint(amount, 10),
+				Type:          constant.TxTypeTokenTransfer,
+				TxFee:         fee,
+				Timestamp:     ts,
 			})
+			transferIdx++
 		}
 
 		processIx := func(ix solana.Instruction) {

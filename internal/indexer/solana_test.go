@@ -31,6 +31,8 @@ func newTestSolanaIndexer() *SolanaIndexer {
 // so it can be fed into extractSolanaTransfers.
 func txToBlockResult(tx *solana.GetTransactionResult) *solana.GetBlockResult {
 	return &solana.GetBlockResult{
+		Blockhash:         "testhash123",
+		PreviousBlockhash: "parenthash456",
 		Transactions: []solana.BlockTxn{
 			{
 				Meta:        tx.Meta,
@@ -38,6 +40,111 @@ func txToBlockResult(tx *solana.GetTransactionResult) *solana.GetBlockResult {
 			},
 		},
 	}
+}
+
+func TestSolanaBlockHashAndTransferIndex(t *testing.T) {
+	idx := newTestSolanaIndexer()
+
+	blockHash := "9xJ7rGWdmA9Y4qKkZn1bFwP3KpvLcAhRsL1oXrNBp4v"
+	makeTxnEnvelope := func(sig string, keys []solana.AccountKey, ixs []solana.Instruction) solana.TxnEnvelope {
+		env := solana.TxnEnvelope{Signatures: []string{sig}}
+		env.Message.AccountKeys = keys
+		env.Message.Instructions = ixs
+		return env
+	}
+
+	block := &solana.GetBlockResult{
+		Blockhash:         blockHash,
+		PreviousBlockhash: "parentHash123",
+		Transactions: []solana.BlockTxn{
+			{
+				Meta: &solana.TxnMeta{Fee: 5000},
+				Transaction: makeTxnEnvelope("sig1",
+					[]solana.AccountKey{
+						{Pubkey: "sender1"},
+						{Pubkey: "receiver1"},
+						{Pubkey: "sender2"},
+						{Pubkey: "receiver2"},
+						{Pubkey: solanaSystemProgramID},
+					},
+					[]solana.Instruction{
+						{
+							Program:   "system",
+							ProgramId: solanaSystemProgramID,
+							Parsed: map[string]any{
+								"type": "transfer",
+								"info": map[string]any{
+									"source":      "sender1",
+									"destination": "receiver1",
+									"lamports":    float64(1000000),
+								},
+							},
+						},
+						{
+							Program:   "system",
+							ProgramId: solanaSystemProgramID,
+							Parsed: map[string]any{
+								"type": "transfer",
+								"info": map[string]any{
+									"source":      "sender2",
+									"destination": "receiver2",
+									"lamports":    float64(2000000),
+								},
+							},
+						},
+					},
+				),
+			},
+			{
+				Meta: &solana.TxnMeta{Fee: 5000},
+				Transaction: makeTxnEnvelope("sig2",
+					[]solana.AccountKey{
+						{Pubkey: "sender3"},
+						{Pubkey: "receiver3"},
+						{Pubkey: solanaSystemProgramID},
+					},
+					[]solana.Instruction{
+						{
+							Program:   "system",
+							ProgramId: solanaSystemProgramID,
+							Parsed: map[string]any{
+								"type": "transfer",
+								"info": map[string]any{
+									"source":      "sender3",
+									"destination": "receiver3",
+									"lamports":    float64(3000000),
+								},
+							},
+						},
+					},
+				),
+			},
+		},
+	}
+
+	transfers := idx.extractSolanaTransfers("solana-mainnet", 100, 1234567890, block)
+
+	require.Len(t, transfers, 3)
+
+	// All transfers should have BlockHash set
+	for _, tx := range transfers {
+		assert.Equal(t, blockHash, tx.BlockHash, "BlockHash should be propagated")
+		assert.NotEmpty(t, tx.TransferIndex, "TransferIndex should be set")
+	}
+
+	// TransferIndexes should be unique
+	seen := map[string]bool{}
+	for _, tx := range transfers {
+		key := tx.TxHash + ":" + tx.TransferIndex
+		assert.False(t, seen[key], "TransferIndex should be unique within block, duplicate: %s", key)
+		seen[key] = true
+	}
+
+	// First tx has two transfers: 0:0 and 0:1
+	assert.Equal(t, "0:0", transfers[0].TransferIndex)
+	assert.Equal(t, "0:1", transfers[1].TransferIndex)
+	// Second tx has one transfer: 1:0
+	assert.Equal(t, "1:0", transfers[2].TransferIndex)
 }
 
 // TestParseSPLTransfer tests parsing of SPL Transfer (opcode 3) instruction from a real mainnet tx.
@@ -81,10 +188,12 @@ func TestParseSPLTransfer(t *testing.T) {
 	assert.Equal(t, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", tokenTransfer.AssetAddress, "AssetAddress should be USDC mint")
 	assert.NotEmpty(t, tokenTransfer.FromAddress, "FromAddress (owner) should be resolved")
 	assert.NotEmpty(t, tokenTransfer.ToAddress, "ToAddress (owner) should be resolved")
+	assert.Equal(t, "testhash123", tokenTransfer.BlockHash, "BlockHash should be propagated from block")
+	assert.NotEmpty(t, tokenTransfer.TransferIndex, "TransferIndex should be set")
 
-	t.Logf("Transfer: from=%s to=%s amount=%s token=%s",
+	t.Logf("Transfer: from=%s to=%s amount=%s token=%s transferIndex=%s",
 		tokenTransfer.FromAddress, tokenTransfer.ToAddress,
-		tokenTransfer.Amount, tokenTransfer.AssetAddress)
+		tokenTransfer.Amount, tokenTransfer.AssetAddress, tokenTransfer.TransferIndex)
 }
 
 // TestParseSPLTransferChecked tests parsing of SPL TransferChecked (opcode 12) instruction from a real mainnet tx.
@@ -128,8 +237,10 @@ func TestParseSPLTransferChecked(t *testing.T) {
 	assert.Equal(t, "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", tokenTransfer.AssetAddress, "AssetAddress should be USDC mint")
 	assert.NotEmpty(t, tokenTransfer.FromAddress, "FromAddress (owner) should be resolved")
 	assert.NotEmpty(t, tokenTransfer.ToAddress, "ToAddress (owner) should be resolved")
+	assert.Equal(t, "testhash123", tokenTransfer.BlockHash, "BlockHash should be propagated from block")
+	assert.NotEmpty(t, tokenTransfer.TransferIndex, "TransferIndex should be set")
 
-	t.Logf("TransferChecked: from=%s to=%s amount=%s token=%s",
+	t.Logf("TransferChecked: from=%s to=%s amount=%s token=%s transferIndex=%s",
 		tokenTransfer.FromAddress, tokenTransfer.ToAddress,
-		tokenTransfer.Amount, tokenTransfer.AssetAddress)
+		tokenTransfer.Amount, tokenTransfer.AssetAddress, tokenTransfer.TransferIndex)
 }
