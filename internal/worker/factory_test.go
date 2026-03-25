@@ -116,8 +116,8 @@ func TestRescannerFailedChannelIsolationByChain(t *testing.T) {
 	chA := make(chan FailedBlockEvent, 1)
 	chB := make(chan FailedBlockEvent, 1)
 
-	rwA := NewRescannerWorker(ctx, chainA, testChainConfig(), noopKVStore{}, &stubBlockStore{}, events.Emitter(nil), nil, chA)
-	rwB := NewRescannerWorker(ctx, chainB, testChainConfig(), noopKVStore{}, &stubBlockStore{}, events.Emitter(nil), nil, chB)
+	rwA := NewRescannerWorker(ctx, chainA, testChainConfig(), noopKVStore{}, &stubBlockStore{}, events.Emitter(nil), nil, chA, nil)
+	rwB := NewRescannerWorker(ctx, chainB, testChainConfig(), noopKVStore{}, &stubBlockStore{}, events.Emitter(nil), nil, chB, nil)
 
 	doneA := make(chan struct{})
 	doneB := make(chan struct{})

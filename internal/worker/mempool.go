@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/events"
@@ -33,6 +34,7 @@ func NewMempoolWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
+	registry *status.Registry,
 ) *MempoolWorker {
 	worker := newWorkerWithMode(
 		ctx,
@@ -44,6 +46,7 @@ func NewMempoolWorker(
 		pubkeyStore,
 		ModeMempool,
 		failedChan,
+		registry,
 	)
 
 	// Cast to Bitcoin indexer (mempool is Bitcoin-specific)
@@ -156,7 +159,7 @@ func (mw *MempoolWorker) processMempool() error {
 	if mw.config.IndexUTXO {
 		for i := range utxoEvents {
 			event := &utxoEvents[i]
-			
+
 			if mw.seenTxs[event.TxHash+":utxo"] {
 				continue
 			}

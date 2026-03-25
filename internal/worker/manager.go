@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -22,6 +23,11 @@ type Manager struct {
 	blockStore  blockstore.Store
 	emitter     events.Emitter
 	pubkeyStore pubkeystore.Store
+	registry    *status.Registry
+}
+
+func (m *Manager) Registry() *status.Registry {
+	return m.registry
 }
 
 func NewManager(

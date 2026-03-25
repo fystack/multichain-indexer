@@ -18,6 +18,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -43,6 +44,7 @@ type WorkerDeps struct {
 	Redis      infra.RedisClient
 	FailedChan chan FailedBlockEvent
 	Observer   BlockResultObserver
+	Registry   *status.Registry
 }
 
 // ManagerConfig defines which workers to enable per chain.
@@ -105,6 +107,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.Registry,
 			),
 		}
 	case ModeCatchup:
@@ -118,6 +121,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.Registry,
 			),
 		}
 	case ModeRescanner:
@@ -131,6 +135,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.Registry,
 			),
 		}
 	case ModeManual:
@@ -145,6 +150,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.Registry,
 			),
 		}
 	case ModeMempool:
@@ -158,6 +164,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.Registry,
 			),
 		}
 	default:
@@ -772,8 +779,10 @@ func CreateManagerWithWorkers(
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
 	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
+	registry := status.NewRegistry()
 
 	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore)
+	manager.registry = registry
 
 	// Loop each chain
 	for _, chainName := range managerCfg.Chains {
@@ -805,6 +814,10 @@ func CreateManagerWithWorkers(
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
+		registry.RegisterChain(idxr.GetName(), chainName, chainCfg)
+		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
+			registry.SetFailedBlocks(idxr.GetName(), existingFailed)
+		}
 
 		failedChan := make(chan FailedBlockEvent, 100)
 
@@ -818,6 +831,7 @@ func CreateManagerWithWorkers(
 			Redis:      redisClient,
 			FailedChan: failedChan,
 			Observer:   managerCfg.Observer,
+			Registry:   registry,
 		}
 
 		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter)

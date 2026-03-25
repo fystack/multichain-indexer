@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -41,6 +42,7 @@ func NewManualWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
+	registry *status.Registry,
 ) *ManualWorker {
 	return &ManualWorker{
 		BaseWorker: newWorkerWithMode(
@@ -53,6 +55,7 @@ func NewManualWorker(
 			pubkeyStore,
 			ModeManual,
 			failedChan,
+			registry,
 		),
 		mbs:    missingblockstore.NewMissingBlocksStore(redisClient),
 		config: DefaultManualConfig,

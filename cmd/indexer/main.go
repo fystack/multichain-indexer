@@ -14,6 +14,7 @@ import (
 	"github.com/alecthomas/kong"
 	"gorm.io/gorm"
 
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/internal/worker"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
@@ -212,7 +213,7 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		managerCfg,
 	)
 
-	healthServer := startHealthServer(cfg.Services.Port, cfg)
+	healthServer := startHealthServer(cfg.Services.Port, cfg, manager)
 
 	// Start all workers
 	logger.Info("Starting all workers")
@@ -246,7 +247,7 @@ type HealthResponse struct {
 	Version   string    `json:"version"`
 }
 
-func startHealthServer(port int, cfg *config.Config) *http.Server {
+func startHealthServer(port int, cfg *config.Config, manager *worker.Manager) *http.Server {
 	mux := http.NewServeMux()
 
 	version := cfg.Version
@@ -266,13 +267,33 @@ func startHealthServer(port int, cfg *config.Config) *http.Server {
 		json.NewEncoder(w).Encode(response)
 	})
 
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		response := status.StatusResponse{
+			Timestamp: time.Now().UTC(),
+			Version:   version,
+			Networks:  []status.NetworkStatus{},
+		}
+		if manager != nil && manager.Registry() != nil {
+			response = manager.Registry().Snapshot(version)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(response)
+	})
+
 	server := &http.Server{
 		Addr:    fmt.Sprintf(":%d", port),
 		Handler: mux,
 	}
 
 	go func() {
-		logger.Info("Health check server started", "port", port, "endpoint", "/health")
+		logger.Info("Health check server started", "port", port, "endpoints", []string{"/health", "/status"})
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Health server failed to start", "error", err)
 		}

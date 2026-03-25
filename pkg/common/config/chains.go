@@ -72,6 +72,9 @@ func (c Chains) ApplyDefaults(def Defaults) error {
 		if err := mergo.Merge(&chain.Throttle, def.Throttle); err != nil {
 			return fmt.Errorf("merge throttle defaults for %s: %w", name, err)
 		}
+		if err := mergo.Merge(&chain.Status, def.Status); err != nil {
+			return fmt.Errorf("merge status defaults for %s: %w", name, err)
+		}
 		c[name] = chain
 	}
 	return nil

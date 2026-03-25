@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -15,7 +16,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
-
 
 const (
 	MaxBlockHashSize        = 50
@@ -31,7 +31,7 @@ type RegularWorker struct {
 	*BaseWorker
 	currentBlock   uint64
 	blockHashes    []blockstore.BlockHashEntry
-	hashesModified    bool
+	hashesModified bool
 	persistTicker  *time.Ticker
 }
 
@@ -44,6 +44,7 @@ func NewRegularWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
+	registry *status.Registry,
 ) *RegularWorker {
 	worker := newWorkerWithMode(
 		ctx,
@@ -55,6 +56,7 @@ func NewRegularWorker(
 		pubkeyStore,
 		ModeRegular,
 		failedChan,
+		registry,
 	)
 	rw := &RegularWorker{BaseWorker: worker}
 	rw.currentBlock = rw.determineStartingBlock()
@@ -94,17 +96,20 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	if err != nil {
 		return fmt.Errorf("get latest block: %w", err)
 	}
+	rw.updateHeadStatus(latest, time.Time{})
 
 	rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
 
 	// Lag detection: if we're too far behind, jump to chain head and queue skipped range for catchup
 	if rw.skipAheadIfLagging(latest) {
+		rw.updateHeadStatus(latest, time.Time{})
 		return nil
 	}
 
 	if rw.currentBlock > latest {
 		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)
 		time.Sleep(rw.config.PollInterval)
+		rw.updateHeadStatus(latest, time.Time{})
 		return nil
 	}
 
@@ -152,14 +157,17 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		return nil
 	}
 
+	indexedAt := time.Time{}
 	if lastSuccess >= rw.currentBlock {
 		rw.currentBlock = lastSuccess + 1
 		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
+		indexedAt = time.Now().UTC()
 
 		if lastSuccessHash != "" {
 			rw.addBlockHash(lastSuccess, lastSuccessHash)
 		}
 	}
+	rw.updateHeadStatus(latest, indexedAt)
 
 	rw.logger.Info("Processed latest blocks",
 		"chain", rw.chain.GetName(),
@@ -389,6 +397,25 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 		"catchup_ranges", len(ranges),
 	)
 	return true
+}
+
+func (rw *RegularWorker) currentIndexedBlock() uint64 {
+	if rw.currentBlock == 0 {
+		return 0
+	}
+	return rw.currentBlock - 1
+}
+
+func (rw *RegularWorker) updateHeadStatus(latest uint64, indexedAt time.Time) {
+	if rw.registry == nil {
+		return
+	}
+	rw.registry.UpdateHead(
+		rw.chain.GetName(),
+		latest,
+		rw.currentIndexedBlock(),
+		indexedAt,
+	)
 }
 
 func (rw *RegularWorker) processReorgCheckedBatch(

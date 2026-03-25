@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/events"
@@ -38,6 +39,7 @@ func NewCatchupWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
+	registry *status.Registry,
 ) *CatchupWorker {
 	worker := newWorkerWithMode(
 		ctx,
@@ -49,12 +51,14 @@ func NewCatchupWorker(
 		pubkeyStore,
 		ModeCatchup,
 		failedChan,
+		registry,
 	)
 	cw := &CatchupWorker{
 		BaseWorker: worker,
 		workerPool: make(chan struct{}, CATCHUP_WORKERS),
 	}
 	cw.blockRanges = cw.loadCatchupProgress()
+	cw.syncCatchupStatus()
 	return cw
 }
 
@@ -223,6 +227,7 @@ func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 
 	// Reload ranges to check for any remaining work
 	cw.blockRanges = cw.loadCatchupProgress()
+	cw.syncCatchupStatus()
 	return nil
 }
 
@@ -352,6 +357,13 @@ func (cw *CatchupWorker) saveProgress(r blockstore.CatchupRange, current uint64)
 		"current", current,
 	)
 	_ = cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current)
+	for i := range cw.blockRanges {
+		if cw.blockRanges[i].Start == r.Start && cw.blockRanges[i].End == r.End {
+			cw.blockRanges[i].Current = min(current, cw.blockRanges[i].End)
+			break
+		}
+	}
+	cw.syncCatchupStatusLocked()
 }
 
 func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
@@ -372,6 +384,7 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 			break
 		}
 	}
+	cw.syncCatchupStatusLocked()
 
 	return nil
 }
@@ -410,6 +423,41 @@ func (cw *CatchupWorker) Close() error {
 			"error", err,
 		)
 	}
+	cw.syncCatchupStatusLocked()
 
 	return nil
+}
+
+func (cw *CatchupWorker) syncCatchupStatus() {
+	cw.progressMu.Lock()
+	defer cw.progressMu.Unlock()
+	cw.syncCatchupStatusLocked()
+}
+
+func (cw *CatchupWorker) syncCatchupStatusLocked() {
+	if cw.registry == nil {
+		return
+	}
+	cw.registry.UpdateCatchup(
+		cw.chain.GetName(),
+		catchupPendingBlocks(cw.blockRanges),
+		len(cw.blockRanges),
+	)
+}
+
+func catchupPendingBlocks(ranges []blockstore.CatchupRange) uint64 {
+	var pending uint64
+	for _, r := range ranges {
+		if r.End < r.Start {
+			continue
+		}
+		if r.Current < r.Start {
+			pending += r.End - r.Start + 1
+			continue
+		}
+		if r.Current < r.End {
+			pending += r.End - r.Current
+		}
+	}
+	return pending
 }
