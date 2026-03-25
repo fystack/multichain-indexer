@@ -385,7 +385,7 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 					case uint64:
 						amt = v
 					}
-				case "transferChecked":
+				case "transferChecked", "transferCheckedWithFee":
 					// tokenAmount: { amount:"..", decimals:n, uiAmountString:".." }
 					if ta, _ := info["tokenAmount"].(map[string]any); ta != nil {
 						switch v := ta["amount"].(type) {
@@ -444,7 +444,7 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 			return "", "", "", 0, false
 		}
 		return accountKeys[srcIdx].Pubkey, accountKeys[dstIdx].Pubkey, "", amt, true
-	case 12:
+	case 12, 26: // 12 = transferChecked, 26 = transferCheckedWithFee (same account layout)
 		if len(accIdx) < 3 || len(data) < 9 {
 			return "", "", "", 0, false
 		}
