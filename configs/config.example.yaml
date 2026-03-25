@@ -246,7 +246,10 @@ chains:
       batch_size: 200
       concurrency: 12
       parallel: true
-
+    status:
+      healthy_max_pending_blocks: 50
+      slow_max_pending_blocks: 250
+      
   osmosis_mainnet:
     network_id: "osmosis-1"
     internal_code: "OSMO_MAINNET"
