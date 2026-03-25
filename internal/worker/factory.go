@@ -834,10 +834,16 @@ func CreateManagerWithWorkers(
 			Registry:   registry,
 		}
 
-		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter)
+		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter).
+		// Status registry (head / failed-block counters for /status) is only wired to the regular worker;
+		// catchup progress is read from KV at snapshot time.
 		addIfEnabled := func(mode WorkerMode, enabled bool) {
 			if enabled {
-				ws := BuildWorkers(idxr, chainCfg, mode, deps)
+				wdeps := deps
+				if mode != ModeRegular {
+					wdeps.Registry = nil
+				}
+				ws := BuildWorkers(idxr, chainCfg, mode, wdeps)
 				manager.AddWorkers(ws...)
 				logger.Info("Worker enabled", "chain", chainName, "mode", mode)
 			} else {

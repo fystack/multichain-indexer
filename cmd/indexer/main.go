@@ -278,8 +278,8 @@ func startHealthServer(port int, cfg *config.Config, manager *worker.Manager) *h
 			Version:   version,
 			Networks:  []status.NetworkStatus{},
 		}
-		if manager != nil && manager.Registry() != nil {
-			response = manager.Registry().Snapshot(version)
+		if manager != nil {
+			response = manager.StatusSnapshot(version)
 		}
 
 		w.Header().Set("Content-Type", "application/json")

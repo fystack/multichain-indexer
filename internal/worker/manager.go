@@ -26,10 +26,6 @@ type Manager struct {
 	registry    *status.Registry
 }
 
-func (m *Manager) Registry() *status.Registry {
-	return m.registry
-}
-
 func NewManager(
 	ctx context.Context,
 	kvstore infra.KVStore,
@@ -44,6 +40,10 @@ func NewManager(
 		emitter:     emitter,
 		pubkeyStore: pubkeyStore,
 	}
+}
+
+func (m *Manager) Registry() *status.Registry {
+	return m.registry
 }
 
 // Start launches all injected workers
@@ -92,16 +92,28 @@ func (m *Manager) Stop() {
 	logger.Info("Manager stopped")
 }
 
-// closeResource is a helper to close resources with consistent error handling
-func (m *Manager) closeResource(name string, resource interface{}, closer func() error) {
-	if resource != nil {
-		if err := closer(); err != nil {
-			logger.Error("Failed to close "+name, "err", err)
+// StatusSnapshot returns /status payload; catchup fields are read from the block store.
+func (m *Manager) StatusSnapshot(version string) status.StatusResponse {
+	if m.registry == nil {
+		return status.StatusResponse{
+			Timestamp: time.Now().UTC(),
+			Version:   version,
+			Networks:  []status.NetworkStatus{},
 		}
 	}
+	return m.registry.Snapshot(version, m.blockStore)
 }
 
 // Inject workers into manager
 func (m *Manager) AddWorkers(workers ...Worker) {
 	m.workers = append(m.workers, workers...)
+}
+
+// closeResource is a helper to close resources with consistent error handling
+func (m *Manager) closeResource(name string, resource any, closer func() error) {
+	if resource != nil {
+		if err := closer(); err != nil {
+			logger.Error("Failed to close "+name, "err", err)
+		}
+	}
 }

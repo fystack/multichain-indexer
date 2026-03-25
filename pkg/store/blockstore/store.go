@@ -29,6 +29,24 @@ type CatchupRange struct {
 	Current uint64 `json:"current"`
 }
 
+// CatchupPendingBlocks returns how many blocks remain across all active catchup ranges.
+func CatchupPendingBlocks(ranges []CatchupRange) uint64 {
+	var pending uint64
+	for _, r := range ranges {
+		if r.End < r.Start {
+			continue
+		}
+		if r.Current < r.Start {
+			pending += r.End - r.Start + 1
+			continue
+		}
+		if r.Current < r.End {
+			pending += r.End - r.Current
+		}
+	}
+	return pending
+}
+
 func latestBlockKey(chainName string) string {
 	return fmt.Sprintf("%s/%s/%s", BlockStates, chainName, constant.KVPrefixLatestBlock)
 }

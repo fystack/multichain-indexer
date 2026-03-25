@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 )
 
 type HealthStatus string
@@ -47,10 +48,13 @@ type chainState struct {
 	thresholds    config.StatusConfig
 	latestBlock   uint64
 	indexedBlock  uint64
-	catchupRemain uint64
-	catchupRanges int
 	lastIndexedAt time.Time
 	failedBlocks  map[uint64]struct{}
+}
+
+// CatchupProgressSource supplies persisted catchup ranges (e.g. blockstore.Store).
+type CatchupProgressSource interface {
+	GetCatchupProgress(chain string) ([]blockstore.CatchupRange, error)
 }
 
 type Registry struct {
@@ -109,20 +113,6 @@ func (r *Registry) UpdateHead(chainKey string, latestBlock, indexedBlock uint64,
 	}
 }
 
-func (r *Registry) UpdateCatchup(chainKey string, pendingBlocks uint64, ranges int) {
-	key := normalizeChainKey(chainKey)
-	if key == "" {
-		return
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	state := r.ensureStateLocked(key)
-	state.catchupRemain = pendingBlocks
-	state.catchupRanges = ranges
-}
-
 func (r *Registry) MarkFailedBlock(chainKey string, blockNumber uint64) {
 	key := normalizeChainKey(chainKey)
 	if key == "" || blockNumber == 0 {
@@ -170,7 +160,7 @@ func (r *Registry) SetFailedBlocks(chainKey string, blockNumbers []uint64) {
 	}
 }
 
-func (r *Registry) Snapshot(version string) StatusResponse {
+func (r *Registry) Snapshot(version string, src CatchupProgressSource) StatusResponse {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -180,7 +170,17 @@ func (r *Registry) Snapshot(version string) StatusResponse {
 		if state.latestBlock > state.indexedBlock {
 			headGap = state.latestBlock - state.indexedBlock
 		}
-		pending := headGap + state.catchupRemain
+
+		var catchupPending uint64
+		catchupRanges := 0
+		if src != nil && state.internalCode != "" {
+			if ranges, err := src.GetCatchupProgress(state.internalCode); err == nil {
+				catchupRanges = len(ranges)
+				catchupPending = blockstore.CatchupPendingBlocks(ranges)
+			}
+		}
+
+		pending := headGap + catchupPending
 		thresholds := state.thresholds.Normalize()
 
 		item := NetworkStatus{
@@ -193,8 +193,8 @@ func (r *Registry) Snapshot(version string) StatusResponse {
 			IndexedBlock:         state.indexedBlock,
 			PendingBlocks:        pending,
 			HeadGap:              headGap,
-			CatchupPendingBlocks: state.catchupRemain,
-			CatchupRanges:        state.catchupRanges,
+			CatchupPendingBlocks: catchupPending,
+			CatchupRanges:        catchupRanges,
 			FailedBlocks:         len(state.failedBlocks),
 		}
 		if !state.lastIndexedAt.IsZero() {
