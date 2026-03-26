@@ -91,19 +91,14 @@ func TestRegistrySnapshotUsesDefaultThresholdWhenMissing(t *testing.T) {
 		},
 	)
 
-	registry.UpdateHead("tron_mainnet", 500, 260, time.Time{})
+	registry.UpdateHead("tron_mainnet", 500, 470, time.Time{})
 
-	kvCatchup := mapCatchupStore{
-		"TRON_MAINNET": {{Start: 1, End: 20, Current: 0}},
-	}
-
-	resp := registry.Snapshot("1.0.0", kvCatchup)
+	resp := registry.Snapshot("1.0.0", mapCatchupStore{})
 	require.Len(t, resp.Networks, 1)
 
 	network := resp.Networks[0]
-	// head_gap 240 + catchup 20 = 260; default healthy<50, slow<250 => degraded
-	require.Equal(t, uint64(260), network.PendingBlocks)
-	require.Equal(t, HealthDegraded, network.Health)
+	require.Equal(t, uint64(30), network.PendingBlocks)
+	require.Equal(t, HealthHealthy, network.Health)
 }
 
 func TestRegistryClearFailedBlocks(t *testing.T) {

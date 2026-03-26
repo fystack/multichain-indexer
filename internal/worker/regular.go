@@ -44,7 +44,7 @@ func NewRegularWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
-	registry *status.Registry,
+	statusRegistry status.StatusRegistry,
 ) *RegularWorker {
 	worker := newWorkerWithMode(
 		ctx,
@@ -56,7 +56,7 @@ func NewRegularWorker(
 		pubkeyStore,
 		ModeRegular,
 		failedChan,
-		registry,
+		statusRegistry,
 	)
 	rw := &RegularWorker{BaseWorker: worker}
 	rw.currentBlock = rw.determineStartingBlock()
@@ -407,10 +407,8 @@ func (rw *RegularWorker) currentIndexedBlock() uint64 {
 }
 
 func (rw *RegularWorker) updateHeadStatus(latest uint64, indexedAt time.Time) {
-	if rw.registry == nil {
-		return
-	}
-	rw.registry.UpdateHead(
+	registry := status.EnsureStatusRegistry(rw.statusRegistry)
+	registry.UpdateHead(
 		rw.chain.GetName(),
 		latest,
 		rw.currentIndexedBlock(),

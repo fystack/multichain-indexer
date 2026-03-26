@@ -42,7 +42,7 @@ func NewManualWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
-	registry *status.Registry,
+	statusRegistry status.StatusRegistry,
 ) *ManualWorker {
 	return &ManualWorker{
 		BaseWorker: newWorkerWithMode(
@@ -55,7 +55,7 @@ func NewManualWorker(
 			pubkeyStore,
 			ModeManual,
 			failedChan,
-			registry,
+			statusRegistry,
 		),
 		mbs:    missingblockstore.NewMissingBlocksStore(redisClient),
 		config: DefaultManualConfig,

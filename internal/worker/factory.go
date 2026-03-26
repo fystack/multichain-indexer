@@ -36,15 +36,15 @@ import (
 
 // WorkerDeps bundles dependencies injected into workers.
 type WorkerDeps struct {
-	Ctx        context.Context
-	KVStore    infra.KVStore
-	BlockStore blockstore.Store
-	Emitter    events.Emitter
-	Pubkey     pubkeystore.Store
-	Redis      infra.RedisClient
-	FailedChan chan FailedBlockEvent
-	Observer   BlockResultObserver
-	Registry   *status.Registry
+	Ctx            context.Context
+	KVStore        infra.KVStore
+	BlockStore     blockstore.Store
+	Emitter        events.Emitter
+	Pubkey         pubkeystore.Store
+	Redis          infra.RedisClient
+	FailedChan     chan FailedBlockEvent
+	Observer       BlockResultObserver
+	StatusRegistry status.StatusRegistry
 }
 
 // ManagerConfig defines which workers to enable per chain.
@@ -107,7 +107,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
-				deps.Registry,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeCatchup:
@@ -121,7 +121,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
-				deps.Registry,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeRescanner:
@@ -135,7 +135,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
-				deps.Registry,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeManual:
@@ -150,7 +150,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
-				deps.Registry,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeMempool:
@@ -164,7 +164,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
-				deps.Registry,
+				deps.StatusRegistry,
 			),
 		}
 	default:
@@ -779,10 +779,10 @@ func CreateManagerWithWorkers(
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
 	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
-	registry := status.NewRegistry()
+	statusRegistry := status.NewRegistry()
 
 	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore)
-	manager.registry = registry
+	manager.registry = statusRegistry
 
 	// Loop each chain
 	for _, chainName := range managerCfg.Chains {
@@ -814,36 +814,30 @@ func CreateManagerWithWorkers(
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
-		registry.RegisterChain(idxr.GetName(), chainName, chainCfg)
+		statusRegistry.RegisterChain(idxr.GetName(), chainName, chainCfg)
 		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
-			registry.SetFailedBlocks(idxr.GetName(), existingFailed)
+			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
 		}
 
 		failedChan := make(chan FailedBlockEvent, 100)
 
 		// Worker deps
 		deps := WorkerDeps{
-			Ctx:        ctx,
-			KVStore:    kvstore,
-			BlockStore: blockStore,
-			Emitter:    emitter,
-			Pubkey:     pubkeyStore,
-			Redis:      redisClient,
-			FailedChan: failedChan,
-			Observer:   managerCfg.Observer,
-			Registry:   registry,
+			Ctx:            ctx,
+			KVStore:        kvstore,
+			BlockStore:     blockStore,
+			Emitter:        emitter,
+			Pubkey:         pubkeyStore,
+			Redis:          redisClient,
+			FailedChan:     failedChan,
+			Observer:       managerCfg.Observer,
+			StatusRegistry: statusRegistry,
 		}
 
 		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter).
-		// Status registry (head / failed-block counters for /status) is only wired to the regular worker;
-		// catchup progress is read from KV at snapshot time.
 		addIfEnabled := func(mode WorkerMode, enabled bool) {
 			if enabled {
-				wdeps := deps
-				if mode != ModeRegular {
-					wdeps.Registry = nil
-				}
-				ws := BuildWorkers(idxr, chainCfg, mode, wdeps)
+				ws := BuildWorkers(idxr, chainCfg, mode, deps)
 				manager.AddWorkers(ws...)
 				logger.Info("Worker enabled", "chain", chainName, "mode", mode)
 			} else {

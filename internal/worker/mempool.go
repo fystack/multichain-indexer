@@ -34,7 +34,7 @@ func NewMempoolWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
-	registry *status.Registry,
+	statusRegistry status.StatusRegistry,
 ) *MempoolWorker {
 	worker := newWorkerWithMode(
 		ctx,
@@ -46,7 +46,7 @@ func NewMempoolWorker(
 		pubkeyStore,
 		ModeMempool,
 		failedChan,
-		registry,
+		statusRegistry,
 	)
 
 	// Cast to Bitcoin indexer (mempool is Bitcoin-specific)

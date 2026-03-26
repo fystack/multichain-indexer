@@ -39,7 +39,7 @@ func NewCatchupWorker(
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
-	registry *status.Registry,
+	statusRegistry status.StatusRegistry,
 ) *CatchupWorker {
 	worker := newWorkerWithMode(
 		ctx,
@@ -51,7 +51,7 @@ func NewCatchupWorker(
 		pubkeyStore,
 		ModeCatchup,
 		failedChan,
-		registry,
+		statusRegistry,
 	)
 	cw := &CatchupWorker{
 		BaseWorker: worker,
