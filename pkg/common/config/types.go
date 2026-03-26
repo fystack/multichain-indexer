@@ -14,6 +14,11 @@ const (
 	ProdEnv Env = "production"
 )
 
+const (
+	DefaultStatusHealthyMaxPendingBlocks uint64 = 50
+	DefaultStatusSlowMaxPendingBlocks    uint64 = 250
+)
+
 type Config struct {
 	Version     string   `yaml:"version"`
 	Environment Env      `yaml:"env"      validate:"required,oneof=development production"`
@@ -27,6 +32,7 @@ type Defaults struct {
 	TwoWayIndexing      bool               `yaml:"two_way_indexing"`
 	PollInterval        time.Duration      `yaml:"poll_interval"         validate:"required"`
 	ReorgRollbackWindow int                `yaml:"reorg_rollback_window" validate:"required,min=1"`
+	Status              StatusConfig       `yaml:"status"`
 	Client              ClientConfig       `yaml:"client"`
 	Throttle            Throttle           `yaml:"throttle"`
 	Failover            rpc.FailoverConfig `yaml:"failover"`
@@ -50,10 +56,27 @@ type ChainConfig struct {
 	IndexUTXO           bool             `yaml:"index_utxo"`
 	DebugTrace          bool             `yaml:"debug_trace"`
 	TraceThrottle       TraceThrottle    `yaml:"trace_throttle"`
+	Status              StatusConfig     `yaml:"status"`
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Ton                 TonConfig        `yaml:"ton"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`
+}
+
+type StatusConfig struct {
+	HealthyMaxPendingBlocks uint64 `yaml:"healthy_max_pending_blocks"`
+	SlowMaxPendingBlocks    uint64 `yaml:"slow_max_pending_blocks"`
+}
+
+func (s StatusConfig) Normalize() StatusConfig {
+	normalized := s
+	if normalized.HealthyMaxPendingBlocks == 0 {
+		normalized.HealthyMaxPendingBlocks = DefaultStatusHealthyMaxPendingBlocks
+	}
+	if normalized.SlowMaxPendingBlocks == 0 {
+		normalized.SlowMaxPendingBlocks = DefaultStatusSlowMaxPendingBlocks
+	}
+	return normalized
 }
 
 type ClientConfig struct {

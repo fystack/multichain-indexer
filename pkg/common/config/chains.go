@@ -7,6 +7,12 @@ import (
 	"dario.cat/mergo"
 )
 
+// CanonicalChainKey is the normalized chain identifier used as registry keys, indexer GetName(),
+// and ChainConfig.Name after Load (uppercase + trim). Callers should pass raw YAML keys or CLI names.
+func CanonicalChainKey(s string) string {
+	return strings.ToUpper(strings.TrimSpace(s))
+}
+
 // GetChain returns a chain config by name.
 func (c Chains) GetChain(name string) (ChainConfig, error) {
 	chain, ok := c[name]
@@ -72,6 +78,10 @@ func (c Chains) ApplyDefaults(def Defaults) error {
 		if err := mergo.Merge(&chain.Throttle, def.Throttle); err != nil {
 			return fmt.Errorf("merge throttle defaults for %s: %w", name, err)
 		}
+		if err := mergo.Merge(&chain.Status, def.Status); err != nil {
+			return fmt.Errorf("merge status defaults for %s: %w", name, err)
+		}
+		chain.Status = chain.Status.Normalize()
 		c[name] = chain
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
@@ -38,14 +39,15 @@ type BaseWorker struct {
 	mode   WorkerMode
 	logger *slog.Logger
 
-	config      config.ChainConfig
-	chain       indexer.Indexer
-	kvstore     infra.KVStore
-	blockStore  blockstore.Store
-	pubkeyStore pubkeystore.Store
-	emitter     events.Emitter
-	failedChan  chan FailedBlockEvent
-	observer    BlockResultObserver
+	config         config.ChainConfig
+	chain          indexer.Indexer
+	kvstore        infra.KVStore
+	blockStore     blockstore.Store
+	pubkeyStore    pubkeystore.Store
+	emitter        events.Emitter
+	failedChan     chan FailedBlockEvent
+	observer       BlockResultObserver
+	statusRegistry status.StatusRegistry
 }
 
 // Stop stops the worker and cleans up internal resources
@@ -65,6 +67,7 @@ func newWorkerWithMode(
 	pubkeyStore pubkeystore.Store,
 	mode WorkerMode,
 	failedChan chan FailedBlockEvent,
+	statusRegistry status.StatusRegistry,
 ) *BaseWorker {
 	ctx, cancel := context.WithCancel(ctx)
 	log := logger.With(
@@ -73,17 +76,18 @@ func newWorkerWithMode(
 	)
 
 	return &BaseWorker{
-		ctx:         ctx,
-		cancel:      cancel,
-		mode:        mode,
-		logger:      log,
-		config:      cfg,
-		chain:       chain,
-		kvstore:     kv,
-		blockStore:  blockStore,
-		pubkeyStore: pubkeyStore,
-		emitter:     emitter,
-		failedChan:  failedChan,
+		ctx:            ctx,
+		cancel:         cancel,
+		mode:           mode,
+		logger:         log,
+		config:         cfg,
+		chain:          chain,
+		kvstore:        kv,
+		blockStore:     blockStore,
+		pubkeyStore:    pubkeyStore,
+		emitter:        emitter,
+		failedChan:     failedChan,
+		statusRegistry: status.EnsureStatusRegistry(statusRegistry),
 	}
 }
 
@@ -138,8 +142,11 @@ func (bw *BaseWorker) notifyObserver(blockNumber uint64, status BlockStatus) {
 
 // handleBlockResult processes a block result and persists/forwards errors if needed.
 func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
+	registry := status.EnsureStatusRegistry(bw.statusRegistry)
+
 	if result.Error != nil {
 		_ = bw.blockStore.SaveFailedBlock(bw.chain.GetNetworkInternalCode(), result.Number)
+		registry.MarkFailedBlock(bw.chain.GetName(), result.Number)
 
 		// Non-blocking push to failedChan
 		select {
@@ -182,6 +189,7 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 		"chain", bw.chain.GetName(),
 		"block", result.Block.Number,
 	)
+	registry.ClearFailedBlocks(bw.chain.GetName(), []uint64{result.Number})
 	bw.notifyObserver(result.Number, BlockStatusProcessed)
 	return true
 }

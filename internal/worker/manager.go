@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
@@ -22,6 +23,7 @@ type Manager struct {
 	blockStore  blockstore.Store
 	emitter     events.Emitter
 	pubkeyStore pubkeystore.Store
+	registry    *status.Registry
 }
 
 func NewManager(
@@ -38,6 +40,10 @@ func NewManager(
 		emitter:     emitter,
 		pubkeyStore: pubkeyStore,
 	}
+}
+
+func (m *Manager) Registry() *status.Registry {
+	return m.registry
 }
 
 // Start launches all injected workers
@@ -86,16 +92,28 @@ func (m *Manager) Stop() {
 	logger.Info("Manager stopped")
 }
 
-// closeResource is a helper to close resources with consistent error handling
-func (m *Manager) closeResource(name string, resource interface{}, closer func() error) {
-	if resource != nil {
-		if err := closer(); err != nil {
-			logger.Error("Failed to close "+name, "err", err)
+// StatusSnapshot returns /status payload from live in-memory registry state.
+func (m *Manager) StatusSnapshot(version string) status.StatusResponse {
+	if m.registry == nil {
+		return status.StatusResponse{
+			Timestamp: time.Now().UTC(),
+			Version:   version,
+			Networks:  []status.NetworkStatus{},
 		}
 	}
+	return m.registry.Snapshot(version)
 }
 
 // Inject workers into manager
 func (m *Manager) AddWorkers(workers ...Worker) {
 	m.workers = append(m.workers, workers...)
+}
+
+// closeResource is a helper to close resources with consistent error handling
+func (m *Manager) closeResource(name string, resource any, closer func() error) {
+	if resource != nil {
+		if err := closer(); err != nil {
+			logger.Error("Failed to close "+name, "err", err)
+		}
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -35,14 +36,15 @@ import (
 
 // WorkerDeps bundles dependencies injected into workers.
 type WorkerDeps struct {
-	Ctx        context.Context
-	KVStore    infra.KVStore
-	BlockStore blockstore.Store
-	Emitter    events.Emitter
-	Pubkey     pubkeystore.Store
-	Redis      infra.RedisClient
-	FailedChan chan FailedBlockEvent
-	Observer   BlockResultObserver
+	Ctx            context.Context
+	KVStore        infra.KVStore
+	BlockStore     blockstore.Store
+	Emitter        events.Emitter
+	Pubkey         pubkeystore.Store
+	Redis          infra.RedisClient
+	FailedChan     chan FailedBlockEvent
+	Observer       BlockResultObserver
+	StatusRegistry status.StatusRegistry
 }
 
 // ManagerConfig defines which workers to enable per chain.
@@ -105,6 +107,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeCatchup:
@@ -118,6 +121,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeRescanner:
@@ -131,6 +135,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeManual:
@@ -145,6 +150,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.StatusRegistry,
 			),
 		}
 	case ModeMempool:
@@ -158,6 +164,7 @@ func BuildWorkers(
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
+				deps.StatusRegistry,
 			),
 		}
 	default:
@@ -772,8 +779,10 @@ func CreateManagerWithWorkers(
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
 	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
+	statusRegistry := status.NewRegistry()
 
 	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore)
+	manager.registry = statusRegistry
 
 	// Loop each chain
 	for _, chainName := range managerCfg.Chains {
@@ -805,22 +814,36 @@ func CreateManagerWithWorkers(
 		default:
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
+		statusRegistry.RegisterChain(idxr.GetName(), chainName, chainCfg)
+		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
+			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
+		}
+		if existingCatchup, err := blockStore.GetCatchupProgress(idxr.GetNetworkInternalCode()); err == nil {
+			statusRegistry.SetCatchupRanges(idxr.GetName(), existingCatchup)
+		} else {
+			logger.Warn("Failed to load catchup progress for status registry",
+				"chain", chainName,
+				"internal_code", idxr.GetNetworkInternalCode(),
+				"error", err,
+			)
+		}
 
 		failedChan := make(chan FailedBlockEvent, 100)
 
 		// Worker deps
 		deps := WorkerDeps{
-			Ctx:        ctx,
-			KVStore:    kvstore,
-			BlockStore: blockStore,
-			Emitter:    emitter,
-			Pubkey:     pubkeyStore,
-			Redis:      redisClient,
-			FailedChan: failedChan,
-			Observer:   managerCfg.Observer,
+			Ctx:            ctx,
+			KVStore:        kvstore,
+			BlockStore:     blockStore,
+			Emitter:        emitter,
+			Pubkey:         pubkeyStore,
+			Redis:          redisClient,
+			FailedChan:     failedChan,
+			Observer:       managerCfg.Observer,
+			StatusRegistry: statusRegistry,
 		}
 
-		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter)
+		// Helper: add workers if enabled (all modes share the same indexer and global rate limiter).
 		addIfEnabled := func(mode WorkerMode, enabled bool) {
 			if enabled {
 				ws := BuildWorkers(idxr, chainCfg, mode, deps)

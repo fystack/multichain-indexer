@@ -8,6 +8,9 @@ defaults:
   poll_interval: "5s" # how often to poll for new blocks
   reorg_rollback_window: 20 # number of blocks to roll back on reorg
   two_way_indexing: false # enable two-way indexing for all chains
+  status:
+    healthy_max_pending_blocks: 50
+    slow_max_pending_blocks: 250
   client:
     timeout: "20s" # RPC timeout per request
     max_retries: 3 # max retries per RPC call
@@ -38,6 +41,10 @@ chains:
     throttle:
       rps: 5
       burst: 8
+    status:
+      # Optional per-chain override for /status health condition.
+      healthy_max_pending_blocks: 80
+      slow_max_pending_blocks: 400
 
   ethereum_mainnet:
     network_id: "ethereum_mainnet"
@@ -239,7 +246,10 @@ chains:
       batch_size: 200
       concurrency: 12
       parallel: true
-
+    status:
+      healthy_max_pending_blocks: 50
+      slow_max_pending_blocks: 250
+      
   osmosis_mainnet:
     network_id: "osmosis-1"
     internal_code: "OSMO_MAINNET"
