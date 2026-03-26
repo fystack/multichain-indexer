@@ -182,6 +182,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 }
 
 func (rw *RegularWorker) determineStartingBlock() uint64 {
+	registry := status.EnsureStatusRegistry(rw.statusRegistry)
 	chainLatest, err1 := rw.chain.GetLatestBlockNumber(rw.ctx)
 	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
 
@@ -224,6 +225,8 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 				"count", len(ranges),
 				"error", err,
 			)
+		} else {
+			registry.UpsertCatchupRanges(rw.chain.GetName(), ranges)
 		}
 
 		rw.logger.Info("Queued catchup ranges",
@@ -351,6 +354,7 @@ func (rw *RegularWorker) flushBlockHashes() {
 // skipAheadIfLagging checks if the regular worker is too far behind the chain head.
 // If so, it queues the skipped range for catchup and jumps currentBlock to chain head.
 func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
+	registry := status.EnsureStatusRegistry(rw.statusRegistry)
 	maxLag := rw.config.MaxLag
 	if maxLag == 0 {
 		maxLag = constant.DefaultMaxLag
@@ -385,6 +389,8 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 			"count", len(ranges),
 			"error", err,
 		)
+	} else {
+		registry.UpsertCatchupRanges(rw.chain.GetName(), ranges)
 	}
 
 	rw.currentBlock = latest

@@ -92,7 +92,7 @@ func (m *Manager) Stop() {
 	logger.Info("Manager stopped")
 }
 
-// StatusSnapshot returns /status payload; catchup fields are read from the block store.
+// StatusSnapshot returns /status payload from live in-memory registry state.
 func (m *Manager) StatusSnapshot(version string) status.StatusResponse {
 	if m.registry == nil {
 		return status.StatusResponse{
@@ -101,7 +101,7 @@ func (m *Manager) StatusSnapshot(version string) status.StatusResponse {
 			Networks:  []status.NetworkStatus{},
 		}
 	}
-	return m.registry.Snapshot(version, m.blockStore)
+	return m.registry.Snapshot(version)
 }
 
 // Inject workers into manager

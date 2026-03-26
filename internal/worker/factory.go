@@ -818,6 +818,15 @@ func CreateManagerWithWorkers(
 		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
 			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
 		}
+		if existingCatchup, err := blockStore.GetCatchupProgress(idxr.GetNetworkInternalCode()); err == nil {
+			statusRegistry.SetCatchupRanges(idxr.GetName(), existingCatchup)
+		} else {
+			logger.Warn("Failed to load catchup progress for status registry",
+				"chain", chainName,
+				"internal_code", idxr.GetNetworkInternalCode(),
+				"error", err,
+			)
+		}
 
 		failedChan := make(chan FailedBlockEvent, 100)
 

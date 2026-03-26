@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/indexer"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
@@ -144,6 +145,81 @@ func TestBaseWorkerExecuteRecoverableConvertsPanicToError(t *testing.T) {
 	require.Equal(t, "test panic panic: boom", err.Error())
 }
 
+func TestRegularWorkerDetermineStartingBlockUpdatesCatchupRegistry(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{
+		name:         "ethereum",
+		internalCode: "ETH",
+		networkType:  enum.NetworkTypeEVM,
+		latest:       25,
+	}
+	store := &stubBlockStore{latestBlock: 20}
+	statusRegistry := status.NewRegistry()
+	statusRegistry.RegisterChain("ethereum", "ethereum", config.ChainConfig{
+		NetworkId:    "eth-mainnet",
+		InternalCode: "ETH",
+		Type:         enum.NetworkTypeEVM,
+	})
+	rw := newTestRegularWorker(chain, store, 20, 2)
+	rw.statusRegistry = statusRegistry
+
+	start := rw.determineStartingBlock()
+	require.Equal(t, uint64(25), start)
+
+	resp := statusRegistry.Snapshot("1.0.0")
+	require.Len(t, resp.Networks, 1)
+	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(5), resp.Networks[0].CatchupPendingBlocks)
+}
+
+func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T) {
+	t.Parallel()
+
+	statusRegistry := status.NewRegistry()
+	statusRegistry.RegisterChain("ethereum", "ethereum", config.ChainConfig{
+		NetworkId:    "eth-mainnet",
+		InternalCode: "ETH",
+		Type:         enum.NetworkTypeEVM,
+	})
+	statusRegistry.SetCatchupRanges("ethereum", []blockstore.CatchupRange{{
+		Start:   1,
+		End:     10,
+		Current: 0,
+	}})
+
+	store := &stubBlockStore{}
+	cw := &CatchupWorker{
+		BaseWorker: &BaseWorker{
+			ctx:            context.Background(),
+			cancel:         func() {},
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+			chain:          &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM},
+			blockStore:     store,
+			statusRegistry: statusRegistry,
+		},
+		blockRanges: []blockstore.CatchupRange{{
+			Start:   1,
+			End:     10,
+			Current: 0,
+		}},
+	}
+
+	cw.saveProgress(blockstore.CatchupRange{Start: 1, End: 10, Current: 0}, 5)
+
+	resp := statusRegistry.Snapshot("1.0.0")
+	require.Len(t, resp.Networks, 1)
+	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(5), resp.Networks[0].CatchupPendingBlocks)
+
+	err := cw.completeRange(blockstore.CatchupRange{Start: 1, End: 10, Current: 5})
+	require.NoError(t, err)
+
+	resp = statusRegistry.Snapshot("1.0.0")
+	require.Equal(t, 0, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(0), resp.Networks[0].CatchupPendingBlocks)
+}
+
 func testChainConfig() config.ChainConfig {
 	return config.ChainConfig{
 		PollInterval: time.Millisecond,
@@ -222,12 +298,27 @@ func (s *stubIndexer) IsHealthy() bool {
 }
 
 type stubBlockStore struct {
-	savedLatest  []uint64
-	failedBlocks []uint64
+	latestBlock            uint64
+	savedLatest            []uint64
+	failedBlocks           []uint64
+	savedCatchupRanges     []blockstore.CatchupRange
+	catchupProgress        []blockstore.CatchupRange
+	deleteCatchupCalls     []blockstore.CatchupRange
+	getLatestBlockErr      error
+	getCatchupProgressErr  error
+	saveCatchupRangesErr   error
+	saveCatchupProgressErr error
+	deleteCatchupErr       error
 }
 
 func (s *stubBlockStore) GetLatestBlock(string) (uint64, error) {
-	return 0, errors.New("not found")
+	if s.getLatestBlockErr != nil {
+		return 0, s.getLatestBlockErr
+	}
+	if s.latestBlock == 0 {
+		return 0, errors.New("not found")
+	}
+	return s.latestBlock, nil
 }
 
 func (s *stubBlockStore) SaveLatestBlock(_ string, blockNumber uint64) error {
@@ -252,19 +343,55 @@ func (s *stubBlockStore) RemoveFailedBlocks(string, []uint64) error {
 	return nil
 }
 
-func (s *stubBlockStore) SaveCatchupRanges(string, []blockstore.CatchupRange) error {
+func (s *stubBlockStore) SaveCatchupRanges(_ string, ranges []blockstore.CatchupRange) error {
+	if s.saveCatchupRangesErr != nil {
+		return s.saveCatchupRangesErr
+	}
+	s.savedCatchupRanges = append(s.savedCatchupRanges, ranges...)
 	return nil
 }
 
-func (s *stubBlockStore) SaveCatchupProgress(string, uint64, uint64, uint64) error {
+func (s *stubBlockStore) SaveCatchupProgress(_ string, start, end, current uint64) error {
+	if s.saveCatchupProgressErr != nil {
+		return s.saveCatchupProgressErr
+	}
+	for i := range s.catchupProgress {
+		if s.catchupProgress[i].Start == start && s.catchupProgress[i].End == end {
+			s.catchupProgress[i].Current = current
+			return nil
+		}
+	}
+	s.catchupProgress = append(s.catchupProgress, blockstore.CatchupRange{
+		Start:   start,
+		End:     end,
+		Current: current,
+	})
 	return nil
 }
 
 func (s *stubBlockStore) GetCatchupProgress(string) ([]blockstore.CatchupRange, error) {
-	return nil, nil
+	if s.getCatchupProgressErr != nil {
+		return nil, s.getCatchupProgressErr
+	}
+	return append([]blockstore.CatchupRange(nil), s.catchupProgress...), nil
 }
 
-func (s *stubBlockStore) DeleteCatchupRange(string, uint64, uint64) error {
+func (s *stubBlockStore) DeleteCatchupRange(_ string, start, end uint64) error {
+	if s.deleteCatchupErr != nil {
+		return s.deleteCatchupErr
+	}
+	s.deleteCatchupCalls = append(s.deleteCatchupCalls, blockstore.CatchupRange{
+		Start: start,
+		End:   end,
+	})
+	filtered := s.catchupProgress[:0]
+	for _, rng := range s.catchupProgress {
+		if rng.Start == start && rng.End == end {
+			continue
+		}
+		filtered = append(filtered, rng)
+	}
+	s.catchupProgress = filtered
 	return nil
 }
 

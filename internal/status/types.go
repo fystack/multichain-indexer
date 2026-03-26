@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/common/config"
-	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 )
 
 type HealthStatus string
@@ -37,31 +36,35 @@ type StatusResponse struct {
 	Networks  []NetworkStatus `json:"networks"`
 }
 
-// CatchupProgressSource supplies persisted catchup ranges (e.g. blockstore.Store).
-type CatchupProgressSource interface {
-	GetCatchupProgress(chain string) ([]blockstore.CatchupRange, error)
+type catchupRangeKey struct {
+	start uint64
+	end   uint64
 }
 
 type chainState struct {
-	networkID     string
-	chainName     string
-	internalCode  string
-	networkType   string
-	thresholds    config.StatusConfig
-	latestBlock   uint64
-	indexedBlock  uint64
-	lastIndexedAt time.Time
-	failedBlocks  map[uint64]struct{}
+	networkID            string
+	chainName            string
+	internalCode         string
+	networkType          string
+	thresholds           config.StatusConfig
+	latestBlock          uint64
+	indexedBlock         uint64
+	lastIndexedAt        time.Time
+	failedBlocks         map[uint64]struct{}
+	catchupRanges        map[catchupRangeKey]uint64
+	catchupPendingBlocks uint64
 }
 
 type chainSnapshot struct {
-	networkID         string
-	chainName         string
-	internalCode      string
-	networkType       string
-	thresholds        config.StatusConfig
-	latestBlock       uint64
-	indexedBlock      uint64
-	lastIndexedAt     time.Time
-	failedBlocksCount int
+	networkID            string
+	chainName            string
+	internalCode         string
+	networkType          string
+	thresholds           config.StatusConfig
+	latestBlock          uint64
+	indexedBlock         uint64
+	lastIndexedAt        time.Time
+	failedBlocksCount    int
+	catchupRangesCount   int
+	catchupPendingBlocks uint64
 }

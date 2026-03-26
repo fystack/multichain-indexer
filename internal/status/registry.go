@@ -33,7 +33,8 @@ func (r *Registry) RegisterChain(chainKey, chainName string, chainCfg config.Cha
 	state, exists := r.chains[key]
 	if !exists {
 		state = &chainState{
-			failedBlocks: make(map[uint64]struct{}),
+			failedBlocks:  make(map[uint64]struct{}),
+			catchupRanges: make(map[catchupRangeKey]uint64),
 		}
 		r.chains[key] = state
 	}
@@ -113,20 +114,79 @@ func (r *Registry) SetFailedBlocks(chainKey string, blockNumbers []uint64) {
 	}
 }
 
-func (r *Registry) Snapshot(version string, src CatchupProgressSource) StatusResponse {
+func (r *Registry) SetCatchupRanges(chainKey string, ranges []blockstore.CatchupRange) {
+	key := config.CanonicalChainKey(chainKey)
+	if key == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	state := r.ensureStateLocked(key)
+	state.catchupPendingBlocks = 0
+	state.catchupRanges = make(map[catchupRangeKey]uint64, len(ranges))
+	for _, rng := range ranges {
+		upsertCatchupRangeLocked(state, rng)
+	}
+}
+
+func (r *Registry) UpsertCatchupRanges(chainKey string, ranges []blockstore.CatchupRange) {
+	key := config.CanonicalChainKey(chainKey)
+	if key == "" || len(ranges) == 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	state := r.ensureStateLocked(key)
+	for _, rng := range ranges {
+		upsertCatchupRangeLocked(state, rng)
+	}
+}
+
+func (r *Registry) DeleteCatchupRange(chainKey string, start, end uint64) {
+	key := config.CanonicalChainKey(chainKey)
+	if key == "" {
+		return
+	}
+
+	rangeKey, ok := makeCatchupRangeKey(start, end)
+	if !ok {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	state := r.ensureStateLocked(key)
+	if pending, exists := state.catchupRanges[rangeKey]; exists {
+		if state.catchupPendingBlocks >= pending {
+			state.catchupPendingBlocks -= pending
+		} else {
+			state.catchupPendingBlocks = 0
+		}
+		delete(state.catchupRanges, rangeKey)
+	}
+}
+
+func (r *Registry) Snapshot(version string) StatusResponse {
 	r.mu.RLock()
 	states := make([]chainSnapshot, 0, len(r.chains))
 	for _, state := range r.chains {
 		states = append(states, chainSnapshot{
-			networkID:         state.networkID,
-			chainName:         state.chainName,
-			internalCode:      state.internalCode,
-			networkType:       state.networkType,
-			thresholds:        state.thresholds,
-			latestBlock:       state.latestBlock,
-			indexedBlock:      state.indexedBlock,
-			lastIndexedAt:     state.lastIndexedAt,
-			failedBlocksCount: len(state.failedBlocks),
+			networkID:            state.networkID,
+			chainName:            state.chainName,
+			internalCode:         state.internalCode,
+			networkType:          state.networkType,
+			thresholds:           state.thresholds,
+			latestBlock:          state.latestBlock,
+			indexedBlock:         state.indexedBlock,
+			lastIndexedAt:        state.lastIndexedAt,
+			failedBlocksCount:    len(state.failedBlocks),
+			catchupRangesCount:   len(state.catchupRanges),
+			catchupPendingBlocks: state.catchupPendingBlocks,
 		})
 	}
 	r.mu.RUnlock()
@@ -137,17 +197,7 @@ func (r *Registry) Snapshot(version string, src CatchupProgressSource) StatusRes
 		if state.latestBlock > state.indexedBlock {
 			headGap = state.latestBlock - state.indexedBlock
 		}
-
-		var catchupPending uint64
-		catchupRanges := 0
-		if src != nil && state.internalCode != "" {
-			if ranges, err := src.GetCatchupProgress(state.internalCode); err == nil {
-				catchupRanges = len(ranges)
-				catchupPending = blockstore.CatchupPendingBlocks(ranges)
-			}
-		}
-
-		pending := headGap + catchupPending
+		pending := headGap + state.catchupPendingBlocks
 
 		item := NetworkStatus{
 			NetworkID:            state.networkID,
@@ -159,8 +209,8 @@ func (r *Registry) Snapshot(version string, src CatchupProgressSource) StatusRes
 			IndexedBlock:         state.indexedBlock,
 			PendingBlocks:        pending,
 			HeadGap:              headGap,
-			CatchupPendingBlocks: catchupPending,
-			CatchupRanges:        catchupRanges,
+			CatchupPendingBlocks: state.catchupPendingBlocks,
+			CatchupRanges:        state.catchupRangesCount,
 			FailedBlocks:         state.failedBlocksCount,
 		}
 		if !state.lastIndexedAt.IsZero() {
@@ -188,14 +238,56 @@ func (r *Registry) ensureStateLocked(key string) *chainState {
 	}
 
 	state = &chainState{
-		networkID:    strings.ToLower(key),
-		chainName:    strings.ToLower(key),
-		internalCode: key,
-		thresholds:   config.StatusConfig{}.Normalize(),
-		failedBlocks: make(map[uint64]struct{}),
+		networkID:     strings.ToLower(key),
+		chainName:     strings.ToLower(key),
+		internalCode:  key,
+		thresholds:    config.StatusConfig{}.Normalize(),
+		failedBlocks:  make(map[uint64]struct{}),
+		catchupRanges: make(map[catchupRangeKey]uint64),
 	}
 	r.chains[key] = state
 	return state
+}
+
+func makeCatchupRangeKey(start, end uint64) (catchupRangeKey, bool) {
+	if start == 0 || end < start {
+		return catchupRangeKey{}, false
+	}
+	return catchupRangeKey{start: start, end: end}, true
+}
+
+func catchupPendingForRange(rng blockstore.CatchupRange) uint64 {
+	if rng.End < rng.Start || rng.Start == 0 {
+		return 0
+	}
+	if rng.Current < rng.Start {
+		return rng.End - rng.Start + 1
+	}
+	if rng.Current < rng.End {
+		return rng.End - rng.Current
+	}
+	return 0
+}
+
+func upsertCatchupRangeLocked(state *chainState, rng blockstore.CatchupRange) {
+	rangeKey, ok := makeCatchupRangeKey(rng.Start, rng.End)
+	if !ok {
+		return
+	}
+	if state.catchupRanges == nil {
+		state.catchupRanges = make(map[catchupRangeKey]uint64)
+	}
+
+	newPending := catchupPendingForRange(rng)
+	oldPending := state.catchupRanges[rangeKey]
+	state.catchupRanges[rangeKey] = newPending
+
+	if state.catchupPendingBlocks >= oldPending {
+		state.catchupPendingBlocks -= oldPending
+	} else {
+		state.catchupPendingBlocks = 0
+	}
+	state.catchupPendingBlocks += newPending
 }
 
 func deriveHealth(pendingBlocks uint64, thresholds config.StatusConfig) HealthStatus {

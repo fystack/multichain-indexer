@@ -10,22 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mapCatchupStore implements CatchupProgressSource for tests.
-type mapCatchupStore map[string][]blockstore.CatchupRange
-
-func (m mapCatchupStore) GetCatchupProgress(chain string) ([]blockstore.CatchupRange, error) {
-	if m == nil {
-		return nil, nil
-	}
-	ranges := m[chain]
-	if ranges == nil {
-		return nil, nil
-	}
-	out := make([]blockstore.CatchupRange, len(ranges))
-	copy(out, ranges)
-	return out, nil
-}
-
 func TestRegistrySnapshotDerivesHealthWithPerChainThresholds(t *testing.T) {
 	t.Parallel()
 
@@ -48,15 +32,12 @@ func TestRegistrySnapshotDerivesHealthWithPerChainThresholds(t *testing.T) {
 	registry.UpdateHead("eth_mainnet", 1_000, 980, indexedAt)
 	registry.MarkFailedBlock("eth_mainnet", 981)
 	registry.MarkFailedBlock("eth_mainnet", 982)
+	registry.SetCatchupRanges("eth_mainnet", []blockstore.CatchupRange{
+		{Start: 100, End: 102, Current: 99},
+		{Start: 200, End: 201, Current: 199},
+	})
 
-	kvCatchup := mapCatchupStore{
-		"ETH_MAINNET": {
-			{Start: 100, End: 102, Current: 99},
-			{Start: 200, End: 201, Current: 199},
-		},
-	}
-
-	resp := registry.Snapshot("1.2.3", kvCatchup)
+	resp := registry.Snapshot("1.2.3")
 	require.Equal(t, "1.2.3", resp.Version)
 	require.Len(t, resp.Networks, 1)
 
@@ -93,7 +74,7 @@ func TestRegistrySnapshotUsesDefaultThresholdWhenMissing(t *testing.T) {
 
 	registry.UpdateHead("tron_mainnet", 500, 470, time.Time{})
 
-	resp := registry.Snapshot("1.0.0", mapCatchupStore{})
+	resp := registry.Snapshot("1.0.0")
 	require.Len(t, resp.Networks, 1)
 
 	network := resp.Networks[0]
@@ -115,11 +96,47 @@ func TestRegistryClearFailedBlocks(t *testing.T) {
 	registry.MarkFailedBlock("btc_mainnet", 11)
 	registry.ClearFailedBlocks("btc_mainnet", []uint64{10})
 
-	resp := registry.Snapshot("1.0.0", mapCatchupStore{})
+	resp := registry.Snapshot("1.0.0")
 	require.Len(t, resp.Networks, 1)
 	require.Equal(t, 1, resp.Networks[0].FailedBlocks)
 
 	registry.SetFailedBlocks("btc_mainnet", []uint64{21, 22, 22})
-	resp = registry.Snapshot("1.0.0", mapCatchupStore{})
+	resp = registry.Snapshot("1.0.0")
 	require.Equal(t, 2, resp.Networks[0].FailedBlocks)
+}
+
+func TestRegistryCatchupRangeMutations(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	registry.RegisterChain("SOL_MAINNET", "sol_mainnet", config.ChainConfig{
+		NetworkId:    "sol-mainnet",
+		InternalCode: "SOL_MAINNET",
+		Type:         enum.NetworkTypeSol,
+	})
+
+	registry.SetCatchupRanges("sol_mainnet", []blockstore.CatchupRange{
+		{Start: 1, End: 10, Current: 0},
+		{Start: 20, End: 25, Current: 22},
+	})
+
+	resp := registry.Snapshot("1.0.0")
+	require.Len(t, resp.Networks, 1)
+	require.Equal(t, 2, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(13), resp.Networks[0].CatchupPendingBlocks)
+
+	registry.UpsertCatchupRanges("sol_mainnet", []blockstore.CatchupRange{
+		{Start: 1, End: 10, Current: 5},
+		{Start: 30, End: 31, Current: 29},
+	})
+
+	resp = registry.Snapshot("1.0.0")
+	require.Equal(t, 3, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(10), resp.Networks[0].CatchupPendingBlocks)
+
+	registry.DeleteCatchupRange("sol_mainnet", 20, 25)
+
+	resp = registry.Snapshot("1.0.0")
+	require.Equal(t, 2, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(7), resp.Networks[0].CatchupPendingBlocks)
 }
