@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
+	_ "google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -17,6 +19,7 @@ import (
 
 // SuiClient implements the SuiAPI interface using gRPC
 type SuiClient struct {
+	connMu           sync.Mutex
 	conn             *grpc.ClientConn
 	ledgerClient     v2.LedgerServiceClient
 	subscriberClient v2.SubscriptionServiceClient
@@ -42,7 +45,21 @@ func NewSuiClient(url string) *SuiClient {
 }
 
 // connect establishes the gRPC connection if not already connected
-func (c *SuiClient) connect(ctx context.Context) error {
+func (c *SuiClient) connect(_ context.Context) error {
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+
+	if c.conn != nil {
+		if c.conn.GetState() != connectivity.Shutdown {
+			c.ensureServiceClientsLocked(c.conn)
+			return nil
+		}
+		_ = c.conn.Close()
+		c.conn = nil
+		c.ledgerClient = nil
+		c.subscriberClient = nil
+	}
+
 	// Apply default options
 	options := &clientOptions{
 		maxMsgSize:  50 * 1024 * 1024, // 50MB
@@ -78,10 +95,17 @@ func (c *SuiClient) connect(ctx context.Context) error {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	c.conn = conn
-	c.ledgerClient = v2.NewLedgerServiceClient(conn)
-	// Initialize subscription client
-	c.subscriberClient = v2.NewSubscriptionServiceClient(conn)
+	c.ensureServiceClientsLocked(conn)
 	return nil
+}
+
+func (c *SuiClient) ensureServiceClientsLocked(conn *grpc.ClientConn) {
+	if c.ledgerClient == nil {
+		c.ledgerClient = v2.NewLedgerServiceClient(conn)
+	}
+	if c.subscriberClient == nil {
+		c.subscriberClient = v2.NewSubscriptionServiceClient(conn)
+	}
 }
 
 // StartStreaming starts the background streaming process
@@ -377,8 +401,16 @@ func (c *SuiClient) GetURL() string {
 
 // Close closes the gRPC connection
 func (c *SuiClient) Close() error {
-	if c.conn != nil {
-		return c.conn.Close()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
+
+	if c.conn == nil {
+		return nil
 	}
-	return nil
+
+	conn := c.conn
+	c.conn = nil
+	c.ledgerClient = nil
+	c.subscriberClient = nil
+	return conn.Close()
 }
