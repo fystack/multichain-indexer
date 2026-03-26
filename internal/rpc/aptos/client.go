@@ -106,6 +106,44 @@ func (c *Client) GetBlockByHeight(
 	return &block, nil
 }
 
+func (c *Client) GetBlockByVersion(
+	ctx context.Context,
+	version uint64,
+	withTransactions bool,
+) (*BlockResponse, error) {
+	endpoint := c.endpoint(fmt.Sprintf("/v1/blocks/by_version/%d", version))
+	params := map[string]string{"with_transactions": strconv.FormatBool(withTransactions)}
+
+	raw, err := c.base.Do(ctx, http.MethodGet, endpoint, nil, params)
+	if err != nil {
+		return nil, fmt.Errorf("get block by version %d failed: %w", version, err)
+	}
+
+	var block BlockResponse
+	if err := json.Unmarshal(raw, &block); err != nil {
+		return nil, fmt.Errorf("decode block by version %d failed: %w", version, err)
+	}
+	return &block, nil
+}
+
+func (c *Client) GetTransactionByHash(
+	ctx context.Context,
+	hash string,
+) (*Transaction, error) {
+	endpoint := c.endpoint(fmt.Sprintf("/v1/transactions/by_hash/%s", strings.TrimSpace(hash)))
+
+	raw, err := c.base.Do(ctx, http.MethodGet, endpoint, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("get transaction by hash %s failed: %w", hash, err)
+	}
+
+	var tx Transaction
+	if err := json.Unmarshal(raw, &tx); err != nil {
+		return nil, fmt.Errorf("decode transaction by hash %s failed: %w", hash, err)
+	}
+	return &tx, nil
+}
+
 func IsNotFoundError(err error) bool {
 	if err == nil {
 		return false
