@@ -35,6 +35,8 @@ type Transaction struct {
 	GasUsed      string              `json:"gas_used"`
 	GasUnitPrice string              `json:"gas_unit_price"`
 	Payload      *TransactionPayload `json:"payload"`
+	Events       []Event             `json:"events"`
+	Changes      []WriteSetChange    `json:"changes"`
 }
 
 // TransactionPayload is the entry function payload shape.
@@ -43,4 +45,29 @@ type TransactionPayload struct {
 	Function      string            `json:"function"`
 	TypeArguments []string          `json:"type_arguments"`
 	Arguments     []json.RawMessage `json:"arguments"`
+}
+
+type Event struct {
+	GUID           EventGUID `json:"guid"`
+	SequenceNumber string    `json:"sequence_number"`
+	Type           string    `json:"type"`
+	Data           EventData `json:"data"`
+}
+
+type EventGUID struct {
+	CreationNumber string `json:"creation_number"`
+	AccountAddress string `json:"account_address"`
+}
+
+type EventData map[string]json.RawMessage
+
+type WriteSetChange struct {
+	Type    string            `json:"type"`
+	Address string            `json:"address"`
+	Data    *WriteSetResource `json:"data"`
+}
+
+type WriteSetResource struct {
+	Type string                     `json:"type"`
+	Data map[string]json.RawMessage `json:"data"`
 }
