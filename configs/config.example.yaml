@@ -4,6 +4,7 @@ version: "1.0.0"
 
 # Global defaults - applies to all chains unless overridden
 defaults:
+  enabled: false # chains inherit this unless they override enabled below
   from_latest: true # start indexing from the latest block
   poll_interval: "5s" # how often to poll for new blocks
   reorg_rollback_window: 20 # number of blocks to roll back on reorg
@@ -47,6 +48,7 @@ chains:
       slow_max_pending_blocks: 400
 
   ethereum_mainnet:
+    enabled: true # example override: this chain starts even when defaults.enabled is false
     network_id: "ethereum_mainnet"
     internal_code: "ETH_MAINNET"
     type: "evm"
