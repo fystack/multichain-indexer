@@ -290,6 +290,15 @@ func (c *CosmosIndexer) extractTransferTransactions(
 
 		fee := extractCosmosFee(txResult.Events, nativeDenom)
 		transfers := extractCosmosTransfers(txResult.Events)
+		if ancillaryCoin, ok := extractCosmosAncillaryNativeCoin(txResult.Events, nativeDenom); ok {
+			transfers = stripCosmosFeeTransfers(transfers, ancillaryCoin)
+		}
+		if feeCoin, ok := extractCosmosFeeCoin(txResult.Events, nativeDenom); ok {
+			transfers = stripCosmosFeeTransfers(transfers, feeCoin)
+		}
+		if tipCoin, ok := extractCosmosTipCoin(txResult.Events, nativeDenom); ok {
+			transfers = stripCosmosFeeTransfers(transfers, tipCoin)
+		}
 
 		feeAssigned := false
 		for transferIndex, transfer := range transfers {
@@ -330,11 +339,12 @@ func (c *CosmosIndexer) extractTransferTransactions(
 }
 
 type cosmosTransfer struct {
-	sender    string
-	recipient string
-	amount    string
-	denom     string
-	source    cosmosTransferSource
+	sender      string
+	recipient   string
+	amount      string
+	denom       string
+	source      cosmosTransferSource
+	hasMsgIndex bool
 }
 
 type cosmosTransferSource uint8
@@ -422,17 +432,40 @@ func extractCosmosBankTransfers(
 					continue
 				}
 				transfers = append(transfers, cosmosTransfer{
-					sender:    senders[i],
-					recipient: recipients[i],
-					amount:    coin.Amount,
-					denom:     coin.Denom,
-					source:    cosmosTransferSourceBank,
+					sender:      senders[i],
+					recipient:   recipients[i],
+					amount:      coin.Amount,
+					denom:       coin.Denom,
+					source:      cosmosTransferSourceBank,
+					hasMsgIndex: len(msgIndexes) > 0,
 				})
 			}
 		}
 	}
 
 	return transfers
+}
+
+func stripCosmosFeeTransfers(transfers []cosmosTransfer, feeCoin cosmosCoin) []cosmosTransfer {
+	if feeCoin.Amount == "" || feeCoin.Denom == "" {
+		return transfers
+	}
+
+	filtered := make([]cosmosTransfer, 0, len(transfers))
+	removed := false
+	for _, transfer := range transfers {
+		if !removed &&
+			transfer.source == cosmosTransferSourceBank &&
+			!transfer.hasMsgIndex &&
+			transfer.amount == feeCoin.Amount &&
+			normalizeCosmosDenom(transfer.denom) == normalizeCosmosDenom(feeCoin.Denom) {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, transfer)
+	}
+
+	return filtered
 }
 
 type cosmosPacketData struct {
@@ -998,6 +1031,76 @@ func extractCosmosFee(events []cosmos.Event, nativeDenom string) decimal.Decimal
 		return fee
 	}
 	return decimal.Zero
+}
+
+func extractCosmosFeeCoin(events []cosmos.Event, nativeDenom string) (cosmosCoin, bool) {
+	if feeCoin, ok := extractCosmosCoinFromEvent(events, "tx", "fee", nativeDenom); ok {
+		return feeCoin, true
+	}
+	if feeCoin, ok := extractCosmosCoinFromEvent(events, "fee_pay", "fee", nativeDenom); ok {
+		return feeCoin, true
+	}
+	return cosmosCoin{}, false
+}
+
+func extractCosmosTipCoin(events []cosmos.Event, nativeDenom string) (cosmosCoin, bool) {
+	return extractCosmosCoinFromEvent(events, "tip_pay", "tip", nativeDenom)
+}
+
+func extractCosmosAncillaryNativeCoin(events []cosmos.Event, nativeDenom string) (cosmosCoin, bool) {
+	feeCoin, hasFee := extractCosmosFeeCoin(events, nativeDenom)
+	tipCoin, hasTip := extractCosmosTipCoin(events, nativeDenom)
+
+	switch {
+	case hasFee && hasTip:
+		if normalizeCosmosDenom(feeCoin.Denom) != normalizeCosmosDenom(tipCoin.Denom) {
+			return cosmosCoin{}, false
+		}
+		feeAmount, err := decimal.NewFromString(feeCoin.Amount)
+		if err != nil {
+			return cosmosCoin{}, false
+		}
+		tipAmount, err := decimal.NewFromString(tipCoin.Amount)
+		if err != nil {
+			return cosmosCoin{}, false
+		}
+		return cosmosCoin{
+			Amount: feeAmount.Add(tipAmount).String(),
+			Denom:  feeCoin.Denom,
+		}, true
+	case hasFee:
+		return feeCoin, true
+	case hasTip:
+		return tipCoin, true
+	default:
+		return cosmosCoin{}, false
+	}
+}
+
+func extractCosmosCoinFromEvent(events []cosmos.Event, eventType, keyName, nativeDenom string) (cosmosCoin, bool) {
+	for _, event := range events {
+		if event.Type != eventType {
+			continue
+		}
+		for _, attr := range event.Attributes {
+			key := strings.ToLower(strings.TrimSpace(decodeCosmosEventValue(attr.Key)))
+			if key != keyName {
+				continue
+			}
+
+			value := strings.TrimSpace(decodeCosmosEventValue(attr.Value))
+			if value == "" {
+				continue
+			}
+
+			coins := parseCosmosCoins(value)
+			if len(coins) == 0 {
+				continue
+			}
+			return pickCosmosFeeCoin(coins, nativeDenom), true
+		}
+	}
+	return cosmosCoin{}, false
 }
 
 func extractCosmosFeeFromEvent(events []cosmos.Event, eventType, feeKey, nativeDenom string) (decimal.Decimal, bool) {
