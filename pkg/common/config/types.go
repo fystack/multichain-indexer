@@ -28,6 +28,7 @@ type Config struct {
 }
 
 type Defaults struct {
+	Enabled             *bool              `yaml:"enabled"`
 	FromLatest          bool               `yaml:"from_latest"`
 	TwoWayIndexing      bool               `yaml:"two_way_indexing"`
 	PollInterval        time.Duration      `yaml:"poll_interval"         validate:"required"`
@@ -42,6 +43,7 @@ type Chains map[string]ChainConfig
 
 type ChainConfig struct {
 	Name                string           `yaml:"-"`
+	Enabled             *bool            `yaml:"enabled"`
 	NetworkId           string           `yaml:"network_id"`
 	InternalCode        string           `yaml:"internal_code"`
 	NativeDenom         string           `yaml:"native_denom"`

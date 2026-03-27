@@ -31,6 +31,17 @@ func (c Chains) Names() []string {
 	return names
 }
 
+// EnabledNames returns chain names whose enabled flag is either true or omitted.
+func (c Chains) EnabledNames() []string {
+	names := make([]string, 0, len(c))
+	for k, chain := range c {
+		if chain.Enabled == nil || *chain.Enabled {
+			names = append(names, k)
+		}
+	}
+	return names
+}
+
 // Validate checks if given chain names exist in config.
 func (c Chains) Validate(names []string) error {
 	for _, name := range names {
@@ -59,6 +70,10 @@ func (c Chains) ApplyDefaults(def Defaults) error {
 		}
 		if strings.TrimSpace(chain.InternalCode) == "" {
 			chain.InternalCode = strings.ToUpper(name)
+		}
+		if chain.Enabled == nil && def.Enabled != nil {
+			enabled := *def.Enabled
+			chain.Enabled = &enabled
 		}
 		if !chain.FromLatest {
 			chain.FromLatest = def.FromLatest

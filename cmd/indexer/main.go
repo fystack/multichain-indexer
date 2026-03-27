@@ -170,8 +170,8 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 
 	// If no chains specified, use all configured chains
 	if len(chains) == 0 {
-		chains = cfg.Chains.Names()
-		logger.Info("No chains specified, using all configured chains", "chains", chains)
+		chains = cfg.Chains.EnabledNames()
+		logger.Info("No chains specified, using enabled configured chains", "chains", chains)
 	} else {
 		logger.Info("Indexing specified chains", "chains", chains)
 	}
