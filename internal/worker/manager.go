@@ -11,34 +11,38 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
 const defaultShutdownTimeout = 30 * time.Second
 
 type Manager struct {
-	ctx         context.Context
-	workers     []Worker
-	kvstore     infra.KVStore
-	blockStore  blockstore.Store
-	emitter     events.Emitter
-	pubkeyStore pubkeystore.Store
-	registry    *status.Registry
+	ctx          context.Context
+	workers      []Worker
+	kvstore      infra.KVStore
+	blockStore   blockstore.Store
+	catchupStore catchupstore.Store
+	emitter      events.Emitter
+	pubkeyStore  pubkeystore.Store
+	registry     *status.Registry
 }
 
 func NewManager(
 	ctx context.Context,
 	kvstore infra.KVStore,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 ) *Manager {
 	return &Manager{
-		ctx:         ctx,
-		kvstore:     kvstore,
-		blockStore:  blockStore,
-		emitter:     emitter,
-		pubkeyStore: pubkeyStore,
+		ctx:          ctx,
+		kvstore:      kvstore,
+		blockStore:   blockStore,
+		catchupStore: catchupStore,
+		emitter:      emitter,
+		pubkeyStore:  pubkeyStore,
 	}
 }
 
@@ -99,6 +103,21 @@ func (m *Manager) StatusSnapshot(version string) status.StatusResponse {
 			Timestamp: time.Now().UTC(),
 			Version:   version,
 			Networks:  []status.NetworkStatus{},
+		}
+	}
+
+	if m.catchupStore != nil {
+		for _, network := range m.registry.Snapshot(version).Networks {
+			ranges, err := m.catchupStore.GetProgress(m.ctx, network.InternalCode)
+			if err != nil {
+				logger.Warn("Failed to refresh catchup progress for status snapshot",
+					"chain", network.ChainName,
+					"internal_code", network.InternalCode,
+					"error", err,
+				)
+				continue
+			}
+			m.registry.SetCatchupRanges(network.ChainName, ranges)
 		}
 	}
 	return m.registry.Snapshot(version)

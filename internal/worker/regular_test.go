@@ -14,6 +14,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +70,8 @@ func TestRegularWorkerProcessRegularBlocksRecoversGapViaGetBlock(t *testing.T) {
 		},
 	}
 	store := &stubBlockStore{}
-	rw := newTestRegularWorker(chain, store, 100, 3)
+	catchupStore := &stubCatchupStore{}
+	rw := newTestRegularWorker(chain, store, catchupStore, 100, 3)
 
 	err := rw.processRegularBlocks()
 	require.NoError(t, err)
@@ -108,7 +110,8 @@ func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T)
 		},
 	}
 	store := &stubBlockStore{}
-	rw := newTestRegularWorker(chain, store, 100, 2)
+	catchupStore := &stubCatchupStore{}
+	rw := newTestRegularWorker(chain, store, catchupStore, 100, 2)
 
 	err := rw.processRegularBlocks()
 	require.Error(t, err)
@@ -155,25 +158,23 @@ func TestRegularWorkerDetermineStartingBlockUpdatesCatchupRegistry(t *testing.T)
 		latest:       25,
 	}
 	store := &stubBlockStore{latestBlock: 20}
+	catchupStore := &stubCatchupStore{}
 	statusRegistry := status.NewRegistry()
 	statusRegistry.RegisterChain("ethereum", "ethereum", config.ChainConfig{
 		NetworkId:    "eth-mainnet",
 		InternalCode: "ETH",
 		Type:         enum.NetworkTypeEVM,
 	})
-	rw := newTestRegularWorker(chain, store, 20, 2)
+	rw := newTestRegularWorker(chain, store, catchupStore, 20, 2)
 	rw.statusRegistry = statusRegistry
 
 	start := rw.determineStartingBlock()
 	require.Equal(t, uint64(25), start)
-
-	resp := statusRegistry.Snapshot("1.0.0")
-	require.Len(t, resp.Networks, 1)
-	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
-	require.Equal(t, uint64(5), resp.Networks[0].CatchupPendingBlocks)
+	require.Len(t, catchupStore.savedCatchupRanges, 1)
+	require.Equal(t, blockstore.CatchupRange{Start: 21, End: 25, Current: 20}, catchupStore.savedCatchupRanges[0])
 }
 
-func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T) {
+func TestCatchupWorkerPersistsProgressAndCompletion(t *testing.T) {
 	t.Parallel()
 
 	statusRegistry := status.NewRegistry()
@@ -189,6 +190,7 @@ func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T
 	}})
 
 	store := &stubBlockStore{}
+	catchupStore := &stubCatchupStore{}
 	cw := &CatchupWorker{
 		BaseWorker: &BaseWorker{
 			ctx:            context.Background(),
@@ -196,6 +198,7 @@ func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			chain:          &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM},
 			blockStore:     store,
+			catchupStore:   catchupStore,
 			statusRegistry: statusRegistry,
 		},
 		blockRanges: []blockstore.CatchupRange{{
@@ -206,18 +209,18 @@ func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T
 	}
 
 	cw.saveProgress(blockstore.CatchupRange{Start: 1, End: 10, Current: 0}, 5)
-
-	resp := statusRegistry.Snapshot("1.0.0")
-	require.Len(t, resp.Networks, 1)
-	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
-	require.Equal(t, uint64(5), resp.Networks[0].CatchupPendingBlocks)
+	require.Equal(t, []blockstore.CatchupRange{{
+		Start:   1,
+		End:     10,
+		Current: 5,
+	}}, catchupStore.catchupProgress)
 
 	err := cw.completeRange(blockstore.CatchupRange{Start: 1, End: 10, Current: 5})
 	require.NoError(t, err)
-
-	resp = statusRegistry.Snapshot("1.0.0")
-	require.Equal(t, 0, resp.Networks[0].CatchupRanges)
-	require.Equal(t, uint64(0), resp.Networks[0].CatchupPendingBlocks)
+	require.Equal(t, []blockstore.CatchupRange{{
+		Start: 1,
+		End:   10,
+	}}, catchupStore.deleteCatchupCalls)
 }
 
 func testChainConfig() config.ChainConfig {
@@ -229,19 +232,26 @@ func testChainConfig() config.ChainConfig {
 	}
 }
 
-func newTestRegularWorker(chain *stubIndexer, store *stubBlockStore, currentBlock uint64, batchSize int) *RegularWorker {
+func newTestRegularWorker(
+	chain *stubIndexer,
+	store *stubBlockStore,
+	catchupStore catchupstore.Store,
+	currentBlock uint64,
+	batchSize int,
+) *RegularWorker {
 	cfg := testChainConfig()
 	cfg.Throttle.BatchSize = batchSize
 
 	return &RegularWorker{
 		BaseWorker: &BaseWorker{
-			ctx:        context.Background(),
-			cancel:     func() {},
-			logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			config:     cfg,
-			chain:      chain,
-			blockStore: store,
-			failedChan: make(chan FailedBlockEvent, 1),
+			ctx:          context.Background(),
+			cancel:       func() {},
+			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			config:       cfg,
+			chain:        chain,
+			blockStore:   store,
+			catchupStore: catchupStore,
+			failedChan:   make(chan FailedBlockEvent, 1),
 		},
 		currentBlock: currentBlock,
 		blockHashes:  make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize),
@@ -298,17 +308,10 @@ func (s *stubIndexer) IsHealthy() bool {
 }
 
 type stubBlockStore struct {
-	latestBlock            uint64
-	savedLatest            []uint64
-	failedBlocks           []uint64
-	savedCatchupRanges     []blockstore.CatchupRange
-	catchupProgress        []blockstore.CatchupRange
-	deleteCatchupCalls     []blockstore.CatchupRange
-	getLatestBlockErr      error
-	getCatchupProgressErr  error
-	saveCatchupRangesErr   error
-	saveCatchupProgressErr error
-	deleteCatchupErr       error
+	latestBlock       uint64
+	savedLatest       []uint64
+	failedBlocks      []uint64
+	getLatestBlockErr error
 }
 
 func (s *stubBlockStore) GetLatestBlock(string) (uint64, error) {
@@ -343,7 +346,29 @@ func (s *stubBlockStore) RemoveFailedBlocks(string, []uint64) error {
 	return nil
 }
 
-func (s *stubBlockStore) SaveCatchupRanges(_ string, ranges []blockstore.CatchupRange) error {
+func (s *stubBlockStore) GetBlockHashes(string) ([]blockstore.BlockHashEntry, error) {
+	return nil, nil
+}
+
+func (s *stubBlockStore) SaveBlockHashes(string, []blockstore.BlockHashEntry) error {
+	return nil
+}
+
+func (s *stubBlockStore) Close() error {
+	return nil
+}
+
+type stubCatchupStore struct {
+	savedCatchupRanges     []blockstore.CatchupRange
+	catchupProgress        []blockstore.CatchupRange
+	deleteCatchupCalls     []blockstore.CatchupRange
+	getCatchupProgressErr  error
+	saveCatchupRangesErr   error
+	saveCatchupProgressErr error
+	deleteCatchupErr       error
+}
+
+func (s *stubCatchupStore) SaveRanges(_ context.Context, _ string, ranges []blockstore.CatchupRange) error {
 	if s.saveCatchupRangesErr != nil {
 		return s.saveCatchupRangesErr
 	}
@@ -351,7 +376,7 @@ func (s *stubBlockStore) SaveCatchupRanges(_ string, ranges []blockstore.Catchup
 	return nil
 }
 
-func (s *stubBlockStore) SaveCatchupProgress(_ string, start, end, current uint64) error {
+func (s *stubCatchupStore) SaveProgress(_ context.Context, _ string, start, end, current uint64) error {
 	if s.saveCatchupProgressErr != nil {
 		return s.saveCatchupProgressErr
 	}
@@ -369,14 +394,14 @@ func (s *stubBlockStore) SaveCatchupProgress(_ string, start, end, current uint6
 	return nil
 }
 
-func (s *stubBlockStore) GetCatchupProgress(string) ([]blockstore.CatchupRange, error) {
+func (s *stubCatchupStore) GetProgress(_ context.Context, _ string) ([]blockstore.CatchupRange, error) {
 	if s.getCatchupProgressErr != nil {
 		return nil, s.getCatchupProgressErr
 	}
 	return append([]blockstore.CatchupRange(nil), s.catchupProgress...), nil
 }
 
-func (s *stubBlockStore) DeleteCatchupRange(_ string, start, end uint64) error {
+func (s *stubCatchupStore) DeleteRange(_ context.Context, _ string, start, end uint64) error {
 	if s.deleteCatchupErr != nil {
 		return s.deleteCatchupErr
 	}
@@ -392,17 +417,5 @@ func (s *stubBlockStore) DeleteCatchupRange(_ string, start, end uint64) error {
 		filtered = append(filtered, rng)
 	}
 	s.catchupProgress = filtered
-	return nil
-}
-
-func (s *stubBlockStore) GetBlockHashes(string) ([]blockstore.BlockHashEntry, error) {
-	return nil, nil
-}
-
-func (s *stubBlockStore) SaveBlockHashes(string, []blockstore.BlockHashEntry) error {
-	return nil
-}
-
-func (s *stubBlockStore) Close() error {
 	return nil
 }

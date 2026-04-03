@@ -55,6 +55,7 @@ func NewRescannerWorker(
 			cfg,
 			kv,
 			blockStore,
+			nil,
 			emitter,
 			pubkeyStore,
 			ModeRescanner,

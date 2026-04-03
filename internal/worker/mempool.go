@@ -42,6 +42,7 @@ func NewMempoolWorker(
 		cfg,
 		kv,
 		blockStore,
+		nil,
 		emitter,
 		pubkeyStore,
 		ModeMempool,

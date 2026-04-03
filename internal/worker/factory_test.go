@@ -3,19 +3,17 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/common/config"
-	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	commonlogger "github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
-	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 	"github.com/hashicorp/consul/api"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -173,21 +171,18 @@ func TestCreateManagerWithWorkersBootstrapsCatchupRangesIntoStatusRegistry(t *te
 		},
 	}
 
-	kv := &listKVStore{
-		pairs: []*infra.KVPair{{
-			Key:   fmt.Sprintf("%s/%s/%s/%d-%d", blockstore.BlockStates, "a", constant.KVPrefixProgressCatchup, 1, 20),
-			Value: []byte("10"),
-		}},
-	}
+	redisClient, cleanup := setupFactoryTestRedis(t)
+	defer cleanup()
+	require.NoError(t, redisClient.HSet(context.Background(), "catchup_progress:a", "1-20", "10").Err())
 
 	manager := CreateManagerWithWorkers(
 		context.Background(),
 		cfg,
-		kv,
+		noopKVStore{},
 		nil,
 		nil,
 		events.Emitter(nil),
-		nil,
+		&factoryTestRedisClient{client: redisClient},
 		ManagerConfig{
 			Chains: []string{"chain-a"},
 		},
@@ -197,6 +192,14 @@ func TestCreateManagerWithWorkersBootstrapsCatchupRangesIntoStatusRegistry(t *te
 	require.Len(t, resp.Networks, 1)
 	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
 	require.Equal(t, uint64(10), resp.Networks[0].CatchupPendingBlocks)
+
+	require.NoError(t, redisClient.Del(context.Background(), "catchup_progress:a").Err())
+	require.NoError(t, redisClient.HSet(context.Background(), "catchup_progress:a", "31-40", "35").Err())
+
+	resp = manager.StatusSnapshot("1.0.0")
+	require.Len(t, resp.Networks, 1)
+	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
+	require.Equal(t, uint64(5), resp.Networks[0].CatchupPendingBlocks)
 }
 
 type noopKVStore struct{}
@@ -243,4 +246,57 @@ func (s *listKVStore) List(prefix string) ([]*infra.KVPair, error) {
 		}
 	}
 	return out, nil
+}
+
+type factoryTestRedisClient struct {
+	client *redis.Client
+}
+
+func (r *factoryTestRedisClient) GetClient() *redis.Client { return r.client }
+func (r *factoryTestRedisClient) Set(key string, value any, expiration time.Duration) error {
+	return r.client.Set(context.Background(), key, value, expiration).Err()
+}
+func (r *factoryTestRedisClient) Get(key string) (string, error) {
+	return r.client.Get(context.Background(), key).Result()
+}
+func (r *factoryTestRedisClient) Del(keys ...string) error {
+	return r.client.Del(context.Background(), keys...).Err()
+}
+func (r *factoryTestRedisClient) ZAdd(key string, members ...redis.Z) error {
+	return r.client.ZAdd(context.Background(), key, members...).Err()
+}
+func (r *factoryTestRedisClient) ZRem(key string, members ...interface{}) error {
+	return r.client.ZRem(context.Background(), key, members...).Err()
+}
+func (r *factoryTestRedisClient) ZRange(key string, start, stop int64) ([]string, error) {
+	return r.client.ZRange(context.Background(), key, start, stop).Result()
+}
+func (r *factoryTestRedisClient) ZRangeWithScores(key string, start, stop int64) ([]redis.Z, error) {
+	return r.client.ZRangeWithScores(context.Background(), key, start, stop).Result()
+}
+func (r *factoryTestRedisClient) ZRevRangeWithScores(key string, start, stop int64) ([]redis.Z, error) {
+	return r.client.ZRevRangeWithScores(context.Background(), key, start, stop).Result()
+}
+func (r *factoryTestRedisClient) Close() error { return r.client.Close() }
+
+func setupFactoryTestRedis(t *testing.T) (*redis.Client, func()) {
+	t.Helper()
+
+	client := redis.NewClient(&redis.Options{
+		Addr: "localhost:6379",
+		DB:   13,
+	})
+
+	ctx := context.Background()
+	if _, err := client.Ping(ctx).Result(); err != nil {
+		t.Skip("Redis not available")
+	}
+	require.NoError(t, client.FlushDB(ctx).Err())
+
+	cleanup := func() {
+		_ = client.FlushDB(ctx).Err()
+		_ = client.Close()
+	}
+
+	return client, cleanup
 }
