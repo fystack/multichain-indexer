@@ -401,6 +401,14 @@ func (s *stubCatchupStore) GetProgress(_ context.Context, _ string) ([]blockstor
 	return append([]blockstore.CatchupRange(nil), s.catchupProgress...), nil
 }
 
+func (s *stubCatchupStore) GetNextRange(_ context.Context, _ string) (*blockstore.CatchupRange, error) {
+	if len(s.catchupProgress) == 0 {
+		return nil, nil
+	}
+	rng := s.catchupProgress[0]
+	return &rng, nil
+}
+
 func (s *stubCatchupStore) DeleteRange(_ context.Context, _ string, start, end uint64) error {
 	if s.deleteCatchupErr != nil {
 		return s.deleteCatchupErr

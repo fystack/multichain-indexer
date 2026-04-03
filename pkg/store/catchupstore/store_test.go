@@ -2,6 +2,7 @@ package catchupstore
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -128,6 +129,86 @@ func TestCatchupStoreSaveRangesMergesWithExistingRedisRanges(t *testing.T) {
 	require.Equal(t, []blockstore.CatchupRange{
 		{Start: 100, End: 150, Current: 110},
 	}, ranges)
+}
+
+func TestCatchupStoreGetNextRangeClaimsOneRange(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	store := New(&realRedisClient{client: client})
+	ctx := context.Background()
+
+	err := store.SaveRanges(ctx, "apt", []blockstore.CatchupRange{
+		{Start: 1, End: 10, Current: 0},
+		{Start: 11, End: 20, Current: 10},
+	})
+	require.NoError(t, err)
+
+	claimed, err := store.GetNextRange(ctx, "apt")
+	require.NoError(t, err)
+	require.NotNil(t, claimed)
+	require.Equal(t, uint64(1), claimed.Start)
+	require.Equal(t, uint64(10), claimed.End)
+
+	claimed2, err := store.GetNextRange(ctx, "apt")
+	require.NoError(t, err)
+	require.NotNil(t, claimed2)
+	require.Equal(t, uint64(11), claimed2.Start)
+	require.Equal(t, uint64(20), claimed2.End)
+
+	claimed3, err := store.GetNextRange(ctx, "apt")
+	require.NoError(t, err)
+	require.Nil(t, claimed3)
+}
+
+func TestCatchupStoreGetNextRangeClaimsDistinctRangesConcurrently(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	store := New(&realRedisClient{client: client})
+	ctx := context.Background()
+
+	err := store.SaveRanges(ctx, "apt", []blockstore.CatchupRange{
+		{Start: 1, End: 10, Current: 0},
+		{Start: 11, End: 20, Current: 10},
+	})
+	require.NoError(t, err)
+
+	type claimResult struct {
+		rng *blockstore.CatchupRange
+		err error
+	}
+
+	results := make(chan claimResult, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			defer wg.Done()
+			rng, err := store.GetNextRange(ctx, "apt")
+			results <- claimResult{rng: rng, err: err}
+		}()
+	}
+
+	wg.Wait()
+	close(results)
+
+	claimed := make(map[uint64]struct{})
+	for res := range results {
+		require.NoError(t, res.err)
+		require.NotNil(t, res.rng)
+		claimed[res.rng.Start] = struct{}{}
+	}
+
+	require.Len(t, claimed, 2)
+	_, firstOK := claimed[1]
+	_, secondOK := claimed[11]
+	require.True(t, firstOK)
+	require.True(t, secondOK)
 }
 
 type realRedisClient struct {

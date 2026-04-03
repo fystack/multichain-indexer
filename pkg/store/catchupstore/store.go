@@ -16,7 +16,9 @@ import (
 
 const (
 	catchupProgressKeyPrefix = "catchup_progress"
+	catchupLockKeyPrefix     = "catchup_lock"
 	defaultTimeout           = 5 * time.Second
+	lockTimeout              = 3 * time.Second
 )
 
 const addRangesScript = `
@@ -86,10 +88,46 @@ const addRangesScript = `
 	return {mergedStart, mergedEnd, mergedCurrent}
 `
 
+const claimRangeScript = `
+	local key = KEYS[1]
+	local lockPrefix = ARGV[1]
+	local lockExpiration = tonumber(ARGV[2])
+
+	local entries = redis.call('HGETALL', key)
+	for i = 1, #entries, 2 do
+		local field = entries[i]
+		local value = entries[i + 1]
+		local startText, endText = string.match(field, '^(%d+)%-(%d+)$')
+		if startText and endText then
+			local startNum = tonumber(startText)
+			local endNum = tonumber(endText)
+			local currentNum = tonumber(value)
+
+			if startNum and endNum and currentNum then
+				if currentNum > endNum then
+					currentNum = endNum
+				end
+				if currentNum + 1 < startNum then
+					currentNum = startNum - 1
+				end
+
+				local lockKey = lockPrefix .. field
+				local locked = redis.call('SET', lockKey, 'locked', 'NX', 'EX', lockExpiration)
+				if locked then
+					return {startNum, endNum, currentNum}
+				end
+			end
+		end
+	end
+
+	return nil
+`
+
 type Store interface {
 	SaveRanges(ctx context.Context, chain string, ranges []blockstore.CatchupRange) error
 	SaveProgress(ctx context.Context, chain string, start, end, current uint64) error
 	GetProgress(ctx context.Context, chain string) ([]blockstore.CatchupRange, error)
+	GetNextRange(ctx context.Context, chain string) (*blockstore.CatchupRange, error)
 	DeleteRange(ctx context.Context, chain string, start, end uint64) error
 }
 
@@ -98,6 +136,7 @@ type noopStore struct{}
 type catchupStore struct {
 	redisClient infra.RedisClient
 	addScript   *redis.Script
+	claimScript *redis.Script
 }
 
 func New(redisClient infra.RedisClient) Store {
@@ -107,12 +146,16 @@ func New(redisClient infra.RedisClient) Store {
 	return &catchupStore{
 		redisClient: redisClient,
 		addScript:   redis.NewScript(addRangesScript),
+		claimScript: redis.NewScript(claimRangeScript),
 	}
 }
 
 func (noopStore) SaveRanges(context.Context, string, []blockstore.CatchupRange) error { return nil }
 func (noopStore) SaveProgress(context.Context, string, uint64, uint64, uint64) error  { return nil }
 func (noopStore) GetProgress(context.Context, string) ([]blockstore.CatchupRange, error) {
+	return nil, nil
+}
+func (noopStore) GetNextRange(context.Context, string) (*blockstore.CatchupRange, error) {
 	return nil, nil
 }
 func (noopStore) DeleteRange(context.Context, string, uint64, uint64) error { return nil }
@@ -123,6 +166,10 @@ func composeKey(chain string) string {
 
 func composeField(start, end uint64) string {
 	return fmt.Sprintf("%d-%d", start, end)
+}
+
+func composeLockKey(chain string, start, end uint64) string {
+	return fmt.Sprintf("%s:%s:%d-%d", catchupLockKeyPrefix, chain, start, end)
 }
 
 func parseField(field string) (uint64, uint64, bool) {
@@ -214,6 +261,57 @@ func (s *catchupStore) GetProgress(
 	return parseProgressMap(values), nil
 }
 
+func (s *catchupStore) GetNextRange(
+	ctx context.Context,
+	chain string,
+) (*blockstore.CatchupRange, error) {
+	if chain == "" {
+		return nil, errors.New("chain name is required")
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	result, err := s.claimScript.Run(
+		ctx,
+		s.redisClient.GetClient(),
+		[]string{composeKey(chain)},
+		fmt.Sprintf("%s:%s:", catchupLockKeyPrefix, chain),
+		int(lockTimeout.Seconds()),
+	).Result()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("claim catchup range: %w", err)
+	}
+
+	if result == nil {
+		return nil, nil
+	}
+
+	values, ok := result.([]interface{})
+	if !ok || len(values) != 3 {
+		return nil, fmt.Errorf("unexpected claim result type: %T", result)
+	}
+
+	start, ok := toUint64(values[0])
+	if !ok {
+		return nil, fmt.Errorf("invalid claim start type: %T", values[0])
+	}
+	end, ok := toUint64(values[1])
+	if !ok {
+		return nil, fmt.Errorf("invalid claim end type: %T", values[1])
+	}
+	current, ok := toUint64(values[2])
+	if !ok {
+		return nil, fmt.Errorf("invalid claim current type: %T", values[2])
+	}
+
+	claimed := blockstore.CatchupRange{Start: start, End: end, Current: current}
+	return &claimed, nil
+}
+
 func (s *catchupStore) DeleteRange(
 	ctx context.Context,
 	chain string,
@@ -231,6 +329,7 @@ func (s *catchupStore) DeleteRange(
 	pipe := s.redisClient.GetClient().Pipeline()
 	delCmd := pipe.HDel(ctx, key, field)
 	lenCmd := pipe.HLen(ctx, key)
+	pipe.Del(ctx, composeLockKey(chain, start, end))
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("delete catchup range: %w", err)
 	}
@@ -341,4 +440,21 @@ func normalizeRanges(ranges []blockstore.CatchupRange) []blockstore.CatchupRange
 	}
 
 	return merged
+}
+
+func toUint64(v interface{}) (uint64, bool) {
+	switch n := v.(type) {
+	case int64:
+		return uint64(n), true
+	case uint64:
+		return n, true
+	case string:
+		parsed, err := strconv.ParseUint(n, 10, 64)
+		return parsed, err == nil
+	case []byte:
+		parsed, err := strconv.ParseUint(string(n), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }

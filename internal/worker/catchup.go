@@ -156,15 +156,8 @@ func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 		return nil
 	}
 
-	// Process multiple ranges in parallel
+	// Claim multiple ranges in parallel so multiple instances can split work.
 	var wg sync.WaitGroup
-	rangeChan := make(chan blockstore.CatchupRange, len(cw.blockRanges))
-
-	// Fill channel with ranges
-	for _, r := range cw.blockRanges {
-		rangeChan <- r
-	}
-	close(rangeChan)
 
 	// Start parallel workers
 	for i := 0; i < CATCHUP_WORKERS; i++ {
@@ -174,7 +167,11 @@ func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 			defer cw.recoverPanic(fmt.Sprintf("catchup range worker %d", workerID))
 			cw.logger.Debug("Starting catchup worker", "worker_id", workerID)
 
-			for r := range rangeChan {
+			for {
+				r, ok := cw.claimNextRange()
+				if !ok {
+					return
+				}
 				if err := cw.processRange(r, workerID); err != nil {
 					cw.logger.Error("Failed to process range",
 						"worker_id", workerID,
@@ -192,6 +189,27 @@ func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 	// Reload ranges to check for any remaining work
 	cw.blockRanges = cw.loadCatchupProgress()
 	return nil
+}
+
+func (cw *CatchupWorker) claimNextRange() (blockstore.CatchupRange, bool) {
+	claimed, err := cw.catchupStore.GetNextRange(cw.ctx, cw.chain.GetNetworkInternalCode())
+	if err != nil {
+		cw.logger.Warn("Failed to claim catchup range",
+			"chain", cw.chain.GetName(),
+			"error", err,
+		)
+		return blockstore.CatchupRange{}, false
+	}
+	if claimed == nil {
+		return blockstore.CatchupRange{}, false
+	}
+
+	cw.logger.Info("Claimed catchup range",
+		"chain", cw.chain.GetName(),
+		"range", fmt.Sprintf("%d-%d", claimed.Start, claimed.End),
+		"current", claimed.Current,
+	)
+	return *claimed, true
 }
 
 func (cw *CatchupWorker) processRange(r blockstore.CatchupRange, workerID int) error {
