@@ -77,7 +77,8 @@ func (cw *CatchupWorker) Start() {
 }
 
 // runCatchup is a tight loop that processes catchup ranges without PollInterval delays.
-// Unlike the base run() method, it exits once all ranges are processed.
+// When all ranges are processed, it polls for new ranges that may be created by the
+// regular worker's skipAheadIfLagging.
 func (cw *CatchupWorker) runCatchup() {
 	for {
 		select {
@@ -101,12 +102,15 @@ func (cw *CatchupWorker) runCatchup() {
 			continue
 		}
 
-		// If no ranges remain, catchup is done
+		// If no ranges remain, poll for new ranges that may have been
+		// created by the regular worker (e.g. via skipAheadIfLagging).
 		if len(cw.blockRanges) == 0 {
-			cw.logger.Info("Catchup completed, no more ranges to process",
-				"chain", cw.chain.GetName(),
-			)
-			return
+			select {
+			case <-cw.ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+				cw.blockRanges = cw.loadCatchupProgress()
+			}
 		}
 	}
 }
