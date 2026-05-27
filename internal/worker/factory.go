@@ -31,6 +31,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 	"github.com/fystack/multichain-indexer/pkg/repository"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 	tonaddr "github.com/xssnick/tonutils-go/address"
 	"gorm.io/gorm"
@@ -41,6 +42,7 @@ type WorkerDeps struct {
 	Ctx            context.Context
 	KVStore        infra.KVStore
 	BlockStore     blockstore.Store
+	CatchupStore   catchupstore.Store
 	Emitter        events.Emitter
 	Pubkey         pubkeystore.Store
 	Redis          infra.RedisClient
@@ -106,6 +108,7 @@ func BuildWorkers(
 				cfg,
 				deps.KVStore,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -120,6 +123,7 @@ func BuildWorkers(
 				cfg,
 				deps.KVStore,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -863,10 +867,11 @@ func CreateManagerWithWorkers(
 ) *Manager {
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
+	catchupStore := catchupstore.New(redisClient)
 	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
 	statusRegistry := status.NewRegistry()
 
-	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore)
+	manager := NewManager(ctx, kvstore, blockStore, catchupStore, emitter, pubkeyStore)
 	manager.registry = statusRegistry
 
 	// Loop each chain
@@ -907,15 +912,6 @@ func CreateManagerWithWorkers(
 		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
 			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
 		}
-		if existingCatchup, err := blockStore.GetCatchupProgress(idxr.GetNetworkInternalCode()); err == nil {
-			statusRegistry.SetCatchupRanges(idxr.GetName(), existingCatchup)
-		} else {
-			logger.Warn("Failed to load catchup progress for status registry",
-				"chain", chainName,
-				"internal_code", idxr.GetNetworkInternalCode(),
-				"error", err,
-			)
-		}
 
 		failedChan := make(chan FailedBlockEvent, 100)
 
@@ -924,6 +920,7 @@ func CreateManagerWithWorkers(
 			Ctx:            ctx,
 			KVStore:        kvstore,
 			BlockStore:     blockStore,
+			CatchupStore:   catchupStore,
 			Emitter:        emitter,
 			Pubkey:         pubkeyStore,
 			Redis:          redisClient,

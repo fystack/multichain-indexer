@@ -51,6 +51,7 @@ func NewManualWorker(
 			cfg,
 			kv,
 			blockStore,
+			nil,
 			emitter,
 			pubkeyStore,
 			ModeManual,

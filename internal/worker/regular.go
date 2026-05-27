@@ -14,6 +14,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
@@ -41,6 +42,7 @@ func NewRegularWorker(
 	cfg config.ChainConfig,
 	kv infra.KVStore,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
@@ -52,6 +54,7 @@ func NewRegularWorker(
 		cfg,
 		kv,
 		blockStore,
+		catchupStore,
 		emitter,
 		pubkeyStore,
 		ModeRegular,
@@ -182,7 +185,6 @@ func (rw *RegularWorker) processRegularBlocks() error {
 }
 
 func (rw *RegularWorker) determineStartingBlock() uint64 {
-	registry := status.EnsureStatusRegistry(rw.statusRegistry)
 	chainLatest, err1 := rw.chain.GetLatestBlockNumber(rw.ctx)
 	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
 
@@ -216,7 +218,8 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 		}, MAX_RANGE_SIZE)
 
 		// Batch save all split ranges
-		if err := rw.blockStore.SaveCatchupRanges(
+		if err := rw.catchupStore.SaveRanges(
+			rw.ctx,
 			rw.chain.GetNetworkInternalCode(),
 			ranges,
 		); err != nil {
@@ -225,8 +228,6 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 				"count", len(ranges),
 				"error", err,
 			)
-		} else {
-			registry.UpsertCatchupRanges(rw.chain.GetName(), ranges)
 		}
 
 		rw.logger.Info("Queued catchup ranges",
@@ -354,7 +355,6 @@ func (rw *RegularWorker) flushBlockHashes() {
 // skipAheadIfLagging checks if the regular worker is too far behind the chain head.
 // If so, it queues the skipped range for catchup and jumps currentBlock to chain head.
 func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
-	registry := status.EnsureStatusRegistry(rw.statusRegistry)
 	maxLag := rw.config.MaxLag
 	if maxLag == 0 {
 		maxLag = constant.DefaultMaxLag
@@ -380,7 +380,8 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 		Start: skipStart, End: skipEnd, Current: skipStart - 1,
 	}, MAX_RANGE_SIZE)
 
-	if err := rw.blockStore.SaveCatchupRanges(
+	if err := rw.catchupStore.SaveRanges(
+		rw.ctx,
 		rw.chain.GetNetworkInternalCode(),
 		ranges,
 	); err != nil {
@@ -389,8 +390,6 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 			"count", len(ranges),
 			"error", err,
 		)
-	} else {
-		registry.UpsertCatchupRanges(rw.chain.GetName(), ranges)
 	}
 
 	rw.currentBlock = latest
