@@ -191,6 +191,7 @@ chains:
     nodes:
       - url: "https://api.devnet.solana.com"
       - url: "https://solana-devnet.api.onfinality.io/public"
+      - url: "https://solana-devnet.gateway.tatum.io/"
     client:
       timeout: "12s"
       max_retries: 2
