@@ -118,16 +118,6 @@ func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T)
 	require.Equal(t, []uint64{100, 100}, chain.getBlockCalls)
 }
 
-func TestCheckContinuityReturnsFalseForNilBlocks(t *testing.T) {
-	t.Parallel()
-
-	require.False(t, checkContinuity(indexer.BlockResult{}, indexer.BlockResult{}))
-	require.False(t, checkContinuity(
-		indexer.BlockResult{Block: &types.Block{Hash: "0x100"}},
-		indexer.BlockResult{},
-	))
-}
-
 func TestBaseWorkerExecuteRecoverableConvertsPanicToError(t *testing.T) {
 	t.Parallel()
 
@@ -176,55 +166,50 @@ func TestRegularWorkerDetermineStartingBlockUpdatesCatchupRegistry(t *testing.T)
 func TestRegularWorkerDetermineStartingBlockStoreDownChainUp(t *testing.T) {
 	t.Parallel()
 
-	// Store is genuinely down but the chain is reachable: must start from chain
-	// head, never rewind to config.StartBlock.
+	// Store down but chain reachable: anchor on the chain head.
 	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
 	store := &stubBlockStore{getLatestBlockErr: errors.New("redis down")}
 	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.config.StartBlock = 100
 
 	require.Equal(t, uint64(500), rw.determineStartingBlock())
 }
 
-func TestRegularWorkerDetermineStartingBlockStoreAndChainDown(t *testing.T) {
+func TestRegularWorkerDetermineStartingBlockWaitsForChainHead(t *testing.T) {
 	t.Parallel()
 
-	// Both store and chain are down after retries: config.StartBlock is the
-	// explicit last resort.
-	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latestErr: errors.New("tls: internal error")}
-	store := &stubBlockStore{getLatestBlockErr: errors.New("redis down")}
+	// Cold start with chain failing transiently: wait until the head responds.
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500, latestFailN: 2}
+	store := &stubBlockStore{latestBlock: 0}
 	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.config.StartBlock = 100
 	rw.startBlockRetryDelay = time.Millisecond
 
-	require.Equal(t, uint64(100), rw.determineStartingBlock())
+	require.Equal(t, uint64(500), rw.determineStartingBlock())
 }
 
 func TestRegularWorkerDetermineStartingBlockColdStartChainUp(t *testing.T) {
 	t.Parallel()
 
-	// Store reachable with no prior block (cold start) and chain reachable:
-	// start from chain head, not config.StartBlock.
+	// Cold start with chain reachable: start from chain head.
 	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
 	store := &stubBlockStore{latestBlock: 0}
 	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.config.StartBlock = 100
 
 	require.Equal(t, uint64(500), rw.determineStartingBlock())
 }
 
-func TestRegularWorkerDetermineStartingBlockColdStartChainDown(t *testing.T) {
+func TestRegularWorkerDetermineStartingBlockChainCancelledReturnsZero(t *testing.T) {
 	t.Parallel()
 
-	// Genuine cold start (no prior block) and chain unavailable: fall back to
-	// config.StartBlock.
+	// Cold start, chain never responds and context is cancelled: return 0.
 	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latestErr: errors.New("tls: internal error")}
 	store := &stubBlockStore{latestBlock: 0}
 	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.config.StartBlock = 100
 	rw.startBlockRetryDelay = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rw.ctx = ctx
 
-	require.Equal(t, uint64(100), rw.determineStartingBlock())
+	require.Equal(t, uint64(0), rw.determineStartingBlock())
 }
 
 func TestRegularWorkerDetermineStartingBlockChainDownResumesFromKV(t *testing.T) {
@@ -234,7 +219,6 @@ func TestRegularWorkerDetermineStartingBlockChainDownResumesFromKV(t *testing.T)
 	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latestErr: errors.New("tls: internal error")}
 	store := &stubBlockStore{latestBlock: 42}
 	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.config.StartBlock = 100
 	rw.startBlockRetryDelay = time.Millisecond
 
 	require.Equal(t, uint64(42), rw.determineStartingBlock())
@@ -321,6 +305,7 @@ type stubIndexer struct {
 	networkType   enum.NetworkType
 	latest        uint64
 	latestErr     error
+	latestFailN   int // fail GetLatestBlockNumber this many times before succeeding
 	getBlocksFunc func(ctx context.Context, from, to uint64, isParallel bool) ([]indexer.BlockResult, error)
 	getBlockFunc  func(ctx context.Context, number uint64) (*types.Block, error)
 	getBlockCalls []uint64
@@ -339,6 +324,10 @@ func (s *stubIndexer) GetNetworkInternalCode() string {
 }
 
 func (s *stubIndexer) GetLatestBlockNumber(context.Context) (uint64, error) {
+	if s.latestFailN > 0 {
+		s.latestFailN--
+		return 0, errors.New("tls: internal error")
+	}
 	if s.latestErr != nil {
 		return 0, s.latestErr
 	}
