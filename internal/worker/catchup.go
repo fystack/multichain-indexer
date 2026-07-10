@@ -173,7 +173,9 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 
 	// Only create a new range if no existing ranges found
 	if len(ranges) == 0 {
-		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
+		// latest == 0 means cold start (GetLatestBlock returns (0, nil) for a
+		// missing key) — queueing 1..head would re-index the whole chain.
+		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil && latest > 0 {
 			if chainHead, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil {
 				head := cw.processingHead(chainHead)
 				if head <= latest {
