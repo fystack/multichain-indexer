@@ -667,6 +667,12 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 			markUnhealthy: true,
 		},
 		{
+			patterns:      []string{"tls: internal error", "tls handshake", "handshake failure", "remote error: tls"},
+			reason:        "tls_error",
+			cooldown:      2 * time.Minute,
+			markUnhealthy: true,
+		},
+		{
 			patterns:      []string{"-32007", "batch limit exceeded", "internal error -32005"},
 			reason:        "batch_limit",
 			cooldown:      1 * time.Minute,

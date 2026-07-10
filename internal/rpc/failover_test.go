@@ -130,6 +130,18 @@ func TestAnalyzeAndHandleError_ConnectionError(t *testing.T) {
 	assert.Equal(t, int64(1), errorsByType["connection_error"])
 }
 
+func TestAnalyzeAndHandleError_TLSError(t *testing.T) {
+	f, p := newTestFailover()
+
+	err := fmt.Errorf("eth_blockNumber failed: remote error: tls: internal error")
+	f.AnalyzeAndHandleError(p, err, 100*time.Millisecond)
+
+	assert.False(t, p.IsAvailable(), "provider should be blacklisted after TLS error")
+
+	errorsByType := f.GetMetrics()["errors_by_type"].(map[string]int64)
+	assert.Equal(t, int64(1), errorsByType["tls_error"])
+}
+
 func TestAnalyzeAndHandleError_GenericError(t *testing.T) {
 	f, p := newTestFailover()
 
