@@ -13,7 +13,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
-	"github.com/fystack/multichain-indexer/pkg/retry"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
@@ -22,8 +21,6 @@ const (
 	MaxBlockHashSize        = 50
 	regularGapRetryAttempts = 2
 	regularGapRetryDelay    = time.Second
-	startBlockRetryAttempts = 3
-	startBlockRetryDelay    = 2 * time.Second
 )
 
 var errRegularRecoveryReorgHandled = errors.New("regular recovery reorg handled")
@@ -36,8 +33,6 @@ type RegularWorker struct {
 	blockHashes    []blockstore.BlockHashEntry
 	hashesModified bool
 	persistTicker  *time.Ticker
-	// Zero uses the startBlockRetryDelay default; overridable in tests.
-	startBlockRetryDelay time.Duration
 }
 
 func NewRegularWorker(
@@ -118,165 +113,130 @@ func (rw *RegularWorker) processRegularBlocks() error {
 		return nil
 	}
 
-	start := rw.currentBlock
-	end := min(start+uint64(rw.config.Throttle.BatchSize)-1, latest)
-	startTime := time.Now()
-	rw.logger.Info("Processing range",
-		"chain", rw.chain.GetName(),
-		"start", start, "end", end, "size", end-start+1,
+	end := min(rw.currentBlock+uint64(rw.config.Throttle.BatchSize)-1, latest)
+	rw.logger.Info(
+		"Processing range",
+		"chain",
+		rw.chain.GetName(),
+		"start",
+		rw.currentBlock,
+		"end",
+		end,
+		"size",
+		end-rw.currentBlock+1,
 	)
 
-	results, err := rw.chain.GetBlocks(rw.ctx, start, end, rw.config.Throttle.Parallel)
+	// Store original range for logging
+	originalStart := rw.currentBlock
+	originalEnd := end
+	startTime := time.Now()
+
+	results, err := rw.chain.GetBlocks(rw.ctx, rw.currentBlock, end, rw.config.Throttle.Parallel)
 	if err != nil {
 		return fmt.Errorf("get blocks: %w", err)
 	}
 
-	lastSuccess, lastSuccessHash, stopTick, processErr := rw.processBatch(results, end)
+	lastSuccess := rw.currentBlock - 1
+	var lastSuccessHash string
+	var (
+		processErr error
+		stopTick   bool
+	)
+	if rw.isReorgCheckRequired() {
+		stopTick, processErr = rw.processReorgCheckedBatch(results, end, &lastSuccess, &lastSuccessHash)
+	} else {
+		for _, res := range results {
+			if rw.handleBlockResult(res) {
+				lastSuccess = res.Number
+				lastSuccessHash = res.Block.Hash
+			}
+		}
+	}
+
 	if stopTick {
 		return nil
 	}
 
-	indexedAt := rw.commitProgress(lastSuccess, lastSuccessHash)
+	indexedAt := time.Time{}
+	if lastSuccess >= rw.currentBlock {
+		rw.currentBlock = lastSuccess + 1
+		_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
+		indexedAt = time.Now().UTC()
+
+		if lastSuccessHash != "" {
+			rw.addBlockHash(lastSuccess, lastSuccessHash)
+		}
+	}
 	rw.updateHeadStatus(latest, indexedAt)
 
 	rw.logger.Info("Processed latest blocks",
 		"chain", rw.chain.GetName(),
-		"start", start, "end", end,
+		"start", originalStart,
+		"end", originalEnd,
 		"elapsed", time.Since(startTime),
 		"last_success", lastSuccess,
-		"expected", end-start+1,
+		"expected", originalEnd-originalStart+1,
 		"got", len(results),
 	)
 	return processErr
 }
 
-// processBatch applies a batch of fetched blocks, using reorg-checked processing
-// for chains that need it. It returns the last successfully indexed block and its
-// hash, plus stop=true when the tick should end early (e.g. a reorg rollback).
-func (rw *RegularWorker) processBatch(
-	results []indexer.BlockResult,
-	end uint64,
-) (lastSuccess uint64, lastSuccessHash string, stop bool, err error) {
-	lastSuccess = rw.currentBlock - 1
-
-	if rw.isReorgCheckRequired() {
-		stop, err = rw.processReorgCheckedBatch(results, end, &lastSuccess, &lastSuccessHash)
-		return lastSuccess, lastSuccessHash, stop, err
-	}
-
-	for _, res := range results {
-		if rw.handleBlockResult(res) {
-			lastSuccess = res.Number
-			lastSuccessHash = res.Block.Hash
-		}
-	}
-	return lastSuccess, lastSuccessHash, false, nil
-}
-
-// commitProgress advances currentBlock past the last indexed block, persisting
-// the checkpoint and its hash. Returns the indexing timestamp, or zero if no new
-// block was indexed.
-func (rw *RegularWorker) commitProgress(lastSuccess uint64, lastSuccessHash string) time.Time {
-	if lastSuccess < rw.currentBlock {
-		return time.Time{}
-	}
-	rw.currentBlock = lastSuccess + 1
-	_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), lastSuccess)
-	if lastSuccessHash != "" {
-		rw.addBlockHash(lastSuccess, lastSuccessHash)
-	}
-	return time.Now().UTC()
-}
-
-// determineStartingBlock picks a start block from the last indexed block and the
-// chain head. GetLatestBlock returns (0, nil) for a cold start, so a non-nil
-// kvErr means the store is genuinely down. When there is no prior block to
-// resume from, the chain head is the only safe anchor and we wait for it.
 func (rw *RegularWorker) determineStartingBlock() uint64 {
-	kvLatest, kvErr := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
+	registry := status.EnsureStatusRegistry(rw.statusRegistry)
+	chainLatest, err1 := rw.chain.GetLatestBlockNumber(rw.ctx)
+	kvLatest, err2 := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
 
-	// Resume from the last indexed block when the store has one.
-	if kvErr == nil && kvLatest > 0 {
-		chainLatest, chainErr := rw.getLatestBlockWithRetry()
-		if chainErr != nil {
-			rw.logger.Warn("Chain RPC failed, resuming from KV latest",
-				"chain", rw.chain.GetName(), "kvLatest", kvLatest)
-			return kvLatest
-		}
-		if chainLatest > kvLatest {
-			ranges := rw.queueCatchupRanges(kvLatest+1, chainLatest)
-			rw.logger.Info("Queued catchup ranges",
-				"chain", rw.chain.GetName(),
-				"gap", fmt.Sprintf("%d-%d", kvLatest+1, chainLatest),
-				"ranges_created", len(ranges),
-			)
-		}
+	if err1 != nil && err2 != nil {
+		rw.logger.Warn("Cannot get latest block from chain or KV, using config.StartBlock",
+			"chain", rw.chain.GetName(),
+			"startBlock", rw.config.StartBlock,
+		)
+		return uint64(rw.config.StartBlock)
+	}
+
+	if err1 != nil && kvLatest > 0 {
+		rw.logger.Warn("Chain RPC failed, resuming from KV latest",
+			"chain", rw.chain.GetName(),
+			"kvLatest", kvLatest,
+		)
+		return kvLatest
+	}
+
+	if err2 != nil || kvLatest == 0 {
 		return chainLatest
 	}
 
-	if kvErr != nil {
-		rw.logger.Error("Block store unavailable, starting from chain head",
-			"chain", rw.chain.GetName(), "error", kvErr)
-	}
-	return rw.waitForChainHead()
-}
+	if chainLatest > kvLatest {
+		start := kvLatest + 1
+		end := chainLatest
 
-// queueCatchupRanges splits [start, end] into chunks, persists them, and
-// reflects them in the status registry, returning the ranges produced.
-func (rw *RegularWorker) queueCatchupRanges(start, end uint64) []blockstore.CatchupRange {
-	ranges := splitCatchupRange(blockstore.CatchupRange{
-		Start: start, End: end, Current: start - 1,
-	}, MAX_RANGE_SIZE)
+		// Split the range into manageable chunks
+		ranges := splitCatchupRange(blockstore.CatchupRange{
+			Start: start, End: end, Current: start - 1,
+		}, MAX_RANGE_SIZE)
 
-	if err := rw.blockStore.SaveCatchupRanges(rw.chain.GetNetworkInternalCode(), ranges); err != nil {
-		rw.logger.Error("Failed to save catchup ranges",
+		// Batch save all split ranges
+		if err := rw.blockStore.SaveCatchupRanges(
+			rw.chain.GetNetworkInternalCode(),
+			ranges,
+		); err != nil {
+			rw.logger.Error("Failed to batch save catchup ranges",
+				"chain", rw.chain.GetName(),
+				"count", len(ranges),
+				"error", err,
+			)
+		} else {
+			registry.UpsertCatchupRanges(rw.chain.GetName(), ranges)
+		}
+
+		rw.logger.Info("Queued catchup ranges",
 			"chain", rw.chain.GetName(),
-			"count", len(ranges),
-			"error", err,
+			"gap", fmt.Sprintf("%d-%d", start, end),
+			"ranges_created", len(ranges),
 		)
-		return ranges
 	}
 
-	status.EnsureStatusRegistry(rw.statusRegistry).UpsertCatchupRanges(rw.chain.GetName(), ranges)
-	return ranges
-}
-
-// getLatestBlockWithRetry fetches the chain head with bounded retries, used when
-// we already have a KV block to fall back to.
-func (rw *RegularWorker) getLatestBlockWithRetry() (uint64, error) {
-	var latest uint64
-	err := retry.Constant(func() error {
-		var err error
-		latest, err = rw.chain.GetLatestBlockNumber(rw.ctx)
-		return err
-	}, rw.startBlockDelay(), startBlockRetryAttempts)
-	return latest, err
-}
-
-// waitForChainHead blocks until the chain head can be fetched, retrying with
-// backoff. It is the cold-start anchor when no prior block exists in the store.
-// Returns 0 if the context is cancelled while waiting.
-func (rw *RegularWorker) waitForChainHead() uint64 {
-	for {
-		latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
-		if err == nil {
-			return latest
-		}
-		rw.logger.Warn("Waiting for chain head before starting",
-			"chain", rw.chain.GetName(), "error", err)
-		select {
-		case <-rw.ctx.Done():
-			return 0
-		case <-time.After(rw.startBlockDelay()):
-		}
-	}
-}
-
-func (rw *RegularWorker) startBlockDelay() time.Duration {
-	if rw.startBlockRetryDelay > 0 {
-		return rw.startBlockRetryDelay
-	}
-	return startBlockRetryDelay
+	return chainLatest
 }
 
 func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, error) {
@@ -394,6 +354,7 @@ func (rw *RegularWorker) flushBlockHashes() {
 // skipAheadIfLagging checks if the regular worker is too far behind the chain head.
 // If so, it queues the skipped range for catchup and jumps currentBlock to chain head.
 func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
+	registry := status.EnsureStatusRegistry(rw.statusRegistry)
 	maxLag := rw.config.MaxLag
 	if maxLag == 0 {
 		maxLag = constant.DefaultMaxLag
@@ -415,7 +376,22 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 		"catchup_range", fmt.Sprintf("%d-%d", skipStart, skipEnd),
 	)
 
-	ranges := rw.queueCatchupRanges(skipStart, skipEnd)
+	ranges := splitCatchupRange(blockstore.CatchupRange{
+		Start: skipStart, End: skipEnd, Current: skipStart - 1,
+	}, MAX_RANGE_SIZE)
+
+	if err := rw.blockStore.SaveCatchupRanges(
+		rw.chain.GetNetworkInternalCode(),
+		ranges,
+	); err != nil {
+		rw.logger.Error("Failed to save skip-ahead catchup ranges",
+			"chain", rw.chain.GetName(),
+			"count", len(ranges),
+			"error", err,
+		)
+	} else {
+		registry.UpsertCatchupRanges(rw.chain.GetName(), ranges)
+	}
 
 	rw.currentBlock = latest
 	_ = rw.blockStore.SaveLatestBlock(rw.chain.GetNetworkInternalCode(), latest-1)
@@ -608,6 +584,27 @@ func (rw *RegularWorker) fetchRegularBlock(blockNumber uint64) (indexer.BlockRes
 		Number: blockNumber,
 		Block:  block,
 	}, nil
+}
+
+func checkContinuity(prev, curr indexer.BlockResult) bool {
+	if prev.Error != nil || curr.Error != nil || prev.Block == nil || curr.Block == nil {
+		return false
+	}
+	return prev.Block.Hash == curr.Block.ParentHash
+}
+
+func blockResultNumber(res indexer.BlockResult) uint64 {
+	if res.Block != nil {
+		return res.Block.Number
+	}
+	return res.Number
+}
+
+func blockResultHash(res indexer.BlockResult) string {
+	if res.Block != nil {
+		return res.Block.Hash
+	}
+	return ""
 }
 
 func blockResultError(res indexer.BlockResult) string {

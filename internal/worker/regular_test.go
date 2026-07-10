@@ -118,6 +118,16 @@ func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T)
 	require.Equal(t, []uint64{100, 100}, chain.getBlockCalls)
 }
 
+func TestCheckContinuityReturnsFalseForNilBlocks(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, checkContinuity(indexer.BlockResult{}, indexer.BlockResult{}))
+	require.False(t, checkContinuity(
+		indexer.BlockResult{Block: &types.Block{Hash: "0x100"}},
+		indexer.BlockResult{},
+	))
+}
+
 func TestBaseWorkerExecuteRecoverableConvertsPanicToError(t *testing.T) {
 	t.Parallel()
 
@@ -161,67 +171,6 @@ func TestRegularWorkerDetermineStartingBlockUpdatesCatchupRegistry(t *testing.T)
 	require.Len(t, resp.Networks, 1)
 	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
 	require.Equal(t, uint64(5), resp.Networks[0].CatchupPendingBlocks)
-}
-
-func TestRegularWorkerDetermineStartingBlockStoreDownChainUp(t *testing.T) {
-	t.Parallel()
-
-	// Store down but chain reachable: anchor on the chain head.
-	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
-	store := &stubBlockStore{getLatestBlockErr: errors.New("redis down")}
-	rw := newTestRegularWorker(chain, store, 0, 2)
-
-	require.Equal(t, uint64(500), rw.determineStartingBlock())
-}
-
-func TestRegularWorkerDetermineStartingBlockWaitsForChainHead(t *testing.T) {
-	t.Parallel()
-
-	// Cold start with chain failing transiently: wait until the head responds.
-	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500, latestFailN: 2}
-	store := &stubBlockStore{latestBlock: 0}
-	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.startBlockRetryDelay = time.Millisecond
-
-	require.Equal(t, uint64(500), rw.determineStartingBlock())
-}
-
-func TestRegularWorkerDetermineStartingBlockColdStartChainUp(t *testing.T) {
-	t.Parallel()
-
-	// Cold start with chain reachable: start from chain head.
-	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
-	store := &stubBlockStore{latestBlock: 0}
-	rw := newTestRegularWorker(chain, store, 0, 2)
-
-	require.Equal(t, uint64(500), rw.determineStartingBlock())
-}
-
-func TestRegularWorkerDetermineStartingBlockChainCancelledReturnsZero(t *testing.T) {
-	t.Parallel()
-
-	// Cold start, chain never responds and context is cancelled: return 0.
-	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latestErr: errors.New("tls: internal error")}
-	store := &stubBlockStore{latestBlock: 0}
-	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.startBlockRetryDelay = time.Millisecond
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	rw.ctx = ctx
-
-	require.Equal(t, uint64(0), rw.determineStartingBlock())
-}
-
-func TestRegularWorkerDetermineStartingBlockChainDownResumesFromKV(t *testing.T) {
-	t.Parallel()
-
-	// Chain RPC down but store has a known prior block: resume from KV latest.
-	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latestErr: errors.New("tls: internal error")}
-	store := &stubBlockStore{latestBlock: 42}
-	rw := newTestRegularWorker(chain, store, 0, 2)
-	rw.startBlockRetryDelay = time.Millisecond
-
-	require.Equal(t, uint64(42), rw.determineStartingBlock())
 }
 
 func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T) {
@@ -304,8 +253,6 @@ type stubIndexer struct {
 	internalCode  string
 	networkType   enum.NetworkType
 	latest        uint64
-	latestErr     error
-	latestFailN   int // fail GetLatestBlockNumber this many times before succeeding
 	getBlocksFunc func(ctx context.Context, from, to uint64, isParallel bool) ([]indexer.BlockResult, error)
 	getBlockFunc  func(ctx context.Context, number uint64) (*types.Block, error)
 	getBlockCalls []uint64
@@ -324,13 +271,6 @@ func (s *stubIndexer) GetNetworkInternalCode() string {
 }
 
 func (s *stubIndexer) GetLatestBlockNumber(context.Context) (uint64, error) {
-	if s.latestFailN > 0 {
-		s.latestFailN--
-		return 0, errors.New("tls: internal error")
-	}
-	if s.latestErr != nil {
-		return 0, s.latestErr
-	}
 	return s.latest, nil
 }
 
@@ -375,8 +315,9 @@ func (s *stubBlockStore) GetLatestBlock(string) (uint64, error) {
 	if s.getLatestBlockErr != nil {
 		return 0, s.getLatestBlockErr
 	}
-	// Mirrors the real store contract: a missing key (cold start) returns
-	// (0, nil); only genuine store errors return a non-nil error.
+	if s.latestBlock == 0 {
+		return 0, errors.New("not found")
+	}
 	return s.latestBlock, nil
 }
 

@@ -11,7 +11,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/infra"
-	"github.com/fystack/multichain-indexer/pkg/kvstore"
 )
 
 // BlockHashEntry represents a block number and its hash for reorg detection.
@@ -101,11 +100,6 @@ func NewBlockStore(store infra.KVStore) Store {
 func (bs *blockStore) GetLatestBlock(chainName string) (uint64, error) {
 	startBlock, err := bs.store.Get(latestBlockKey(chainName))
 	if err != nil {
-		// Missing key (cold start) returns (0, nil); only real store errors
-		// propagate, so callers never silently rewind to config.StartBlock.
-		if errors.Is(err, kvstore.ErrKeyNotFound) {
-			return 0, nil
-		}
 		return 0, err
 	}
 	return strconv.ParseUint(startBlock, 10, 64)
