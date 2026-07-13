@@ -197,6 +197,45 @@ func TestRegularWorkerDetermineStartingBlockColdStartChainUp(t *testing.T) {
 	require.Equal(t, uint64(500), rw.determineStartingBlock())
 }
 
+func TestRegularWorkerDetermineStartingBlockColdStartUsesConfiguredStartBlock(t *testing.T) {
+	t.Parallel()
+
+	// Cold start with a healthy store and a configured start_block: anchor on it
+	// rather than the chain head, so a backfill begins from the chosen height.
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
+	store := &stubBlockStore{latestBlock: 0}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.config.StartBlock = 100
+
+	require.Equal(t, uint64(100), rw.determineStartingBlock())
+}
+
+func TestRegularWorkerDetermineStartingBlockResumeIgnoresStartBlock(t *testing.T) {
+	t.Parallel()
+
+	// A prior KV checkpoint always wins over start_block: resume from the head
+	// (queuing catchup for the gap), never rewind to the configured start_block.
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
+	store := &stubBlockStore{latestBlock: 300}
+	rw := newTestRegularWorker(chain, store, 300, 2)
+	rw.config.StartBlock = 100
+
+	require.Equal(t, uint64(500), rw.determineStartingBlock())
+}
+
+func TestRegularWorkerDetermineStartingBlockStoreDownIgnoresStartBlock(t *testing.T) {
+	t.Parallel()
+
+	// Store down: fall back to the chain head even when start_block is set, so a
+	// broken store never re-triggers a backfill from start_block on each restart.
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
+	store := &stubBlockStore{getLatestBlockErr: errors.New("redis down")}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.config.StartBlock = 100
+
+	require.Equal(t, uint64(500), rw.determineStartingBlock())
+}
+
 func TestRegularWorkerDetermineStartingBlockChainCancelledReturnsZero(t *testing.T) {
 	t.Parallel()
 
