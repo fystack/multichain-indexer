@@ -77,7 +77,8 @@ func (cw *CatchupWorker) Start() {
 }
 
 // runCatchup is a tight loop that processes catchup ranges without PollInterval delays.
-// Unlike the base run() method, it exits once all ranges are processed.
+// When all ranges are processed, it polls for new ranges that may be created by the
+// regular worker's skipAheadIfLagging.
 func (cw *CatchupWorker) runCatchup() {
 	for {
 		select {
@@ -101,76 +102,41 @@ func (cw *CatchupWorker) runCatchup() {
 			continue
 		}
 
-		// If no ranges remain, catchup is done
+		// If no ranges remain, poll for new ranges that may have been
+		// created by the regular worker (e.g. via skipAheadIfLagging).
 		if len(cw.blockRanges) == 0 {
-			cw.logger.Info("Catchup completed, no more ranges to process",
-				"chain", cw.chain.GetName(),
-			)
-			return
+			select {
+			case <-cw.ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+				cw.blockRanges = cw.loadCatchupProgress()
+			}
 		}
 	}
 }
 
 func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	registry := status.EnsureStatusRegistry(cw.statusRegistry)
-	var ranges []blockstore.CatchupRange
 
-	// Load existing catchup ranges from database (they're already split when saved)
-	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode()); err == nil {
-		cw.logger.Info("Loading existing catchup progress",
-			"chain", cw.chain.GetName(),
-			"progress_ranges", len(progress),
-		)
-		ranges = progress
-		registry.SetCatchupRanges(cw.chain.GetName(), progress)
-	} else {
-		cw.logger.Warn("Failed to load catchup progress, will create new range",
+	// Load existing catchup ranges from the store. The catchup worker only loads
+	// ranges; creating new ranges is the responsibility of the regular worker
+	// (via determineStartingBlock or skipAheadIfLagging).
+	progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode())
+	if err != nil {
+		cw.logger.Warn("Failed to load catchup progress",
 			"chain", cw.chain.GetName(),
 			"error", err,
 		)
+		registry.SetCatchupRanges(cw.chain.GetName(), nil)
+		return nil
 	}
 
-	// Only create a new range if no existing ranges found
-	if len(ranges) == 0 {
-		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
-			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
-				if head <= latest {
-					// no gap between head and latest
-					return ranges
-				}
-				start, end := latest+1, head
-				cw.logger.Info("Creating new catchup range",
-					"chain", cw.chain.GetName(),
-					"latest_block", latest,
-					"head_block", head,
-					"catchup_start", start, "catchup_end", end,
-					"blocks_to_catchup", end-latest,
-				)
-
-				// Split new range if it's too large
-				newRanges := cw.splitLargeRange(blockstore.CatchupRange{
-					Start: start, End: end, Current: start - 1,
-				})
-
-				// Batch save all split ranges to database
-				if err := cw.blockStore.SaveCatchupRanges(
-					cw.chain.GetNetworkInternalCode(),
-					newRanges,
-				); err != nil {
-					cw.logger.Error("Failed to batch save catchup ranges",
-						"chain", cw.chain.GetName(),
-						"count", len(newRanges),
-						"error", err,
-					)
-				} else {
-					registry.UpsertCatchupRanges(cw.chain.GetName(), newRanges)
-				}
-				ranges = append(ranges, newRanges...)
-			}
-		}
-	}
-
-	return ranges
+	cw.logger.Info("Loaded catchup progress",
+		"chain", cw.chain.GetName(),
+		"progress_ranges", len(progress),
+	)
+	registry.SetCatchupRanges(cw.chain.GetName(), progress)
+	return progress
 }
 
 // Split large ranges into smaller, more manageable chunks
