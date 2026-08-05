@@ -21,6 +21,8 @@ const (
 	CATCHUP_WORKERS        = 3 // Number of parallel workers
 	PROGRESS_SAVE_INTERVAL = 1 // Save progress every N batches
 	catchupPanicRetryDelay = time.Second
+	// catchupIdleInterval is the wait between store re-checks when idle.
+	catchupIdleInterval = 3 * time.Second
 )
 
 type CatchupWorker struct {
@@ -28,6 +30,8 @@ type CatchupWorker struct {
 	blockRanges []blockstore.CatchupRange
 	workerPool  chan struct{}
 	progressMu  sync.Mutex
+	// idleInterval overrides catchupIdleInterval when >0 (used in tests).
+	idleInterval time.Duration
 }
 
 func NewCatchupWorker(
@@ -76,8 +80,9 @@ func (cw *CatchupWorker) Start() {
 	cw.executeWithRecovery("catchup loop", cw.runCatchup)
 }
 
-// runCatchup is a tight loop that processes catchup ranges without PollInterval delays.
-// Unlike the base run() method, it exits once all ranges are processed.
+// runCatchup processes catchup ranges without PollInterval delays. It stays
+// alive after draining and keeps polling for ranges queued later at runtime
+// (e.g. the regular worker's lag skip-ahead), exiting only on ctx cancel.
 func (cw *CatchupWorker) runCatchup() {
 	for {
 		select {
@@ -101,14 +106,50 @@ func (cw *CatchupWorker) runCatchup() {
 			continue
 		}
 
-		// If no ranges remain, catchup is done
+		// No ranges left: stay alive and re-check the store for ranges queued
+		// later, instead of exiting permanently.
 		if len(cw.blockRanges) == 0 {
-			cw.logger.Info("Catchup completed, no more ranges to process",
+			cw.logger.Debug("No catchup ranges, waiting for new work",
 				"chain", cw.chain.GetName(),
 			)
-			return
+			select {
+			case <-cw.ctx.Done():
+				return
+			case <-time.After(cw.catchupIdleDelay()):
+			}
+			// Read persisted ranges only — loadCatchupProgress's head-vs-latest
+			// auto-create would overlap the regular worker's in-flight blocks.
+			cw.blockRanges = cw.reloadStoredRanges()
 		}
 	}
+}
+
+// reloadStoredRanges returns only persisted ranges, skipping the head-vs-latest
+// auto-create in loadCatchupProgress. Used to pick up ranges queued at runtime.
+func (cw *CatchupWorker) reloadStoredRanges() []blockstore.CatchupRange {
+	progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode())
+	if err != nil {
+		cw.logger.Warn("Failed to reload catchup progress while idle",
+			"chain", cw.chain.GetName(),
+			"error", err,
+		)
+		return nil
+	}
+	if len(progress) > 0 {
+		cw.logger.Info("Picked up newly queued catchup ranges",
+			"chain", cw.chain.GetName(),
+			"ranges", len(progress),
+		)
+		status.EnsureStatusRegistry(cw.statusRegistry).SetCatchupRanges(cw.chain.GetName(), progress)
+	}
+	return progress
+}
+
+func (cw *CatchupWorker) catchupIdleDelay() time.Duration {
+	if cw.idleInterval > 0 {
+		return cw.idleInterval
+	}
+	return catchupIdleInterval
 }
 
 func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
@@ -228,8 +269,8 @@ func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 	wg.Wait()
 	cw.logger.Info("Catchup processing completed")
 
-	// Reload ranges to check for any remaining work
-	cw.blockRanges = cw.loadCatchupProgress()
+	// Reload remaining work — stored ranges only (see reloadStoredRanges).
+	cw.blockRanges = cw.reloadStoredRanges()
 	return nil
 }
 

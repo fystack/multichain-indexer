@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -358,6 +359,7 @@ func (s *stubIndexer) IsHealthy() bool {
 }
 
 type stubBlockStore struct {
+	mu                     sync.Mutex
 	latestBlock            uint64
 	savedLatest            []uint64
 	failedBlocks           []uint64
@@ -369,6 +371,18 @@ type stubBlockStore struct {
 	saveCatchupRangesErr   error
 	saveCatchupProgressErr error
 	deleteCatchupErr       error
+}
+
+// hasDeleted reports whether DeleteCatchupRange was called for [start, end].
+func (s *stubBlockStore) hasDeleted(start, end uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.deleteCatchupCalls {
+		if r.Start == start && r.End == end {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *stubBlockStore) GetLatestBlock(string) (uint64, error) {
@@ -403,6 +417,8 @@ func (s *stubBlockStore) RemoveFailedBlocks(string, []uint64) error {
 }
 
 func (s *stubBlockStore) SaveCatchupRanges(_ string, ranges []blockstore.CatchupRange) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.saveCatchupRangesErr != nil {
 		return s.saveCatchupRangesErr
 	}
@@ -411,6 +427,8 @@ func (s *stubBlockStore) SaveCatchupRanges(_ string, ranges []blockstore.Catchup
 }
 
 func (s *stubBlockStore) SaveCatchupProgress(_ string, start, end, current uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.saveCatchupProgressErr != nil {
 		return s.saveCatchupProgressErr
 	}
@@ -429,6 +447,8 @@ func (s *stubBlockStore) SaveCatchupProgress(_ string, start, end, current uint6
 }
 
 func (s *stubBlockStore) GetCatchupProgress(string) ([]blockstore.CatchupRange, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.getCatchupProgressErr != nil {
 		return nil, s.getCatchupProgressErr
 	}
@@ -436,6 +456,8 @@ func (s *stubBlockStore) GetCatchupProgress(string) ([]blockstore.CatchupRange, 
 }
 
 func (s *stubBlockStore) DeleteCatchupRange(_ string, start, end uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.deleteCatchupErr != nil {
 		return s.deleteCatchupErr
 	}
