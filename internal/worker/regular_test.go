@@ -487,3 +487,47 @@ func (s *stubBlockStore) SaveBlockHashes(string, []blockstore.BlockHashEntry) er
 func (s *stubBlockStore) Close() error {
 	return nil
 }
+
+func TestCatchupWorkerLoadCatchupProgressColdStartQueuesNothing(t *testing.T) {
+	t.Parallel()
+
+	// Cold start: GetLatestBlock returns (0, nil). There is no prior progress,
+	// so no catchup range must be created (regression: issue #104 queued
+	// 1..head and re-indexed the whole chain).
+	store := &stubBlockStore{latestBlock: 0}
+	cw := &CatchupWorker{
+		BaseWorker: &BaseWorker{
+			ctx:            context.Background(),
+			cancel:         func() {},
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+			chain:          &stubIndexer{name: "bsc", internalCode: "BSC", networkType: enum.NetworkTypeEVM, latest: 109195919},
+			blockStore:     store,
+			statusRegistry: status.NewRegistry(),
+		},
+	}
+
+	require.Empty(t, cw.loadCatchupProgress())
+	require.Empty(t, store.savedCatchupRanges)
+}
+
+func TestCatchupWorkerLoadCatchupProgressResumeQueuesGap(t *testing.T) {
+	t.Parallel()
+
+	// Prior progress exists: the gap from KV latest to chain head is queued.
+	store := &stubBlockStore{latestBlock: 100}
+	cw := &CatchupWorker{
+		BaseWorker: &BaseWorker{
+			ctx:            context.Background(),
+			cancel:         func() {},
+			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+			chain:          &stubIndexer{name: "bsc", internalCode: "BSC", networkType: enum.NetworkTypeEVM, latest: 150},
+			blockStore:     store,
+			statusRegistry: status.NewRegistry(),
+		},
+	}
+
+	ranges := cw.loadCatchupProgress()
+	require.NotEmpty(t, ranges)
+	require.Equal(t, uint64(101), ranges[0].Start)
+	require.Equal(t, uint64(150), ranges[len(ranges)-1].End)
+}
