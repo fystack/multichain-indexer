@@ -190,8 +190,9 @@ func (rw *RegularWorker) commitProgress(lastSuccess uint64, lastSuccessHash stri
 
 // determineStartingBlock picks a start block from the last indexed block and the
 // chain head. GetLatestBlock returns (0, nil) for a cold start, so a non-nil
-// kvErr means the store is genuinely down. When there is no prior block to
-// resume from, the chain head is the only safe anchor and we wait for it.
+// kvErr means the store is genuinely down. On a cold start with a healthy store,
+// a configured start_block (> 0) is used as the anchor; otherwise the chain head
+// is the only safe anchor and we wait for it.
 func (rw *RegularWorker) determineStartingBlock() uint64 {
 	kvLatest, kvErr := rw.blockStore.GetLatestBlock(rw.chain.GetNetworkInternalCode())
 
@@ -217,7 +218,21 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 	if kvErr != nil {
 		rw.logger.Error("Block store unavailable, starting from chain head",
 			"chain", rw.chain.GetName(), "error", kvErr)
+		return rw.waitForChainHead()
 	}
+
+	// Cold start with a healthy store and no prior block: honor the configured
+	// start_block so operators can backfill from a chosen height. The regular
+	// loop then walks forward from here to the chain head. A down store falls
+	// through to the chain head above, so a broken store never triggers a
+	// re-backfill from start_block on every restart.
+	if rw.config.StartBlock > 0 {
+		start := uint64(rw.config.StartBlock)
+		rw.logger.Info("Cold start from configured start_block",
+			"chain", rw.chain.GetName(), "start_block", start)
+		return start
+	}
+
 	return rw.waitForChainHead()
 }
 
