@@ -21,16 +21,26 @@ type FailoverConfig struct {
 	ErrorThreshold       int
 	ForceRotateThreshold int
 	DefaultTimeout       time.Duration
+	// SlowResponseThreshold is the latency above which a call is considered slow.
+	// It rotates away a provider that is slow even when it returns successfully
+	// (e.g. an overloaded free RPC that never errors but responds in seconds).
+	// The same threshold classifies a slow error response.
+	SlowResponseThreshold time.Duration
+	// SlowResponseCooldown is how long a provider stays blacklisted after being
+	// flagged slow, before it is retried.
+	SlowResponseCooldown time.Duration
 }
 
 func DefaultFailoverConfig() FailoverConfig {
 	return FailoverConfig{
-		HealthCheckInterval:  30 * time.Second,
-		EnableBlacklisting:   true,
-		MinActiveProviders:   2,
-		ErrorThreshold:       5,
-		ForceRotateThreshold: 3,
-		DefaultTimeout:       10 * time.Second,
+		HealthCheckInterval:   30 * time.Second,
+		EnableBlacklisting:    true,
+		MinActiveProviders:    2,
+		ErrorThreshold:        5,
+		ForceRotateThreshold:  3,
+		DefaultTimeout:        10 * time.Second,
+		SlowResponseThreshold: 3 * time.Second,
+		SlowResponseCooldown:  2 * time.Minute,
 	}
 }
 
@@ -201,6 +211,12 @@ func NewFailover[T NetworkClient](config *FailoverConfig) *Failover[T] {
 	}
 	if config.ForceRotateThreshold <= 0 {
 		config.ForceRotateThreshold = DefaultFailoverConfig().ForceRotateThreshold
+	}
+	if config.SlowResponseThreshold <= 0 {
+		config.SlowResponseThreshold = DefaultFailoverConfig().SlowResponseThreshold
+	}
+	if config.SlowResponseCooldown <= 0 {
+		config.SlowResponseCooldown = DefaultFailoverConfig().SlowResponseCooldown
 	}
 	return &Failover[T]{
 		providers:    make([]*Provider, 0),
@@ -414,7 +430,49 @@ func (f *Failover[T]) executeCore(ctx context.Context, provider *Provider, fn fu
 
 	f.metrics.IncrementSuccess()
 	provider.Success(elapsed)
+	f.evaluateSlowSuccess(provider, elapsed)
 	return nil
+}
+
+// evaluateSlowSuccess rotates away from a provider that returns successfully but
+// too slowly, so the next call prefers a faster one. This covers overloaded free
+// RPCs that respond in seconds without ever erroring — a case the error-path
+// analysis never sees. It never drops the available pool below MinActiveProviders,
+// so when every provider is slow we keep using them rather than starving.
+func (f *Failover[T]) evaluateSlowSuccess(provider *Provider, elapsed time.Duration) {
+	if !f.config.EnableBlacklisting || f.config.SlowResponseThreshold <= 0 {
+		return
+	}
+	if elapsed <= f.config.SlowResponseThreshold {
+		return
+	}
+	if len(f.GetAvailableProviders()) <= f.config.MinActiveProviders {
+		if f.logThrottler.ShouldLog(fmt.Sprintf("slow_success_min_%s", provider.Name)) {
+			logger.Warn("Provider slow but kept to preserve minimum active providers",
+				"provider", provider.Name,
+				"latency_ms", elapsed.Milliseconds(),
+				"threshold_ms", f.config.SlowResponseThreshold.Milliseconds(),
+				"min_active", f.config.MinActiveProviders,
+			)
+		}
+		return
+	}
+
+	if f.logThrottler.ShouldLog(fmt.Sprintf("slow_success_%s", provider.Name)) {
+		provider.mu.RLock()
+		providerURL := provider.URL
+		provider.mu.RUnlock()
+		logger.Warn("Blacklisting slow provider on successful-but-slow response",
+			"provider", provider.Name,
+			"url", providerURL,
+			"latency_ms", elapsed.Milliseconds(),
+			"threshold_ms", f.config.SlowResponseThreshold.Milliseconds(),
+			"cooldown", f.config.SlowResponseCooldown,
+		)
+	}
+	provider.Blacklist(f.config.SlowResponseCooldown)
+	f.metrics.IncrementBlacklist()
+	f.metrics.IncrementErrorType("slow_response")
 }
 
 // handleUnhealthyProvider marks provider as unhealthy and blacklists it
@@ -692,9 +750,9 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 	}
 
 	// Check for slow response
-	if elapsed > 3*time.Second {
+	if f.config.SlowResponseThreshold > 0 && elapsed > f.config.SlowResponseThreshold {
 		issue.Reason = "slow_response"
-		issue.Cooldown = 2 * time.Minute
+		issue.Cooldown = f.config.SlowResponseCooldown
 		issue.MarkUnhealthy = true
 	}
 
