@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/pkg/adaptive"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
@@ -24,6 +25,7 @@ func newTestSolanaIndexer() *SolanaIndexer {
 		chainName:   "solana",
 		config:      config.ChainConfig{NetworkId: "solana-mainnet"},
 		pubkeyStore: nil, // no filtering
+		limiter:     adaptive.New(adaptive.Config{Max: 4}),
 	}
 }
 

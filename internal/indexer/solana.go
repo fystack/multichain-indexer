@@ -10,6 +10,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/pkg/adaptive"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -25,6 +26,10 @@ type SolanaIndexer struct {
 	config      config.ChainConfig
 	failover    *rpc.Failover[solana.SolanaAPI]
 	pubkeyStore PubkeyStore
+	// limiter adapts getBlock concurrency to observed RPC latency/errors. It is
+	// shared across all worker modes for this chain (the indexer is built once),
+	// so it is a single global congestion controller for the chain's getBlock load.
+	limiter *adaptive.Limiter
 }
 
 func NewSolanaIndexer(
@@ -33,7 +38,27 @@ func NewSolanaIndexer(
 	failover *rpc.Failover[solana.SolanaAPI],
 	pubkeyStore PubkeyStore,
 ) *SolanaIndexer {
-	return &SolanaIndexer{chainName: chainName, config: cfg, failover: failover, pubkeyStore: pubkeyStore}
+	maxConc := cfg.Throttle.Concurrency
+	if maxConc <= 0 {
+		maxConc = 1
+	}
+	limiter := adaptive.New(adaptive.Config{
+		Max: maxConc,
+		Min: 1,
+		// Healthy Solana getBlock (json, full) is ~0.6-1s; treat >2.5s as
+		// congestion and only grow back when calls settle under ~1.2s.
+		LowLatency:     1200 * time.Millisecond,
+		HighLatency:    2500 * time.Millisecond,
+		AdjustInterval: time.Second,
+		GrowStreak:     10,
+	})
+	return &SolanaIndexer{
+		chainName:   chainName,
+		config:      cfg,
+		failover:    failover,
+		pubkeyStore: pubkeyStore,
+		limiter:     limiter,
+	}
 }
 
 func (s *SolanaIndexer) GetName() string                  { return strings.ToUpper(s.chainName) }
@@ -150,36 +175,32 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 		return []BlockResult{}, nil
 	}
 
-	maxConc := s.config.Throttle.Concurrency
-	if maxConc <= 0 {
-		maxConc = 1
-	}
-
 	results := make([]BlockResult, len(blockNumbers))
 
 	eg, egCtx := errgroup.WithContext(ctx)
-	sem := make(chan struct{}, maxConc)
 
 	for i, slot := range blockNumbers {
 		i := i
 		slot := slot
 		eg.Go(func() error {
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-egCtx.Done():
-				return egCtx.Err()
+			if err := s.limiter.Acquire(egCtx); err != nil {
+				return err
 			}
+			defer s.limiter.Release()
 
 			var (
 				b    *solana.GetBlockResult
 				berr error
 			)
+			fetchStart := time.Now()
 			berr = s.failover.ExecuteWithRetry(egCtx, func(c solana.SolanaAPI) error {
 				blk, err := c.GetBlock(egCtx, slot)
 				b = blk
 				return err
 			})
+			// Feed latency/outcome back into the concurrency controller so it
+			// backs off when the RPC is slow or failing and recovers when fast.
+			s.limiter.Observe(time.Since(fetchStart), berr == nil)
 
 			if berr != nil {
 				results[i] = BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: berr.Error()}}
