@@ -464,6 +464,28 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 	}
 }
 
+// solanaEffectiveAccountKeys returns the full ordered account list used to
+// resolve instruction/token-balance indices. With encoding=json, a versioned
+// (v0) transaction's Address Lookup Table accounts are delivered separately in
+// meta.loadedAddresses rather than in message.accountKeys, and instruction and
+// token-balance indices point into static keys followed by the loaded writable
+// then loaded readonly accounts. With encoding=jsonParsed loaded is empty
+// (already merged), so the static keys are returned unchanged.
+func solanaEffectiveAccountKeys(static []solana.AccountKey, loaded *solana.LoadedAddresses) []solana.AccountKey {
+	if loaded == nil || (len(loaded.Writable) == 0 && len(loaded.Readonly) == 0) {
+		return static
+	}
+	out := make([]solana.AccountKey, 0, len(static)+len(loaded.Writable)+len(loaded.Readonly))
+	out = append(out, static...)
+	for _, pk := range loaded.Writable {
+		out = append(out, solana.AccountKey{Pubkey: pk, Writable: true})
+	}
+	for _, pk := range loaded.Readonly {
+		out = append(out, solana.AccountKey{Pubkey: pk})
+	}
+	return out
+}
+
 func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
 	out := make([]types.Transaction, 0)
 	for txIdx, tx := range b.Transactions {
@@ -478,7 +500,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 		}
 		txHash := tx.Transaction.Signatures[0]
 		fee := decimal.NewFromInt(int64(tx.Meta.Fee))
-		accountKeys := tx.Transaction.Message.AccountKeys
+		accountKeys := solanaEffectiveAccountKeys(tx.Transaction.Message.AccountKeys, tx.Meta.LoadedAddresses)
 
 		// Build token-account -> (owner, mint) lookup from token balance metadata.
 		// This isn't used to infer transfers; only to map SPL token accounts to owners/mints.

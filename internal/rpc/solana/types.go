@@ -1,5 +1,7 @@
 package solana
 
+import "encoding/json"
+
 // Minimal JSON-RPC types for Solana getBlock / getSlot.
 
 type jsonRPCRequest struct {
@@ -52,6 +54,18 @@ type TxnMeta struct {
 	PreTokenBalances []TokenBalance `json:"preTokenBalances"`
 	PostTokenBalances []TokenBalance `json:"postTokenBalances"`
 	InnerInstructions []InnerInstruction `json:"innerInstructions"`
+	// LoadedAddresses carries the accounts a versioned (v0) transaction pulls in
+	// via Address Lookup Tables. With encoding=json these are NOT included in
+	// message.accountKeys, so the full account list used for index resolution is
+	// static accountKeys + Writable + Readonly (in that order). With
+	// encoding=jsonParsed the RPC already merges them into accountKeys and this
+	// field is empty.
+	LoadedAddresses *LoadedAddresses `json:"loadedAddresses"`
+}
+
+type LoadedAddresses struct {
+	Writable []string `json:"writable"`
+	Readonly []string `json:"readonly"`
 }
 
 type InnerInstruction struct {
@@ -88,6 +102,27 @@ type AccountKey struct {
 	Pubkey   string `json:"pubkey"`
 	Signer   bool   `json:"signer"`
 	Writable bool   `json:"writable"`
+}
+
+// UnmarshalJSON accepts both encodings of message.accountKeys:
+//   - encoding=json:       a bare base58 pubkey string
+//   - encoding=jsonParsed: an object { pubkey, signer, source, writable }
+func (a *AccountKey) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var pubkey string
+		if err := json.Unmarshal(data, &pubkey); err != nil {
+			return err
+		}
+		a.Pubkey = pubkey
+		return nil
+	}
+	type alias AccountKey
+	var v alias
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*a = AccountKey(v)
+	return nil
 }
 
 type Instruction struct {

@@ -370,3 +370,33 @@ func TestParseSquadsMultisigTransfer(t *testing.T) {
 		tokenTransfer.FromAddress, tokenTransfer.ToAddress,
 		tokenTransfer.Amount, tokenTransfer.AssetAddress)
 }
+
+// TestSolanaEffectiveAccountKeys verifies that with encoding=json a versioned
+// (v0) transaction's Address Lookup Table accounts are appended in the correct
+// order: static keys, then loaded writable, then loaded readonly. This ordering
+// matches the account list the RPC merges into accountKeys under jsonParsed and
+// is what instruction / token-balance indices point into.
+func TestSolanaEffectiveAccountKeys(t *testing.T) {
+	static := []solana.AccountKey{{Pubkey: "S0"}, {Pubkey: "S1"}}
+
+	// No loaded addresses: returns the static slice unchanged (jsonParsed path).
+	assert.Equal(t, static, solanaEffectiveAccountKeys(static, nil))
+	assert.Equal(t, static, solanaEffectiveAccountKeys(static, &solana.LoadedAddresses{}))
+
+	loaded := &solana.LoadedAddresses{
+		Writable: []string{"W0", "W1"},
+		Readonly: []string{"R0"},
+	}
+	got := solanaEffectiveAccountKeys(static, loaded)
+	require.Len(t, got, 5)
+
+	pubkeys := make([]string, len(got))
+	for i, k := range got {
+		pubkeys[i] = k.Pubkey
+	}
+	assert.Equal(t, []string{"S0", "S1", "W0", "W1", "R0"}, pubkeys,
+		"order must be static + loaded writable + loaded readonly")
+	assert.True(t, got[2].Writable, "loaded writable accounts must be marked writable")
+	assert.True(t, got[3].Writable)
+	assert.False(t, got[4].Writable, "loaded readonly accounts must not be writable")
+}
