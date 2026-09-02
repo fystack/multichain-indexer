@@ -3,7 +3,6 @@ package config
 import (
 	"time"
 
-	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 )
 
@@ -36,7 +35,6 @@ type Defaults struct {
 	Status              StatusConfig       `yaml:"status"`
 	Client              ClientConfig       `yaml:"client"`
 	Throttle            Throttle           `yaml:"throttle"`
-	Failover            rpc.FailoverConfig `yaml:"failover"`
 }
 
 type Chains map[string]ChainConfig
