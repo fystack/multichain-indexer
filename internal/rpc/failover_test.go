@@ -228,6 +228,78 @@ func TestExecuteCore_GenericErrorsForceRotateToHealthySibling(t *testing.T) {
 	assert.Equal(t, int64(1), metrics["provider_switches"])
 }
 
+func TestExecuteCore_SlowSuccessBlacklistsProvider(t *testing.T) {
+	cfg := DefaultFailoverConfig()
+	cfg.SlowResponseThreshold = 10 * time.Millisecond
+	cfg.SlowResponseCooldown = time.Minute
+	cfg.MinActiveProviders = 2
+	f := NewFailover[NetworkClient](&cfg)
+
+	// Three providers so blacklisting one still leaves >= MinActiveProviders.
+	first := newTestProvider("first")
+	require.NoError(t, f.AddProvider(first))
+	require.NoError(t, f.AddProvider(newTestProvider("second")))
+	require.NoError(t, f.AddProvider(newTestProvider("third")))
+
+	err := f.executeCore(context.Background(), first, func(NetworkClient) error {
+		time.Sleep(30 * time.Millisecond) // exceeds SlowResponseThreshold
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.False(t, first.IsAvailable(), "slow-but-successful provider should be blacklisted")
+
+	metrics := f.GetMetrics()
+	assert.Equal(t, int64(1), metrics["blacklist_events"])
+	errorsByType := metrics["errors_by_type"].(map[string]int64)
+	assert.Equal(t, int64(1), errorsByType["slow_response"])
+
+	got, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.NotEqual(t, first.Name, got.Name, "should rotate off the slow provider")
+}
+
+func TestExecuteCore_SlowSuccessKeepsProviderWhenPoolAtMinimum(t *testing.T) {
+	cfg := DefaultFailoverConfig()
+	cfg.SlowResponseThreshold = 10 * time.Millisecond
+	cfg.SlowResponseCooldown = time.Minute
+	cfg.MinActiveProviders = 2
+	f := NewFailover[NetworkClient](&cfg)
+
+	// Only MinActiveProviders providers: blacklisting would starve the pool.
+	first := newTestProvider("first")
+	require.NoError(t, f.AddProvider(first))
+	require.NoError(t, f.AddProvider(newTestProvider("second")))
+
+	err := f.executeCore(context.Background(), first, func(NetworkClient) error {
+		time.Sleep(30 * time.Millisecond)
+		return nil
+	})
+	require.NoError(t, err)
+
+	assert.True(t, first.IsAvailable(), "must keep slow provider to preserve minimum active pool")
+	assert.Equal(t, int64(0), f.GetMetrics()["blacklist_events"])
+}
+
+func TestExecuteCore_FastSuccessDoesNotBlacklist(t *testing.T) {
+	cfg := DefaultFailoverConfig()
+	cfg.SlowResponseThreshold = 500 * time.Millisecond
+	f := NewFailover[NetworkClient](&cfg)
+
+	first := newTestProvider("first")
+	require.NoError(t, f.AddProvider(first))
+	require.NoError(t, f.AddProvider(newTestProvider("second")))
+	require.NoError(t, f.AddProvider(newTestProvider("third")))
+
+	err := f.executeCore(context.Background(), first, func(NetworkClient) error {
+		return nil // fast
+	})
+	require.NoError(t, err)
+
+	assert.True(t, first.IsAvailable())
+	assert.Equal(t, int64(0), f.GetMetrics()["blacklist_events"])
+}
+
 func TestExecuteCore_TransientGenericErrorsDoNotForceRotate(t *testing.T) {
 	cfg := DefaultFailoverConfig()
 	cfg.ForceRotateThreshold = 3
