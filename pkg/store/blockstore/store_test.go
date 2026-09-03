@@ -6,7 +6,6 @@ import (
 
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/kvstore"
-	"github.com/hashicorp/consul/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,13 +24,9 @@ func (f *fakeKVStore) GetAny(string, any) (bool, error) { return false, nil }
 func (f *fakeKVStore) List(string) ([]*infra.KVPair, error) {
 	return nil, nil
 }
-func (f *fakeKVStore) Delete(string) error          { return nil }
+func (f *fakeKVStore) Delete(string) error           { return nil }
 func (f *fakeKVStore) BatchSet([]infra.KVPair) error { return nil }
-func (f *fakeKVStore) Close() error                 { return nil }
-
-func (f *fakeKVStore) GetWithOptions(string, *api.QueryOptions) (string, error) {
-	return f.getVal, f.getErr
-}
+func (f *fakeKVStore) Close() error                  { return nil }
 
 func TestGetLatestBlock_MissingKeyReturnsZeroNoError(t *testing.T) {
 	bs := NewBlockStore(&fakeKVStore{getErr: kvstore.ErrKeyNotFound})

@@ -6,7 +6,6 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/infra"
-	"github.com/hashicorp/consul/api"
 )
 
 type BadgerStore struct {
@@ -76,11 +75,6 @@ func (b *BadgerStore) Set(key string, value string) error {
 	return b.db.Update(func(txn *badger.Txn) error {
 		return txn.Set([]byte(k), []byte(value))
 	})
-}
-
-// GetWithOptions is provided for interface parity; options are ignored for Badger.
-func (b *BadgerStore) GetWithOptions(key string, _ *api.QueryOptions) (string, error) {
-	return b.Get(key)
 }
 
 func (b *BadgerStore) SetAny(key string, value any) error {

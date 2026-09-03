@@ -124,8 +124,8 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	}
 
 	// start kvstore
-	logger.Info("Connecting to kvstore", "url", services.KVS.Consul.Address)
-	kvstore, err := kvstore.NewFromConfig(services.KVS)
+	logger.Info("Connecting to kvstore", "type", services.KVS.Type)
+	kvstore, err := kvstore.NewFromConfig(services.KVS, redisClient.GetClient())
 	if err != nil {
 		logger.Fatal("Create kvstore failed", "err", err)
 	}
