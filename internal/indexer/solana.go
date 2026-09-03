@@ -26,9 +26,7 @@ type SolanaIndexer struct {
 	config      config.ChainConfig
 	failover    *rpc.Failover[solana.SolanaAPI]
 	pubkeyStore PubkeyStore
-	// limiter adapts getBlock concurrency to observed RPC latency/errors. It is
-	// shared across all worker modes for this chain (the indexer is built once),
-	// so it is a single global congestion controller for the chain's getBlock load.
+	// shared across worker modes: one congestion controller per chain.
 	limiter *adaptive.Limiter
 }
 
@@ -43,10 +41,8 @@ func NewSolanaIndexer(
 		maxConc = 1
 	}
 	limiter := adaptive.New(adaptive.Config{
-		Max: maxConc,
-		Min: 1,
-		// Healthy Solana getBlock (json, full) is ~0.6-1s; treat >2.5s as
-		// congestion and only grow back when calls settle under ~1.2s.
+		Max:            maxConc,
+		Min:            1,
 		LowLatency:     1200 * time.Millisecond,
 		HighLatency:    2500 * time.Millisecond,
 		AdjustInterval: time.Second,
@@ -198,8 +194,6 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 				b = blk
 				return err
 			})
-			// Feed latency/outcome back into the concurrency controller so it
-			// backs off when the RPC is slow or failing and recovers when fast.
 			s.limiter.Observe(time.Since(fetchStart), berr == nil)
 
 			if berr != nil {
@@ -485,13 +479,8 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 	}
 }
 
-// solanaEffectiveAccountKeys returns the full ordered account list used to
-// resolve instruction/token-balance indices. With encoding=json, a versioned
-// (v0) transaction's Address Lookup Table accounts are delivered separately in
-// meta.loadedAddresses rather than in message.accountKeys, and instruction and
-// token-balance indices point into static keys followed by the loaded writable
-// then loaded readonly accounts. With encoding=jsonParsed loaded is empty
-// (already merged), so the static keys are returned unchanged.
+// solanaEffectiveAccountKeys appends v0 ALT accounts (static + writable + readonly)
+// so instruction/token-balance indices resolve under encoding=json.
 func solanaEffectiveAccountKeys(static []solana.AccountKey, loaded *solana.LoadedAddresses) []solana.AccountKey {
 	if loaded == nil || (len(loaded.Writable) == 0 && len(loaded.Readonly) == 0) {
 		return static

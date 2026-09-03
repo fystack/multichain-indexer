@@ -112,9 +112,7 @@ func TestAcquireCancelledContext(t *testing.T) {
 	}
 }
 
-// TestAcquireWakesAllWaitersOnCancel covers the shutdown case: many goroutines
-// blocked in Acquire must all return when ctx is cancelled, even though no slot
-// is ever released (sync.Cond.Wait does not observe ctx on its own).
+// TestAcquireWakesAllWaitersOnCancel: blocked waiters all return on ctx cancel.
 func TestAcquireWakesAllWaitersOnCancel(t *testing.T) {
 	l := New(Config{Max: 2, Min: 1, Start: 2})
 	require.NoError(t, l.Acquire(context.Background()))

@@ -373,11 +373,7 @@ func TestParseSquadsMultisigTransfer(t *testing.T) {
 		tokenTransfer.Amount, tokenTransfer.AssetAddress)
 }
 
-// TestSolanaEffectiveAccountKeys verifies that with encoding=json a versioned
-// (v0) transaction's Address Lookup Table accounts are appended in the correct
-// order: static keys, then loaded writable, then loaded readonly. This ordering
-// matches the account list the RPC merges into accountKeys under jsonParsed and
-// is what instruction / token-balance indices point into.
+// TestSolanaEffectiveAccountKeys: v0 ALT accounts append as static+writable+readonly.
 func TestSolanaEffectiveAccountKeys(t *testing.T) {
 	static := []solana.AccountKey{{Pubkey: "S0"}, {Pubkey: "S1"}}
 
