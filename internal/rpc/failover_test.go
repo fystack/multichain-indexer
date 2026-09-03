@@ -243,6 +243,39 @@ func TestExecuteCore_GenericErrorsForceRotateToHealthySibling(t *testing.T) {
 	assert.Equal(t, int64(1), metrics["provider_switches"])
 }
 
+func TestEmergencyRecovery_SpacedByInterval(t *testing.T) {
+	cfg := DefaultFailoverConfig()
+	cfg.EmergencyRecoveryInterval = 100 * time.Millisecond
+	f := NewFailover[NetworkClient](&cfg)
+
+	a := newTestProvider("a")
+	b := newTestProvider("b")
+	require.NoError(t, f.AddProvider(a))
+	require.NoError(t, f.AddProvider(b))
+
+	// Whole pool down (long blacklist so it doesn't expire mid-test).
+	a.Blacklist(time.Hour)
+	b.Blacklist(time.Hour)
+
+	// First call recovers one provider.
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	// Knock the recovered one back out so the pool is fully down again.
+	p.Blacklist(time.Hour)
+
+	// Immediately: within the interval -> caller is told to back off, no churn.
+	_, err = f.GetBestProvider()
+	require.ErrorIs(t, err, errAllProvidersBackoff)
+
+	// After the interval passes, emergency recovery is allowed again.
+	time.Sleep(120 * time.Millisecond)
+	p2, err := f.GetBestProvider()
+	require.NoError(t, err)
+	require.NotNil(t, p2)
+}
+
 func TestExecuteCore_SlowSuccessBlacklistsProvider(t *testing.T) {
 	cfg := DefaultFailoverConfig()
 	cfg.SlowResponseThreshold = 10 * time.Millisecond

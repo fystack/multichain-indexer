@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -29,6 +30,10 @@ type FailoverConfig struct {
 	// SlowResponseCooldown is how long a provider stays blacklisted after being
 	// flagged slow, before it is retried.
 	SlowResponseCooldown time.Duration
+	// EmergencyRecoveryInterval is the minimum spacing between emergency
+	// recoveries when the whole pool is blacklisted. It stops many concurrent
+	// callers from hot-spinning through recover→fail→recover.
+	EmergencyRecoveryInterval time.Duration
 }
 
 func DefaultFailoverConfig() FailoverConfig {
@@ -39,8 +44,9 @@ func DefaultFailoverConfig() FailoverConfig {
 		ErrorThreshold:        5,
 		ForceRotateThreshold:  3,
 		DefaultTimeout:        10 * time.Second,
-		SlowResponseThreshold: 3 * time.Second,
-		SlowResponseCooldown:  2 * time.Minute,
+		SlowResponseThreshold:     3 * time.Second,
+		SlowResponseCooldown:      2 * time.Minute,
+		EmergencyRecoveryInterval: 2 * time.Second,
 	}
 }
 
@@ -196,9 +202,15 @@ type Failover[T NetworkClient] struct {
 	currentIndex    int
 	config          FailoverConfig
 	lastHealthCheck time.Time
+	lastEmergency   time.Time
 	metrics         *FailoverMetrics
 	logThrottler    *LogThrottler
 }
+
+// errAllProvidersBackoff is returned when the whole pool is blacklisted and an
+// emergency recovery happened too recently. Callers back off (via retry) instead
+// of hot-spinning through recover→fail→recover across goroutines.
+var errAllProvidersBackoff = errors.New("all providers unavailable, backing off")
 
 // NewFailover creates a new type-safe Failover[T]
 func NewFailover[T NetworkClient](config *FailoverConfig) *Failover[T] {
@@ -217,6 +229,9 @@ func NewFailover[T NetworkClient](config *FailoverConfig) *Failover[T] {
 	}
 	if config.SlowResponseCooldown <= 0 {
 		config.SlowResponseCooldown = DefaultFailoverConfig().SlowResponseCooldown
+	}
+	if config.EmergencyRecoveryInterval <= 0 {
+		config.EmergencyRecoveryInterval = DefaultFailoverConfig().EmergencyRecoveryInterval
 	}
 	return &Failover[T]{
 		providers:    make([]*Provider, 0),
@@ -370,6 +385,13 @@ func (f *Failover[T]) performEmergencyRecoveryLocked() (*Provider, error) {
 		return nil, fmt.Errorf("no available providers")
 	}
 
+	// Space out emergency recoveries: if we un-blacklisted a provider very
+	// recently, make callers back off rather than recover→fail→recover in a hot
+	// loop while the whole pool is rate-limited.
+	if !f.lastEmergency.IsZero() && time.Since(f.lastEmergency) < f.config.EmergencyRecoveryInterval {
+		return nil, errAllProvidersBackoff
+	}
+
 	var blacklisted []*Provider
 	for _, p := range f.providers {
 		if p.State == StateBlacklisted {
@@ -389,6 +411,7 @@ func (f *Failover[T]) performEmergencyRecoveryLocked() (*Provider, error) {
 	first := blacklisted[0]
 	first.Recover()
 	f.currentIndex = 0
+	f.lastEmergency = time.Now()
 	f.metrics.IncrementEmergencyRecovery()
 
 	logger.Info("Emergency recovery", "name", first.Name)

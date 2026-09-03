@@ -163,14 +163,19 @@ chains:
     start_block: 0
     poll_interval: "2s"
     nodes:
+      # STRONGLY RECOMMENDED: put at least one keyed node first. Free public
+      # nodes cannot sustain getBlock at Solana's slot rate — expect heavy 429s
+      # and lag without a paid/free-tier-with-key endpoint.
+      # - url: "https://mainnet.helius-rpc.com/?api-key=${HELIUS_KEY}"          # recommended
+      # - url: "https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"        # optional
+      # - url: "https://solana-mainnet.g.quicknode.pro/${QUICKNODE_KEY}/"      # optional
       - url: "https://solana-rpc.publicnode.com"
       - url: "https://api.mainnet.solana.com"
-      - url: "https://solana.drpc.org"
       - url: "https://solana.leorpc.com/?api_key=FREE"
+      - url: "https://solana-mainnet.gateway.tatum.io"
       - url: "https://solana.api.pocket.network"
       - url: "https://public.rpc.solanavibestation.com"
-      # - url: "https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"  # optional
-      # - url: "https://solana-mainnet.g.quicknode.pro/${QUICKNODE_KEY}/"  # optional
+      # NOTE: solana.drpc.org does NOT serve Solana on the free plan — removed.
     client:
       timeout: "15s"
       max_retries: 2
@@ -189,8 +194,13 @@ chains:
     start_block: 0
     poll_interval: "2s"
     nodes:
-      - url: "https://api.devnet.solana.com"
+      # Keyed nodes (Ankr/Chainstack free tiers with a key) lead — verified to
+      # serve getBlock reliably, unlike the unkeyed public devnet endpoints.
+      # - url: "https://rpc.ankr.com/solana_devnet/${ANKR_KEY}"
+      # - url: "https://solana-devnet.core.chainstack.com/${CHAINSTACK_KEY}"
       - url: "https://solana-devnet.api.onfinality.io/public"
+      - url: "https://solana-devnet.gateway.tatum.io/"
+      - url: "https://api.devnet.solana.com"
     client:
       timeout: "12s"
       max_retries: 2
