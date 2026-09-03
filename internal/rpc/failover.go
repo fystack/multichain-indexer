@@ -699,6 +699,15 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 			markUnhealthy: true,
 		},
 		{
+			// Node does not serve this chain at all (e.g. drpc free plan). This is
+			// permanent for the node, so blacklist it long instead of churning
+			// through ForceRotateThreshold generic errors every pass.
+			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35"},
+			reason:        "chain_unavailable",
+			cooldown:      24 * time.Hour,
+			markUnhealthy: true,
+		},
+		{
 			patterns: []string{
 				"-32701",
 				"-32603",
