@@ -10,6 +10,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/missingblockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
@@ -39,6 +40,7 @@ func NewManualWorker(
 	kv infra.KVStore,
 	redisClient infra.RedisClient,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
@@ -51,6 +53,7 @@ func NewManualWorker(
 			cfg,
 			kv,
 			blockStore,
+			catchupStore,
 			emitter,
 			pubkeyStore,
 			ModeManual,
