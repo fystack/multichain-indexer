@@ -118,6 +118,21 @@ func TestAnalyzeAndHandleError_RestrictedQuery(t *testing.T) {
 	assert.Equal(t, int64(1), errorsByType["restricted_query"])
 }
 
+func TestAnalyzeAndHandleError_ChainUnavailable(t *testing.T) {
+	f, p := newTestFailover()
+
+	err := fmt.Errorf(`getBlock failed: HTTP 400 Bad Request: {"error":{"message":"chain is not available on free plan, please upgrade to paid plan","code":35}}`)
+	f.AnalyzeAndHandleError(p, err, 100*time.Millisecond)
+
+	assert.False(t, p.IsAvailable(), "a node that doesn't serve the chain should be blacklisted immediately")
+	assert.Equal(t, StateBlacklisted, p.State)
+	// Long cooldown (24h) — the condition is permanent for that node.
+	assert.True(t, time.Now().Add(23*time.Hour).Before(p.BlacklistedUntil))
+
+	errorsByType := f.GetMetrics()["errors_by_type"].(map[string]int64)
+	assert.Equal(t, int64(1), errorsByType["chain_unavailable"])
+}
+
 func TestAnalyzeAndHandleError_ConnectionError(t *testing.T) {
 	f, p := newTestFailover()
 
