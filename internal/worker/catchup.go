@@ -72,7 +72,6 @@ func (cw *CatchupWorker) Start() {
 	}
 
 	cw.logger.Info("Starting optimized catchup worker",
-		"chain", cw.chain.GetName(),
 		"ranges", len(cw.blockRanges),
 		"total_blocks", totalBlocks,
 		"parallel_workers", CATCHUP_WORKERS,
@@ -109,9 +108,7 @@ func (cw *CatchupWorker) runCatchup() {
 		// No ranges left: stay alive and re-check the store for ranges queued
 		// later, instead of exiting permanently.
 		if len(cw.blockRanges) == 0 {
-			cw.logger.Debug("No catchup ranges, waiting for new work",
-				"chain", cw.chain.GetName(),
-			)
+			cw.logger.Debug("No catchup ranges, waiting for new work")
 			select {
 			case <-cw.ctx.Done():
 				return
@@ -130,14 +127,12 @@ func (cw *CatchupWorker) reloadStoredRanges() []blockstore.CatchupRange {
 	progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode())
 	if err != nil {
 		cw.logger.Warn("Failed to reload catchup progress while idle",
-			"chain", cw.chain.GetName(),
 			"error", err,
 		)
 		return nil
 	}
 	if len(progress) > 0 {
 		cw.logger.Info("Picked up newly queued catchup ranges",
-			"chain", cw.chain.GetName(),
 			"ranges", len(progress),
 		)
 		status.EnsureStatusRegistry(cw.statusRegistry).SetCatchupRanges(cw.chain.GetName(), progress)
@@ -159,14 +154,12 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	// Load existing catchup ranges from database (they're already split when saved)
 	if progress, err := cw.blockStore.GetCatchupProgress(cw.chain.GetNetworkInternalCode()); err == nil {
 		cw.logger.Info("Loading existing catchup progress",
-			"chain", cw.chain.GetName(),
 			"progress_ranges", len(progress),
 		)
 		ranges = progress
 		registry.SetCatchupRanges(cw.chain.GetName(), progress)
 	} else {
 		cw.logger.Warn("Failed to load catchup progress, will create new range",
-			"chain", cw.chain.GetName(),
 			"error", err,
 		)
 	}
@@ -181,7 +174,6 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 				}
 				start, end := latest+1, head
 				cw.logger.Info("Creating new catchup range",
-					"chain", cw.chain.GetName(),
 					"latest_block", latest,
 					"head_block", head,
 					"catchup_start", start, "catchup_end", end,
@@ -199,7 +191,6 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 					newRanges,
 				); err != nil {
 					cw.logger.Error("Failed to batch save catchup ranges",
-						"chain", cw.chain.GetName(),
 						"count", len(newRanges),
 						"error", err,
 					)
@@ -220,7 +211,6 @@ func (cw *CatchupWorker) splitLargeRange(r blockstore.CatchupRange) []blockstore
 
 	if len(subRanges) > 1 {
 		cw.logger.Info("Split large catchup range",
-			"chain", cw.chain.GetName(),
 			"original_range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"original_size", r.End-r.Start+1,
 			"sub_ranges", len(subRanges),
@@ -396,14 +386,12 @@ func (cw *CatchupWorker) saveProgress(r blockstore.CatchupRange, current uint64)
 	defer cw.progressMu.Unlock()
 	registry := status.EnsureStatusRegistry(cw.statusRegistry)
 	cw.logger.Debug("Saving catchup progress",
-		"chain", cw.chain.GetName(),
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 		"current", current,
 	)
 	current = min(current, r.End)
 	if err := cw.blockStore.SaveCatchupProgress(cw.chain.GetNetworkInternalCode(), r.Start, r.End, current); err != nil {
 		cw.logger.Warn("Failed to save catchup progress",
-			"chain", cw.chain.GetName(),
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"current", current,
 			"error", err,
@@ -429,13 +417,11 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 	registry := status.EnsureStatusRegistry(cw.statusRegistry)
 
 	cw.logger.Info("Completing catchup range",
-		"chain", cw.chain.GetName(),
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 	)
 
 	if err := cw.blockStore.DeleteCatchupRange(cw.chain.GetNetworkInternalCode(), r.Start, r.End); err != nil {
 		cw.logger.Warn("Failed to delete catchup range",
-			"chain", cw.chain.GetName(),
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"error", err,
 		)
@@ -456,7 +442,6 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 
 func (cw *CatchupWorker) Close() error {
 	cw.logger.Info("Closing catchup worker, saving progress...",
-		"chain", cw.chain.GetName(),
 		"ranges", len(cw.blockRanges),
 	)
 
@@ -483,7 +468,6 @@ func (cw *CatchupWorker) Close() error {
 
 	if err := cw.blockStore.SaveCatchupRanges(cw.chain.GetNetworkInternalCode(), rangesToSave); err != nil {
 		cw.logger.Error("Failed to batch save progress on close",
-			"chain", cw.chain.GetName(),
 			"ranges", len(rangesToSave),
 			"error", err,
 		)
