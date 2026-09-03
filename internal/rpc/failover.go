@@ -22,17 +22,11 @@ type FailoverConfig struct {
 	ErrorThreshold       int
 	ForceRotateThreshold int
 	DefaultTimeout       time.Duration
-	// SlowResponseThreshold is the latency above which a call is considered slow.
-	// It rotates away a provider that is slow even when it returns successfully
-	// (e.g. an overloaded free RPC that never errors but responds in seconds).
-	// The same threshold classifies a slow error response.
+	// SlowResponseThreshold rotates away a provider that is slow even on success.
 	SlowResponseThreshold time.Duration
-	// SlowResponseCooldown is how long a provider stays blacklisted after being
-	// flagged slow, before it is retried.
-	SlowResponseCooldown time.Duration
-	// EmergencyRecoveryInterval is the minimum spacing between emergency
-	// recoveries when the whole pool is blacklisted. It stops many concurrent
-	// callers from hot-spinning through recover→fail→recover.
+	SlowResponseCooldown  time.Duration
+	// EmergencyRecoveryInterval spaces emergency recoveries when the whole pool
+	// is blacklisted, to avoid hot recover→fail→recover across callers.
 	EmergencyRecoveryInterval time.Duration
 }
 
@@ -207,9 +201,6 @@ type Failover[T NetworkClient] struct {
 	logThrottler    *LogThrottler
 }
 
-// errAllProvidersBackoff is returned when the whole pool is blacklisted and an
-// emergency recovery happened too recently. Callers back off (via retry) instead
-// of hot-spinning through recover→fail→recover across goroutines.
 var errAllProvidersBackoff = errors.New("all providers unavailable, backing off")
 
 // NewFailover creates a new type-safe Failover[T]
@@ -385,9 +376,6 @@ func (f *Failover[T]) performEmergencyRecoveryLocked() (*Provider, error) {
 		return nil, fmt.Errorf("no available providers")
 	}
 
-	// Space out emergency recoveries: if we un-blacklisted a provider very
-	// recently, make callers back off rather than recover→fail→recover in a hot
-	// loop while the whole pool is rate-limited.
 	if !f.lastEmergency.IsZero() && time.Since(f.lastEmergency) < f.config.EmergencyRecoveryInterval {
 		return nil, errAllProvidersBackoff
 	}
@@ -457,11 +445,8 @@ func (f *Failover[T]) executeCore(ctx context.Context, provider *Provider, fn fu
 	return nil
 }
 
-// evaluateSlowSuccess rotates away from a provider that returns successfully but
-// too slowly, so the next call prefers a faster one. This covers overloaded free
-// RPCs that respond in seconds without ever erroring — a case the error-path
-// analysis never sees. It never drops the available pool below MinActiveProviders,
-// so when every provider is slow we keep using them rather than starving.
+// evaluateSlowSuccess blacklists a slow-but-successful provider, unless that
+// would drop the available pool below MinActiveProviders.
 func (f *Failover[T]) evaluateSlowSuccess(provider *Provider, elapsed time.Duration) {
 	if !f.config.EnableBlacklisting || f.config.SlowResponseThreshold <= 0 {
 		return
@@ -722,9 +707,7 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 			markUnhealthy: true,
 		},
 		{
-			// Node does not serve this chain at all (e.g. drpc free plan). This is
-			// permanent for the node, so blacklist it long instead of churning
-			// through ForceRotateThreshold generic errors every pass.
+			// Node does not serve this chain (e.g. drpc free plan) — permanent.
 			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35"},
 			reason:        "chain_unavailable",
 			cooldown:      24 * time.Hour,

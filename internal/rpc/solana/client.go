@@ -74,10 +74,8 @@ func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTran
 }
 
 func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, error) {
-	// encoding=json is ~35-40% smaller/faster than jsonParsed for full blocks.
-	// The transfer parser resolves instructions from account indices + base58
-	// instruction data (see extractSolanaTransfers), and appends meta.loadedAddresses
-	// so versioned (v0) transactions still resolve correctly.
+	// json is smaller/faster than jsonParsed; parser handles it via account
+	// indices + base58 data + meta.loadedAddresses (see extractSolanaTransfers).
 	cfg := GetBlockConfig{
 		Encoding:                       "json",
 		TransactionDetails:             "full",

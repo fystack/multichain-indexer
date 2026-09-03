@@ -165,9 +165,7 @@ func (rw *RegularWorker) processBatch(
 	}
 
 	for _, res := range results {
-		// Solana produces skipped slots that will never have a block. Treat them
-		// as advanced-past rather than failed so we don't persist them as failed
-		// blocks and waste an extra getBlock in the rescanner confirming the skip.
+		// Skipped slots are normal on Solana: advance past them, don't fail them.
 		if rw.isSolanaSkippedSlot(res) {
 			rw.notifyObserver(res.Number, BlockStatusNotFound)
 			if res.Number > lastSuccess {
@@ -183,8 +181,6 @@ func (rw *RegularWorker) processBatch(
 	return lastSuccess, lastSuccessHash, false, nil
 }
 
-// isSolanaSkippedSlot reports whether a block result is a Solana skipped slot,
-// which is normal on Solana and must not be treated as a failed block.
 func (rw *RegularWorker) isSolanaSkippedSlot(res indexer.BlockResult) bool {
 	return res.Error != nil &&
 		res.Error.ErrorType == indexer.ErrorTypeBlockNotFound &&

@@ -54,12 +54,7 @@ type TxnMeta struct {
 	PreTokenBalances []TokenBalance `json:"preTokenBalances"`
 	PostTokenBalances []TokenBalance `json:"postTokenBalances"`
 	InnerInstructions []InnerInstruction `json:"innerInstructions"`
-	// LoadedAddresses carries the accounts a versioned (v0) transaction pulls in
-	// via Address Lookup Tables. With encoding=json these are NOT included in
-	// message.accountKeys, so the full account list used for index resolution is
-	// static accountKeys + Writable + Readonly (in that order). With
-	// encoding=jsonParsed the RPC already merges them into accountKeys and this
-	// field is empty.
+	// v0 ALT accounts; present only under encoding=json (jsonParsed pre-merges them).
 	LoadedAddresses *LoadedAddresses `json:"loadedAddresses"`
 }
 
@@ -104,9 +99,7 @@ type AccountKey struct {
 	Writable bool   `json:"writable"`
 }
 
-// UnmarshalJSON accepts both encodings of message.accountKeys:
-//   - encoding=json:       a bare base58 pubkey string
-//   - encoding=jsonParsed: an object { pubkey, signer, source, writable }
+// UnmarshalJSON accepts a bare pubkey string (json) or an object (jsonParsed).
 func (a *AccountKey) UnmarshalJSON(data []byte) error {
 	if len(data) > 0 && data[0] == '"' {
 		var pubkey string
