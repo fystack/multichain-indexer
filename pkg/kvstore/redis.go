@@ -13,7 +13,6 @@ import (
 
 const redisOpTimeout = 5 * time.Second
 
-// RedisStore implements infra.KVStore on top of a Redis client.
 type RedisStore struct {
 	client *redis.Client
 	prefix string
@@ -104,8 +103,7 @@ func (r *RedisStore) GetAny(k string, v any) (bool, error) {
 	return true, r.codec.Unmarshal(data, v)
 }
 
-// List returns all key-value pairs whose key starts with prefix. It uses SCAN
-// (non-blocking, cursor-based) rather than KEYS to avoid stalling Redis.
+// List uses SCAN rather than KEYS to avoid stalling Redis.
 func (r *RedisStore) List(prefix string) ([]*infra.KVPair, error) {
 	if prefix == "" {
 		return nil, errors.New("prefix is empty")
@@ -158,9 +156,8 @@ func (r *RedisStore) List(prefix string) ([]*infra.KVPair, error) {
 	return result, nil
 }
 
-// BatchSet writes multiple key-value pairs in a single pipeline. Unlike Consul's
-// transaction API this is not atomic, which is acceptable for the idempotent
-// state (catchup ranges) written through it.
+// BatchSet pipelines the writes; not atomic, which is fine for the idempotent
+// catchup-range state written through it.
 func (r *RedisStore) BatchSet(pairs []infra.KVPair) error {
 	if len(pairs) == 0 {
 		return nil
