@@ -7,7 +7,6 @@ var (
 	ErrKeyEmpty    = errors.New("key is empty")
 )
 
-// checkKeyAndValue returns an error if k == "" or if v == nil.
 func checkKeyAndValue(k string, v any) error {
 	if k == "" {
 		return ErrKeyEmpty

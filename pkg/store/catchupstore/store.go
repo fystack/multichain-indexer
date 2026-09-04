@@ -1,11 +1,6 @@
-// Package catchupstore persists catchup progress as a compact per-chain Redis
-// hash instead of one KV key per range. Each chain keeps a single hash
-//
-//	catchup_progress:<chain>  { "<start>-<end>": "<current>" }
-//
-// so loading progress is a single HGETALL rather than a prefix scan over tens of
-// thousands of keys (see issue #88). Unlike missingblockstore it has no
-// claim/lock semantics — catchup scheduling is unchanged, only persistence.
+// Package catchupstore persists catchup progress as one compact Redis hash per
+// chain, catchup_progress:<chain> { "<start>-<end>": "<current>" }, so loading
+// is a single HGETALL rather than a scan over tens of thousands of keys (#88).
 package catchupstore
 
 import (
@@ -28,76 +23,66 @@ const (
 	defaultTimeout    = 5 * time.Second
 )
 
-// addRangesScript atomically inserts a range, merging it with any existing
-// overlapping or adjacent ranges into a single field. Returns the merged bounds.
+// addRangesScript merges the incoming ranges (flat (start,end,current) triplets
+// in ARGV) with existing overlapping/adjacent ones in a single HGETALL + rewrite,
+// keeping the whole save O(n) in one round-trip.
 const addRangesScript = `
 	local key = KEYS[1]
-	local newStart = tonumber(ARGV[1])
-	local newEnd = tonumber(ARGV[2])
-	local newCurrent = tonumber(ARGV[3])
 
-	if not newStart or not newEnd or newStart <= 0 or newEnd < newStart then
-		return redis.error_reply("invalid catchup range")
+	local function clamp(r)
+		if r.current > r.e then r.current = r.e end
+		if r.current + 1 < r.s then r.current = r.s - 1 end
 	end
 
-	if newCurrent > newEnd then
-		newCurrent = newEnd
-	end
-	if newCurrent + 1 < newStart then
-		newCurrent = newStart - 1
-	end
+	local ranges = {}
 
-	local mergedStart = newStart
-	local mergedEnd = newEnd
-	local mergedCurrent = newCurrent
 	local entries = redis.call('HGETALL', key)
-
 	for i = 1, #entries, 2 do
-		local field = entries[i]
-		local value = entries[i + 1]
-		local existingStart, existingEnd = string.match(field, '^(%d+)%-(%d+)$')
-		if existingStart and existingEnd then
-			existingStart = tonumber(existingStart)
-			existingEnd = tonumber(existingEnd)
-			local existingCurrent = tonumber(value)
-
-			if existingCurrent then
-				if existingCurrent > existingEnd then
-					existingCurrent = existingEnd
-				end
-				if existingCurrent + 1 < existingStart then
-					existingCurrent = existingStart - 1
-				end
-
-				if existingStart <= mergedEnd + 1 and existingEnd + 1 >= mergedStart then
-					if existingStart < mergedStart then
-						mergedStart = existingStart
-					end
-					if existingEnd > mergedEnd then
-						mergedEnd = existingEnd
-					end
-					if existingCurrent < mergedCurrent then
-						mergedCurrent = existingCurrent
-					end
-					redis.call('HDEL', key, field)
-				end
-			end
+		local existingStart, existingEnd = string.match(entries[i], '^(%d+)%-(%d+)$')
+		local existingCurrent = tonumber(entries[i + 1])
+		if existingStart and existingEnd and existingCurrent then
+			local r = {s = tonumber(existingStart), e = tonumber(existingEnd), current = existingCurrent}
+			clamp(r)
+			ranges[#ranges + 1] = r
 		end
 	end
 
-	if mergedCurrent > mergedEnd then
-		mergedCurrent = mergedEnd
-	end
-	if mergedCurrent + 1 < mergedStart then
-		mergedCurrent = mergedStart - 1
+	for i = 1, #ARGV, 3 do
+		local s = tonumber(ARGV[i])
+		local e = tonumber(ARGV[i + 1])
+		local current = tonumber(ARGV[i + 2])
+		if not s or not e or s <= 0 or e < s then
+			return redis.error_reply("invalid catchup range")
+		end
+		local r = {s = s, e = e, current = current}
+		clamp(r)
+		ranges[#ranges + 1] = r
 	end
 
-	local mergedField = tostring(mergedStart) .. '-' .. tostring(mergedEnd)
-	redis.call('HSET', key, mergedField, tostring(mergedCurrent))
-	return {mergedStart, mergedEnd, mergedCurrent}
+	table.sort(ranges, function(a, b)
+		if a.s ~= b.s then return a.s < b.s end
+		return a.e < b.e
+	end)
+
+	local merged = {}
+	for _, r in ipairs(ranges) do
+		local last = merged[#merged]
+		if last and r.s <= last.e + 1 then
+			if r.e > last.e then last.e = r.e end
+			if r.current < last.current then last.current = r.current end
+			clamp(last)
+		else
+			merged[#merged + 1] = r
+		end
+	end
+
+	redis.call('DEL', key)
+	for _, r in ipairs(merged) do
+		redis.call('HSET', key, tostring(r.s) .. '-' .. tostring(r.e), tostring(r.current))
+	end
+	return #merged
 `
 
-// Store persists catchup ranges and their progress for a chain.
 type Store interface {
 	SaveRanges(ctx context.Context, chain string, ranges []blockstore.CatchupRange) error
 	SaveProgress(ctx context.Context, chain string, start, end, current uint64) error
@@ -117,13 +102,11 @@ func (noopStore) DeleteRange(context.Context, string, uint64, uint64) error { re
 type catchupStore struct {
 	redisClient infra.RedisClient
 	addScript   *redis.Script
-	// legacy is the previous one-key-per-range store, read once per chain to
-	// migrate existing progress into the hash. May be nil.
+	// legacy is the previous one-key-per-range store, migrated in once per chain. May be nil.
 	legacy blockstore.Store
 }
 
 // New returns a Redis-backed store, or a no-op store when Redis is unavailable.
-// legacy is the previous KV-backed blockstore used for one-time migration.
 func New(redisClient infra.RedisClient, legacy blockstore.Store) Store {
 	if redisClient == nil || redisClient.GetClient() == nil {
 		return noopStore{}
@@ -175,22 +158,27 @@ func (s *catchupStore) SaveRanges(
 		return nil
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
-	defer cancel()
-
-	key := composeKey(chain)
+	args := make([]any, 0, len(ranges)*3)
 	for _, r := range ranges {
 		if r.Start == 0 || r.End < r.Start {
 			continue
 		}
-		if _, err := s.addScript.Run(
-			ctx,
-			s.redisClient.GetClient(),
-			[]string{key},
-			r.Start, r.End, r.Current,
-		).Result(); err != nil {
-			return fmt.Errorf("save catchup ranges: %w", err)
-		}
+		args = append(args, r.Start, r.End, r.Current)
+	}
+	if len(args) == 0 {
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, defaultTimeout)
+	defer cancel()
+
+	if _, err := s.addScript.Run(
+		ctx,
+		s.redisClient.GetClient(),
+		[]string{composeKey(chain)},
+		args...,
+	).Result(); err != nil {
+		return fmt.Errorf("save catchup ranges: %w", err)
 	}
 	return nil
 }
@@ -268,9 +256,8 @@ func (s *catchupStore) DeleteRange(
 	return nil
 }
 
-// migrateFromLegacy copies one-key-per-range progress from the legacy KV store
-// into the hash exactly once per chain. A marker key suppresses further legacy
-// reads even after the hash later empties out.
+// migrateFromLegacy copies legacy KV progress into the hash once per chain,
+// guarded by a marker key so it isn't re-read after the hash later empties out.
 func (s *catchupStore) migrateFromLegacy(ctx context.Context, chain string) error {
 	if s.legacy == nil {
 		return nil
@@ -295,8 +282,7 @@ func (s *catchupStore) migrateFromLegacy(ctx context.Context, chain string) erro
 		}
 	}
 
-	// Mark migrated regardless of whether legacy had data, so an empty legacy
-	// store doesn't cause a re-read on every GetProgress.
+	// Mark migrated even when legacy was empty, to avoid a re-read on every GetProgress.
 	if err := s.redisClient.GetClient().Set(mctx, marker, "1", 0).Err(); err != nil {
 		return fmt.Errorf("set catchup migration marker: %w", err)
 	}
