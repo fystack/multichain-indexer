@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/pkg/adaptive"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
@@ -24,6 +25,7 @@ func newTestSolanaIndexer() *SolanaIndexer {
 		chainName:   "solana",
 		config:      config.ChainConfig{NetworkId: "solana-mainnet"},
 		pubkeyStore: nil, // no filtering
+		limiter:     adaptive.New(adaptive.Config{Max: 4}),
 	}
 }
 
@@ -369,4 +371,30 @@ func TestParseSquadsMultisigTransfer(t *testing.T) {
 	t.Logf("Squads multisig transfer: from=%s to=%s amount=%s token=%s",
 		tokenTransfer.FromAddress, tokenTransfer.ToAddress,
 		tokenTransfer.Amount, tokenTransfer.AssetAddress)
+}
+
+// TestSolanaEffectiveAccountKeys: v0 ALT accounts append as static+writable+readonly.
+func TestSolanaEffectiveAccountKeys(t *testing.T) {
+	static := []solana.AccountKey{{Pubkey: "S0"}, {Pubkey: "S1"}}
+
+	// No loaded addresses: returns the static slice unchanged (jsonParsed path).
+	assert.Equal(t, static, solanaEffectiveAccountKeys(static, nil))
+	assert.Equal(t, static, solanaEffectiveAccountKeys(static, &solana.LoadedAddresses{}))
+
+	loaded := &solana.LoadedAddresses{
+		Writable: []string{"W0", "W1"},
+		Readonly: []string{"R0"},
+	}
+	got := solanaEffectiveAccountKeys(static, loaded)
+	require.Len(t, got, 5)
+
+	pubkeys := make([]string, len(got))
+	for i, k := range got {
+		pubkeys[i] = k.Pubkey
+	}
+	assert.Equal(t, []string{"S0", "S1", "W0", "W1", "R0"}, pubkeys,
+		"order must be static + loaded writable + loaded readonly")
+	assert.True(t, got[2].Writable, "loaded writable accounts must be marked writable")
+	assert.True(t, got[3].Writable)
+	assert.False(t, got[4].Writable, "loaded readonly accounts must not be writable")
 }
