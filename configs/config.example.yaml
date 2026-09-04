@@ -515,15 +515,12 @@ services:
     mtls: false # enable mutual TLS with client certificates (production only)
 
   kvstore:
-    type: "consul"
-    consul:
-      scheme: "http"
-      address: "127.0.0.1:8500"
-      folder: "indexer"
-      token: ""
-      # http_auth:                   # optional: enable if consul is secured
-      #   username: ""
-      #   password: ""
+    type: "redis" # redis or badger
+    redis:
+      prefix: "indexer" # key namespace; reuses the shared redis connection above
+    # badger:                        # embedded local backend (no external service)
+    #   directory: "data/badger"
+    #   prefix: "indexer"
 
   bloomfilter:
     type: "redis" # redis or in_memory

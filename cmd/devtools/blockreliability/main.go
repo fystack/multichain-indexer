@@ -76,7 +76,7 @@ func main() {
 	}
 
 	// KVStore
-	kv, err := kvstore.NewFromConfig(services.KVS)
+	kv, err := kvstore.NewFromConfig(services.KVS, redisClient.GetClient())
 	if err != nil {
 		logger.Fatal("KVStore connection failed", "err", err)
 	}
