@@ -1,7 +1,6 @@
 package config
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
@@ -33,11 +32,14 @@ type Config struct {
 // LoggingConfig controls where logs are written and how they are encoded.
 // File logs are written to logs/indexer.log.
 type LoggingConfig struct {
-	Mode   string `yaml:"mode"`
-	Format string `yaml:"format"`
+	Mode   string `yaml:"mode"   validate:"omitempty,oneof=stdout file both"`
+	Format string `yaml:"format" validate:"omitempty,oneof=pretty json"`
 }
 
-func (c *LoggingConfig) Normalize() error {
+// Normalize applies defaults and case-folds Mode/Format. Validity of the
+// resulting values is enforced by the struct's validate tags, checked via
+// validate.Struct in Load.
+func (c *LoggingConfig) Normalize() {
 	if c.Mode == "" {
 		c.Mode = "stdout"
 	}
@@ -46,14 +48,6 @@ func (c *LoggingConfig) Normalize() error {
 	}
 	c.Mode = strings.ToLower(strings.TrimSpace(c.Mode))
 	c.Format = strings.ToLower(strings.TrimSpace(c.Format))
-
-	if c.Mode != "stdout" && c.Mode != "file" && c.Mode != "both" {
-		return fmt.Errorf("logging.mode must be stdout, file, or both")
-	}
-	if c.Format != "pretty" && c.Format != "json" {
-		return fmt.Errorf("logging.format must be pretty or json")
-	}
-	return nil
 }
 
 type Defaults struct {

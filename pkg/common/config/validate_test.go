@@ -63,10 +63,12 @@ func TestValidateChainConfig_RejectsSlowLowerThanDefaultHealthy(t *testing.T) {
 
 func TestLoggingConfigNormalize(t *testing.T) {
 	cfg := LoggingConfig{}
-	require.NoError(t, cfg.Normalize())
+	cfg.Normalize()
 	assert.Equal(t, "stdout", cfg.Mode)
 	assert.Equal(t, "pretty", cfg.Format)
+}
 
+func TestLoggingConfigValidate_RejectsUnknownModeAndFormat(t *testing.T) {
 	invalid := LoggingConfig{Mode: "somewhere", Format: "plain"}
-	assert.Error(t, invalid.Normalize())
+	require.Error(t, validate.Struct(&invalid))
 }

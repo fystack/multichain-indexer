@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/lmittmann/tint"
 )
@@ -47,6 +48,22 @@ func Init(opts *Options) error {
 		slog.SetDefault(logger)
 	})
 	return initErr
+}
+
+// InitFromConfig is a convenience wrapper around Init for the common case of
+// deriving the log level from a --debug flag and the destination/encoding
+// from config.LoggingConfig's Mode/Format fields.
+func InitFromConfig(mode, format string, debug bool) error {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return Init(&Options{
+		Level:      level,
+		Mode:       mode,
+		Format:     format,
+		TimeFormat: time.RFC3339,
+	})
 }
 
 func output(opts *Options) (io.Writer, error) {
@@ -127,7 +144,9 @@ func With(args ...any) *slog.Logger {
 }
 
 var (
-	urlInText = regexp.MustCompile(`(?i)(?:https?|redis|rediss|nats)://[^\s"'<>]+`)
+	// Scheme matches any URI scheme (RFC 3986), not just the ones this codebase
+	// happens to use today, so newly added protocols are redacted automatically.
+	urlInText = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 	keyValue  = regexp.MustCompile(`(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|credential)\b\s*([=:])\s*[^\s,;"']+`)
 )
 
@@ -157,11 +176,9 @@ func redactAttr(_ []string, attr slog.Attr) slog.Attr {
 
 func isSensitiveKey(key string) bool {
 	key = strings.ToLower(key)
-	return strings.Contains(key, "password") || strings.Contains(key, "passwd") ||
-		strings.Contains(key, "secret") || strings.Contains(key, "token") ||
-		strings.Contains(key, "api_key") || strings.Contains(key, "api-key") ||
-		strings.Contains(key, "authorization") || strings.Contains(key, "credential") ||
-		key == "auth"
+	return key == "auth" || containsAny(key,
+		"password", "passwd", "secret", "token",
+		"api_key", "api-key", "authorization", "credential")
 }
 
 func isURLKey(key string) bool {
@@ -170,9 +187,25 @@ func isURLKey(key string) bool {
 		strings.Contains(key, "endpoint")
 }
 
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func redactText(text string) string {
-	text = urlInText.ReplaceAllStringFunc(text, redactURL)
-	return keyValue.ReplaceAllString(text, "$1$2[REDACTED]")
+	// Cheap substring checks skip the regexes for the common case of log text
+	// that could never match, since ReplaceAllString scans the whole string.
+	if strings.Contains(text, "://") {
+		text = urlInText.ReplaceAllStringFunc(text, redactURL)
+	}
+	if strings.ContainsAny(text, "=:") {
+		text = keyValue.ReplaceAllString(text, "$1$2[REDACTED]")
+	}
+	return text
 }
 
 // redactURL retains the origin for operational debugging while omitting every
