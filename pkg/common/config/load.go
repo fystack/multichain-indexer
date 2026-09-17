@@ -32,6 +32,9 @@ func Load(path string) (*Config, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	if err := cfg.Logging.Normalize(); err != nil {
+		return nil, err
+	}
 
 	// apply defaults
 	if err := cfg.Chains.ApplyDefaults(cfg.Defaults); err != nil {

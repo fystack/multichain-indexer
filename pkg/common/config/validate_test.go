@@ -60,3 +60,13 @@ func TestValidateChainConfig_RejectsSlowLowerThanDefaultHealthy(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status thresholds invalid")
 }
+
+func TestLoggingConfigNormalize(t *testing.T) {
+	cfg := LoggingConfig{}
+	require.NoError(t, cfg.Normalize())
+	assert.Equal(t, "stdout", cfg.Mode)
+	assert.Equal(t, "pretty", cfg.Format)
+
+	invalid := LoggingConfig{Mode: "somewhere", Format: "plain"}
+	assert.Error(t, invalid.Normalize())
+}

@@ -1,8 +1,13 @@
 package logger
 
 import (
+	"fmt"
+	"io"
 	"log/slog"
+	"net/url"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 
 	"github.com/lmittmann/tint"
@@ -15,25 +20,60 @@ var (
 
 type Options struct {
 	Level      slog.Leveler // slog.LevelInfo, slog.LevelDebug, etc.
-	Writer     *os.File     // default: os.Stdout
+	Mode       string       // stdout, file, or both (default: stdout)
+	Format     string       // pretty or json (default: pretty)
+	Writer     io.Writer    // overrides Mode; useful for tests
 	TimeFormat string       // default: 2025-07-25T10:41:10+07:00
 }
 
-func Init(opts *Options) {
+// Init configures the process logger. File output is appended to logs/indexer.log.
+func Init(opts *Options) error {
+	var initErr error
 	once.Do(func() {
-		writer := opts.Writer
-		if writer == nil {
-			writer = os.Stdout
+		writer, err := output(opts)
+		if err != nil {
+			initErr = err
+			return
 		}
 
-		handler := tint.NewHandler(writer, &tint.Options{
-			Level:      opts.Level,
-			TimeFormat: opts.TimeFormat,
-		})
+		var handler slog.Handler
+		if opts.Format == "json" {
+			handler = slog.NewJSONHandler(writer, &slog.HandlerOptions{Level: opts.Level, ReplaceAttr: redactAttr})
+		} else {
+			handler = tint.NewHandler(writer, &tint.Options{Level: opts.Level, TimeFormat: opts.TimeFormat, ReplaceAttr: redactAttr})
+		}
 
 		logger = slog.New(handler)
 		slog.SetDefault(logger)
 	})
+	return initErr
+}
+
+func output(opts *Options) (io.Writer, error) {
+	if opts.Writer != nil {
+		return opts.Writer, nil
+	}
+	mode := opts.Mode
+	if mode == "" {
+		mode = "stdout"
+	}
+	if mode == "stdout" {
+		return os.Stdout, nil
+	}
+	if mode != "file" && mode != "both" {
+		return nil, fmt.Errorf("invalid logging mode %q", mode)
+	}
+	if err := os.MkdirAll("logs", 0o755); err != nil {
+		return nil, fmt.Errorf("create log directory: %w", err)
+	}
+	file, err := os.OpenFile("logs/indexer.log", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open log file: %w", err)
+	}
+	if mode == "file" {
+		return file, nil
+	}
+	return io.MultiWriter(os.Stdout, file), nil
 }
 
 func L() *slog.Logger {
@@ -84,4 +124,76 @@ func Fatal(msg string, args ...any) {
 
 func With(args ...any) *slog.Logger {
 	return logger.With(args...)
+}
+
+var (
+	urlInText = regexp.MustCompile(`(?i)(?:https?|redis|rediss|nats)://[^\s"'<>]+`)
+	keyValue  = regexp.MustCompile(`(?i)\b(password|passwd|secret|token|api[_-]?key|authorization|credential)\b\s*([=:])\s*[^\s,;"']+`)
+)
+
+// redactAttr is installed in the slog handler, so it also covers child loggers
+// and direct slog calls after Init.
+func redactAttr(_ []string, attr slog.Attr) slog.Attr {
+	if isSensitiveKey(attr.Key) {
+		return slog.String(attr.Key, "[REDACTED]")
+	}
+	if isURLKey(attr.Key) {
+		if attr.Value.Kind() == slog.KindString {
+			return slog.String(attr.Key, redactURL(attr.Value.String()))
+		}
+		return slog.String(attr.Key, "[REDACTED_URL]")
+	}
+
+	if attr.Value.Kind() == slog.KindAny {
+		if err, ok := attr.Value.Any().(error); ok {
+			return slog.String(attr.Key, redactText(err.Error()))
+		}
+	}
+	if attr.Value.Kind() == slog.KindString {
+		return slog.String(attr.Key, redactText(attr.Value.String()))
+	}
+	return attr
+}
+
+func isSensitiveKey(key string) bool {
+	key = strings.ToLower(key)
+	return strings.Contains(key, "password") || strings.Contains(key, "passwd") ||
+		strings.Contains(key, "secret") || strings.Contains(key, "token") ||
+		strings.Contains(key, "api_key") || strings.Contains(key, "api-key") ||
+		strings.Contains(key, "authorization") || strings.Contains(key, "credential") ||
+		key == "auth"
+}
+
+func isURLKey(key string) bool {
+	key = strings.ToLower(key)
+	return key == "url" || strings.HasSuffix(key, "_url") || strings.HasSuffix(key, "-url") ||
+		strings.Contains(key, "endpoint")
+}
+
+func redactText(text string) string {
+	text = urlInText.ReplaceAllStringFunc(text, redactURL)
+	return keyValue.ReplaceAllString(text, "$1$2[REDACTED]")
+}
+
+// redactURL retains the origin for operational debugging while omitting every
+// component that commonly carries a credential: user info, paths, and queries.
+// A bare host:port is used by Sui gRPC nodes, so retain it as well.
+func redactURL(raw string) string {
+	trimmed := strings.TrimRight(raw, ".,;:)]}")
+	suffix := strings.TrimPrefix(raw, trimmed)
+	if !strings.Contains(trimmed, "://") {
+		if at := strings.LastIndex(trimmed, "@"); at >= 0 {
+			trimmed = trimmed[at+1:]
+		}
+		if query := strings.IndexByte(trimmed, '?'); query >= 0 {
+			trimmed = trimmed[:query]
+		}
+		return trimmed + suffix
+	}
+
+	u, err := url.Parse(trimmed)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "[REDACTED_URL]" + suffix
+	}
+	return u.Scheme + "://" + u.Host + suffix
 }

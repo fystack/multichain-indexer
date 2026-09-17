@@ -70,22 +70,24 @@ func main() {
 
 func runIndexer(chains []string, configPath string, debug, manual, catchup, fromLatest bool) {
 	ctx := context.Background()
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to load configuration:", err)
+		os.Exit(1)
+	}
 
 	level := slog.LevelInfo
 	if debug {
 		level = slog.LevelDebug
 	}
-	logger.Init(&logger.Options{
+	if err := logger.Init(&logger.Options{
 		Level:      level,
+		Mode:       cfg.Logging.Mode,
+		Format:     cfg.Logging.Format,
 		TimeFormat: time.RFC3339,
-	})
-
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		logger.Fatal("Failed to load configuration",
-			"config_path", configPath,
-			"error", err.Error(),
-			"hint", "Check the config file syntax and structure")
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to initialize logger:", err)
+		os.Exit(1)
 	}
 	logger.Info("Config loaded", "environment", cfg.Environment)
 

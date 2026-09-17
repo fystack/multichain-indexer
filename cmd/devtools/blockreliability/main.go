@@ -44,18 +44,24 @@ func main() {
 		chains[i] = strings.TrimSpace(chains[i])
 	}
 
+	cfg, err := config.Load(configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to load config:", err)
+		os.Exit(1)
+	}
+
 	level := slog.LevelInfo
 	if debug {
 		level = slog.LevelDebug
 	}
-	logger.Init(&logger.Options{
+	if err := logger.Init(&logger.Options{
 		Level:      level,
+		Mode:       cfg.Logging.Mode,
+		Format:     cfg.Logging.Format,
 		TimeFormat: time.RFC3339,
-	})
-
-	cfg, err := config.Load(configPath)
-	if err != nil {
-		logger.Fatal("Failed to load config", "err", err)
+	}); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to initialize logger:", err)
+		os.Exit(1)
 	}
 
 	if err := cfg.Chains.Validate(chains); err != nil {
