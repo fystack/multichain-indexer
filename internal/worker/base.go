@@ -11,6 +11,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/events"
@@ -139,6 +140,12 @@ func (bw *BaseWorker) notifyObserver(blockNumber uint64, status BlockStatus) {
 	if bw.observer != nil {
 		bw.observer(bw.chain.GetName(), blockNumber, status)
 	}
+}
+
+func (bw *BaseWorker) isSkippableNotFound(result indexer.BlockResult) bool {
+	return result.Error != nil &&
+		result.Error.ErrorType == indexer.ErrorTypeBlockNotFound &&
+		bw.chain.GetNetworkType() == enum.NetworkTypeSol
 }
 
 // handleBlockResult processes a block result and persists/forwards errors if needed.

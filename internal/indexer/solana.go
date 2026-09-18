@@ -477,7 +477,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 			continue
 		}
 		txHash := tx.Transaction.Signatures[0]
-		fee := decimal.NewFromInt(int64(tx.Meta.Fee))
+		fee := solana.FeeLamportsToSOL(tx.Meta.Fee)
 		accountKeys := tx.Transaction.Message.AccountKeys
 
 		// Build token-account -> (owner, mint) lookup from token balance metadata.

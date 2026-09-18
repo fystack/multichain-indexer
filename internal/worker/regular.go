@@ -165,6 +165,12 @@ func (rw *RegularWorker) processBatch(
 	}
 
 	for _, res := range results {
+		if rw.isSkippableNotFound(res) {
+			rw.logger.Debug("Solana skipped slot, no retry needed", "slot", res.Number)
+			rw.notifyObserver(res.Number, BlockStatusNotFound)
+			lastSuccess = res.Number
+			continue
+		}
 		if rw.handleBlockResult(res) {
 			lastSuccess = res.Number
 			lastSuccessHash = res.Block.Hash

@@ -130,6 +130,7 @@ func TestSolanaBlockHashAndTransferIndex(t *testing.T) {
 	for _, tx := range transfers {
 		assert.Equal(t, blockHash, tx.BlockHash, "BlockHash should be propagated")
 		assert.NotEmpty(t, tx.TransferIndex, "TransferIndex should be set")
+		assert.Equal(t, "0.000005", tx.TxFee.String(), "TxFee should be denominated in SOL")
 	}
 
 	// TransferIndexes should be unique

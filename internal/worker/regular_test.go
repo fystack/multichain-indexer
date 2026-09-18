@@ -119,6 +119,51 @@ func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T)
 	require.Equal(t, []uint64{100, 100}, chain.getBlockCalls)
 }
 
+func TestRegularWorkerProcessRegularBlocksSkipsSolanaSkippedSlot(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{
+		name:         "solana",
+		internalCode: "SOL_MAINNET",
+		networkType:  enum.NetworkTypeSol,
+		latest:       102,
+		getBlocksFunc: func(context.Context, uint64, uint64, bool) ([]indexer.BlockResult, error) {
+			return []indexer.BlockResult{
+				{
+					Number: 100,
+					Block: &types.Block{
+						Number: 100,
+						Hash:   "sol100",
+					},
+				},
+				{
+					Number: 101,
+					Error: &indexer.Error{
+						ErrorType: indexer.ErrorTypeBlockNotFound,
+						Message:   "block not found (skipped slot?)",
+					},
+				},
+				{
+					Number: 102,
+					Block: &types.Block{
+						Number: 102,
+						Hash:   "sol102",
+					},
+				},
+			}, nil
+		},
+	}
+	store := &stubBlockStore{}
+	rw := newTestRegularWorker(chain, store, 100, 3)
+
+	err := rw.processRegularBlocks()
+	require.NoError(t, err)
+	require.Equal(t, uint64(103), rw.currentBlock)
+	require.Equal(t, []uint64{102}, store.savedLatest)
+	require.Empty(t, store.failedBlocks)
+	require.Empty(t, chain.getBlockCalls)
+}
+
 func TestBaseWorkerExecuteRecoverableConvertsPanicToError(t *testing.T) {
 	t.Parallel()
 
