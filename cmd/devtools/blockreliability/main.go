@@ -5,12 +5,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/fystack/multichain-indexer/internal/worker"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
@@ -44,18 +42,15 @@ func main() {
 		chains[i] = strings.TrimSpace(chains[i])
 	}
 
-	level := slog.LevelInfo
-	if debug {
-		level = slog.LevelDebug
-	}
-	logger.Init(&logger.Options{
-		Level:      level,
-		TimeFormat: time.RFC3339,
-	})
-
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		logger.Fatal("Failed to load config", "err", err)
+		fmt.Fprintln(os.Stderr, "Failed to load config:", err)
+		os.Exit(1)
+	}
+
+	if err := logger.InitFromConfig(cfg.Logging.Mode, cfg.Logging.Format, debug); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to initialize logger:", err)
+		os.Exit(1)
 	}
 
 	if err := cfg.Chains.Validate(chains); err != nil {

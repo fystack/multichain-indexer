@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
@@ -20,11 +21,33 @@ const (
 )
 
 type Config struct {
-	Version     string   `yaml:"version"`
-	Environment Env      `yaml:"env"      validate:"required,oneof=development production"`
-	Defaults    Defaults `yaml:"defaults" validate:"required"`
-	Chains      Chains   `yaml:"chains"   validate:"required,min=1"`
-	Services    Services `yaml:"services" validate:"required"`
+	Version     string        `yaml:"version"`
+	Environment Env           `yaml:"env"      validate:"required,oneof=development production"`
+	Logging     LoggingConfig `yaml:"logging"`
+	Defaults    Defaults      `yaml:"defaults" validate:"required"`
+	Chains      Chains        `yaml:"chains"   validate:"required,min=1"`
+	Services    Services      `yaml:"services" validate:"required"`
+}
+
+// LoggingConfig controls where logs are written and how they are encoded.
+// File logs are written to logs/indexer.log.
+type LoggingConfig struct {
+	Mode   string `yaml:"mode"   validate:"omitempty,oneof=stdout file both"`
+	Format string `yaml:"format" validate:"omitempty,oneof=pretty json"`
+}
+
+// Normalize applies defaults and case-folds Mode/Format. Validity of the
+// resulting values is enforced by the struct's validate tags, checked via
+// validate.Struct in Load.
+func (c *LoggingConfig) Normalize() {
+	if c.Mode == "" {
+		c.Mode = "stdout"
+	}
+	if c.Format == "" {
+		c.Format = "pretty"
+	}
+	c.Mode = strings.ToLower(strings.TrimSpace(c.Mode))
+	c.Format = strings.ToLower(strings.TrimSpace(c.Format))
 }
 
 type Defaults struct {

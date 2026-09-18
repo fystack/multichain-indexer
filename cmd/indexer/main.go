@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -70,22 +69,15 @@ func main() {
 
 func runIndexer(chains []string, configPath string, debug, manual, catchup, fromLatest bool) {
 	ctx := context.Background()
-
-	level := slog.LevelInfo
-	if debug {
-		level = slog.LevelDebug
-	}
-	logger.Init(&logger.Options{
-		Level:      level,
-		TimeFormat: time.RFC3339,
-	})
-
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		logger.Fatal("Failed to load configuration",
-			"config_path", configPath,
-			"error", err.Error(),
-			"hint", "Check the config file syntax and structure")
+		fmt.Fprintln(os.Stderr, "Failed to load configuration:", err)
+		os.Exit(1)
+	}
+
+	if err := logger.InitFromConfig(cfg.Logging.Mode, cfg.Logging.Format, debug); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed to initialize logger:", err)
+		os.Exit(1)
 	}
 	logger.Info("Config loaded", "environment", cfg.Environment)
 

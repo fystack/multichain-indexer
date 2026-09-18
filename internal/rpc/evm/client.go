@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
@@ -271,7 +271,7 @@ func (c *Client) BatchGetTransactionReceipts(
 
 	// Log once if there are errors
 	if len(batchErrs) > 0 {
-		slog.Error("batch get transaction receipts failed",
+		logger.Error("batch get transaction receipts failed",
 			"count", len(batchErrs),
 			"provider_url", c.GetURL(),
 			"errors", strings.Join(batchErrs, " | "),

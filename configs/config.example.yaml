@@ -2,6 +2,10 @@
 env: "development"
 version: "1.0.0"
 
+logging:
+  mode: "both" # Options: "file", "stdout", "both" (file: logs/indexer.log)
+  format: "pretty" # Options: "json", "pretty"
+
 # Global defaults - applies to all chains unless overridden
 defaults:
   enabled: false # chains inherit this unless they override enabled below
