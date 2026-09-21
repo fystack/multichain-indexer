@@ -10,6 +10,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,4 +101,22 @@ func TestCatchupWorkerPicksUpRangesQueuedAfterDrain(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("runCatchup did not stop after context cancel")
 	}
+}
+
+func TestCatchupWorkerLoadProgressStopsAtConfirmedHead(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{
+		name:         "bsc",
+		internalCode: "BSC_MAINNET",
+		networkType:  enum.NetworkTypeEVM,
+		latest:       100,
+	}
+	store := &stubBlockStore{latestBlock: 80}
+	cw := newTestCatchupWorker(context.Background(), chain, store)
+	cw.config.Confirmations = 10
+
+	ranges := cw.loadCatchupProgress()
+	require.Equal(t, []blockstore.CatchupRange{{Start: 81, End: 90, Current: 80}}, ranges)
+	require.Equal(t, ranges, store.savedCatchupRanges)
 }

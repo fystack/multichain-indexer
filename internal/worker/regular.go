@@ -101,25 +101,35 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	if err != nil {
 		return fmt.Errorf("get latest block: %w", err)
 	}
+	processingHead := rw.processingHead(latest)
 	rw.updateHeadStatus(latest, time.Time{})
 
-	rw.logger.Info("Got latest block", "latest", latest, "current", rw.currentBlock)
+	rw.logger.Info("Got latest block",
+		"latest", latest,
+		"processing_head", processingHead,
+		"confirmations", rw.config.Confirmations,
+		"current", rw.currentBlock,
+	)
 
 	// Lag detection: if we're too far behind, jump to chain head and queue skipped range for catchup
-	if rw.skipAheadIfLagging(latest) {
+	if rw.skipAheadIfLagging(processingHead) {
 		rw.updateHeadStatus(latest, time.Time{})
 		return nil
 	}
 
-	if rw.currentBlock > latest {
-		rw.logger.Info("Waiting for new blocks...", "current", rw.currentBlock, "latest", latest)
+	if rw.currentBlock > processingHead {
+		rw.logger.Info("Waiting for confirmed blocks...",
+			"current", rw.currentBlock,
+			"latest", latest,
+			"processing_head", processingHead,
+		)
 		time.Sleep(rw.config.PollInterval)
 		rw.updateHeadStatus(latest, time.Time{})
 		return nil
 	}
 
 	start := rw.currentBlock
-	end := min(start+uint64(rw.config.Throttle.BatchSize)-1, latest)
+	end := min(start+uint64(rw.config.Throttle.BatchSize)-1, processingHead)
 	startTime := time.Now()
 	rw.logger.Info("Processing range",
 		"chain", rw.chain.GetName(),
@@ -203,15 +213,19 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 				"chain", rw.chain.GetName(), "kvLatest", kvLatest)
 			return kvLatest
 		}
-		if chainLatest > kvLatest {
-			ranges := rw.queueCatchupRanges(kvLatest+1, chainLatest)
+		processingHead := rw.processingHead(chainLatest)
+		if processingHead > kvLatest {
+			ranges := rw.queueCatchupRanges(kvLatest+1, processingHead)
 			rw.logger.Info("Queued catchup ranges",
 				"chain", rw.chain.GetName(),
-				"gap", fmt.Sprintf("%d-%d", kvLatest+1, chainLatest),
+				"gap", fmt.Sprintf("%d-%d", kvLatest+1, processingHead),
 				"ranges_created", len(ranges),
 			)
+			return processingHead
 		}
-		return chainLatest
+		// A newly enabled confirmation delay can put the processing head behind
+		// the persisted checkpoint. Never rewind and re-emit those blocks.
+		return kvLatest
 	}
 
 	if kvErr != nil {
@@ -260,7 +274,7 @@ func (rw *RegularWorker) waitForChainHead() uint64 {
 	for {
 		latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
 		if err == nil {
-			return latest
+			return rw.processingHead(latest)
 		}
 		rw.logger.Warn("Waiting for chain head before starting",
 			"chain", rw.chain.GetName(), "error", err)

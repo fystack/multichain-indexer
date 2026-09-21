@@ -80,6 +80,55 @@ func TestRegularWorkerProcessRegularBlocksRecoversGapViaGetBlock(t *testing.T) {
 	require.Equal(t, []uint64{101, 102}, chain.getBlockCalls)
 }
 
+func TestRegularWorkerProcessRegularBlocksStopsAtConfirmedHead(t *testing.T) {
+	t.Parallel()
+
+	var gotFrom, gotTo uint64
+	chain := &stubIndexer{
+		name:         "bsc",
+		internalCode: "BSC_MAINNET",
+		networkType:  enum.NetworkTypeEVM,
+		latest:       102,
+		getBlocksFunc: func(_ context.Context, from, to uint64, _ bool) ([]indexer.BlockResult, error) {
+			gotFrom, gotTo = from, to
+			return []indexer.BlockResult{{
+				Number: 100,
+				Block:  &types.Block{Number: 100, Hash: "0x100", ParentHash: "0x099"},
+			}}, nil
+		},
+	}
+	store := &stubBlockStore{}
+	rw := newTestRegularWorker(chain, store, 100, 20)
+	rw.config.Confirmations = 2
+
+	err := rw.processRegularBlocks()
+	require.NoError(t, err)
+	require.Equal(t, uint64(100), gotFrom)
+	require.Equal(t, uint64(100), gotTo)
+	require.Equal(t, uint64(101), rw.currentBlock)
+	require.Equal(t, []uint64{100}, store.savedLatest)
+}
+
+func TestRegularWorkerProcessRegularBlocksWaitsWhenConfirmedHeadIsBehind(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{
+		name:         "bsc",
+		internalCode: "BSC_MAINNET",
+		networkType:  enum.NetworkTypeEVM,
+		latest:       100,
+		getBlocksFunc: func(context.Context, uint64, uint64, bool) ([]indexer.BlockResult, error) {
+			t.Fatal("GetBlocks must not be called ahead of the confirmed head")
+			return nil, nil
+		},
+	}
+	rw := newTestRegularWorker(chain, &stubBlockStore{}, 91, 20)
+	rw.config.Confirmations = 10
+
+	require.NoError(t, rw.processRegularBlocks())
+	require.Equal(t, uint64(91), rw.currentBlock)
+}
+
 func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T) {
 	t.Parallel()
 
@@ -196,6 +245,41 @@ func TestRegularWorkerDetermineStartingBlockColdStartChainUp(t *testing.T) {
 	rw := newTestRegularWorker(chain, store, 0, 2)
 
 	require.Equal(t, uint64(500), rw.determineStartingBlock())
+}
+
+func TestRegularWorkerDetermineStartingBlockUsesConfirmedHead(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{name: "bsc", internalCode: "BSC_MAINNET", networkType: enum.NetworkTypeEVM, latest: 100}
+	store := &stubBlockStore{latestBlock: 80}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.config.Confirmations = 10
+
+	require.Equal(t, uint64(90), rw.determineStartingBlock())
+	require.Equal(t, []blockstore.CatchupRange{{Start: 81, End: 90, Current: 80}}, store.savedCatchupRanges)
+}
+
+func TestRegularWorkerDetermineStartingBlockDoesNotRewindPastCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{name: "bsc", internalCode: "BSC_MAINNET", networkType: enum.NetworkTypeEVM, latest: 100}
+	store := &stubBlockStore{latestBlock: 95}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.config.Confirmations = 10
+
+	require.Equal(t, uint64(95), rw.determineStartingBlock())
+	require.Empty(t, store.savedCatchupRanges)
+}
+
+func TestRegularWorkerDetermineStartingBlockConfirmedHeadDoesNotUnderflow(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{name: "bsc", internalCode: "BSC_MAINNET", networkType: enum.NetworkTypeEVM, latest: 5}
+	store := &stubBlockStore{}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.config.Confirmations = 10
+
+	require.Equal(t, uint64(0), rw.determineStartingBlock())
 }
 
 func TestRegularWorkerDetermineStartingBlockChainCancelledReturnsZero(t *testing.T) {
