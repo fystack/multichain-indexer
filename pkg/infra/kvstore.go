@@ -7,7 +7,6 @@ import (
 )
 
 // KVStore is an interface for key-value stores.
-// There are multiple implementations available like Redis, BadgerDB, Postgres, etcd, etc.
 
 type KVPair struct {
 	Key   string

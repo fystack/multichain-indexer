@@ -15,6 +15,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/retry"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
@@ -46,6 +47,7 @@ func NewRegularWorker(
 	cfg config.ChainConfig,
 	kv infra.KVStore,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
@@ -57,6 +59,7 @@ func NewRegularWorker(
 		cfg,
 		kv,
 		blockStore,
+		catchupStore,
 		emitter,
 		pubkeyStore,
 		ModeRegular,
@@ -238,7 +241,7 @@ func (rw *RegularWorker) queueCatchupRanges(start, end uint64) []blockstore.Catc
 		Start: start, End: end, Current: start - 1,
 	}, MAX_RANGE_SIZE)
 
-	if err := rw.blockStore.SaveCatchupRanges(rw.chain.GetNetworkInternalCode(), ranges); err != nil {
+	if err := rw.catchupStore.SaveRanges(rw.ctx, rw.chain.GetNetworkInternalCode(), ranges); err != nil {
 		rw.logger.Error("Failed to save catchup ranges",
 			"count", len(ranges),
 			"error", err,

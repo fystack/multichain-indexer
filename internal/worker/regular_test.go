@@ -288,6 +288,7 @@ func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			chain:          &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM},
 			blockStore:     store,
+			catchupStore:   stubCatchupStore{},
 			statusRegistry: statusRegistry,
 		},
 		blockRanges: []blockstore.CatchupRange{{
@@ -327,13 +328,14 @@ func newTestRegularWorker(chain *stubIndexer, store *stubBlockStore, currentBloc
 
 	return &RegularWorker{
 		BaseWorker: &BaseWorker{
-			ctx:        context.Background(),
-			cancel:     func() {},
-			logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			config:     cfg,
-			chain:      chain,
-			blockStore: store,
-			failedChan: make(chan FailedBlockEvent, 1),
+			ctx:          context.Background(),
+			cancel:       func() {},
+			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			config:       cfg,
+			chain:        chain,
+			blockStore:   store,
+			catchupStore: stubCatchupStore{},
+			failedChan:   make(chan FailedBlockEvent, 1),
 		},
 		currentBlock: currentBlock,
 		blockHashes:  make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize),
@@ -397,6 +399,19 @@ func (s *stubIndexer) GetBlocksByNumbers(context.Context, []uint64) ([]indexer.B
 func (s *stubIndexer) IsHealthy() bool {
 	return true
 }
+
+type stubCatchupStore struct{}
+
+func (stubCatchupStore) SaveRanges(context.Context, string, []blockstore.CatchupRange) error {
+	return nil
+}
+func (stubCatchupStore) SaveProgress(context.Context, string, uint64, uint64, uint64) error {
+	return nil
+}
+func (stubCatchupStore) GetProgress(context.Context, string) ([]blockstore.CatchupRange, error) {
+	return nil, nil
+}
+func (stubCatchupStore) DeleteRange(context.Context, string, uint64, uint64) error { return nil }
 
 type stubBlockStore struct {
 	mu                     sync.Mutex

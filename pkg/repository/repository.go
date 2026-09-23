@@ -27,8 +27,8 @@ var (
 	// https://github.com/jackc/pgerrcode/blob/master/errcode.go
 	UniqueViolation     = "23505"
 	ForeignKeyViolation = "23503"
-	// InvalidTextRepresentation (22P02) e.g. filtering by an enum value the DB
-	// type does not define — treated as no matching rows.
+	// InvalidTextRepresentation: e.g. filtering by an enum value the DB type
+	// does not define — treated as no matching rows.
 	InvalidTextRepresentation = "22P02"
 )
 
@@ -85,8 +85,7 @@ func (r *repository[T]) WrapError(ctx context.Context, err error) error {
 		return nil
 	}
 
-	// Filtering by an enum value the DB type does not define (22P02): no such
-	// rows exist, so treat it as an empty result rather than a hard error.
+	// Unknown enum value (22P02): no rows can match, so return empty, not error.
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == InvalidTextRepresentation {
 		return nil
