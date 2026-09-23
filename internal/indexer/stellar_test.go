@@ -15,7 +15,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/infra"
-	"github.com/hashicorp/consul/api"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -173,10 +172,6 @@ func (m *mockKVStore) Get(k string) (string, error) {
 		return "", nil
 	}
 	return string(val), nil
-}
-
-func (m *mockKVStore) GetWithOptions(k string, _ *api.QueryOptions) (string, error) {
-	return m.Get(k)
 }
 
 func (m *mockKVStore) SetAny(k string, v any) error {

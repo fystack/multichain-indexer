@@ -31,20 +31,6 @@ services:
     tty: true
     restart: always
 
-  consul:
-    image: hashicorp/consul:1.20
-    container_name: consul
-    ports:
-      - "8500:8500"
-      - "8601:8600/udp"
-    command: "agent -server -ui -node=server-1 -bootstrap-expect=1 -client=0.0.0.0"
-    healthcheck:
-      test: ["CMD", "consul", "operator", "raft", "list-peers"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    restart: always
-
 volumes:
   db_data:
   redis_data:

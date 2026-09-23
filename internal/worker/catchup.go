@@ -164,9 +164,11 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 		)
 	}
 
-	// Only create a new range if no existing ranges found
+	// Only create a new range if no existing ranges found. A zero latest means a
+	// fresh start with no indexed position — do NOT backfill from genesis; the
+	// regular worker starts at chain head and queues real gaps into the store.
 	if len(ranges) == 0 {
-		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
+		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil && latest > 0 {
 			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
 				if head <= latest {
 					// no gap between head and latest
