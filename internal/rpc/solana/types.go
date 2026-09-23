@@ -1,5 +1,7 @@
 package solana
 
+import "encoding/json"
+
 // Minimal JSON-RPC types for Solana getBlock / getSlot.
 
 type jsonRPCRequest struct {
@@ -52,6 +54,13 @@ type TxnMeta struct {
 	PreTokenBalances []TokenBalance `json:"preTokenBalances"`
 	PostTokenBalances []TokenBalance `json:"postTokenBalances"`
 	InnerInstructions []InnerInstruction `json:"innerInstructions"`
+	// v0 ALT accounts; present only under encoding=json (jsonParsed pre-merges them).
+	LoadedAddresses *LoadedAddresses `json:"loadedAddresses"`
+}
+
+type LoadedAddresses struct {
+	Writable []string `json:"writable"`
+	Readonly []string `json:"readonly"`
 }
 
 type InnerInstruction struct {
@@ -88,6 +97,25 @@ type AccountKey struct {
 	Pubkey   string `json:"pubkey"`
 	Signer   bool   `json:"signer"`
 	Writable bool   `json:"writable"`
+}
+
+// UnmarshalJSON accepts a bare pubkey string (json) or an object (jsonParsed).
+func (a *AccountKey) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		var pubkey string
+		if err := json.Unmarshal(data, &pubkey); err != nil {
+			return err
+		}
+		a.Pubkey = pubkey
+		return nil
+	}
+	type alias AccountKey
+	var v alias
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*a = AccountKey(v)
+	return nil
 }
 
 type Instruction struct {

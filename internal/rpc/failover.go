@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -21,16 +22,25 @@ type FailoverConfig struct {
 	ErrorThreshold       int
 	ForceRotateThreshold int
 	DefaultTimeout       time.Duration
+	// SlowResponseThreshold rotates away a provider that is slow even on success.
+	SlowResponseThreshold time.Duration
+	SlowResponseCooldown  time.Duration
+	// EmergencyRecoveryInterval spaces emergency recoveries when the whole pool
+	// is blacklisted, to avoid hot recover→fail→recover across callers.
+	EmergencyRecoveryInterval time.Duration
 }
 
 func DefaultFailoverConfig() FailoverConfig {
 	return FailoverConfig{
-		HealthCheckInterval:  30 * time.Second,
-		EnableBlacklisting:   true,
-		MinActiveProviders:   2,
-		ErrorThreshold:       5,
-		ForceRotateThreshold: 3,
-		DefaultTimeout:       10 * time.Second,
+		HealthCheckInterval:   30 * time.Second,
+		EnableBlacklisting:    true,
+		MinActiveProviders:    2,
+		ErrorThreshold:        5,
+		ForceRotateThreshold:  3,
+		DefaultTimeout:        10 * time.Second,
+		SlowResponseThreshold:     3 * time.Second,
+		SlowResponseCooldown:      2 * time.Minute,
+		EmergencyRecoveryInterval: 2 * time.Second,
 	}
 }
 
@@ -186,9 +196,12 @@ type Failover[T NetworkClient] struct {
 	currentIndex    int
 	config          FailoverConfig
 	lastHealthCheck time.Time
+	lastEmergency   time.Time
 	metrics         *FailoverMetrics
 	logThrottler    *LogThrottler
 }
+
+var errAllProvidersBackoff = errors.New("all providers unavailable, backing off")
 
 // NewFailover creates a new type-safe Failover[T]
 func NewFailover[T NetworkClient](config *FailoverConfig) *Failover[T] {
@@ -201,6 +214,15 @@ func NewFailover[T NetworkClient](config *FailoverConfig) *Failover[T] {
 	}
 	if config.ForceRotateThreshold <= 0 {
 		config.ForceRotateThreshold = DefaultFailoverConfig().ForceRotateThreshold
+	}
+	if config.SlowResponseThreshold <= 0 {
+		config.SlowResponseThreshold = DefaultFailoverConfig().SlowResponseThreshold
+	}
+	if config.SlowResponseCooldown <= 0 {
+		config.SlowResponseCooldown = DefaultFailoverConfig().SlowResponseCooldown
+	}
+	if config.EmergencyRecoveryInterval <= 0 {
+		config.EmergencyRecoveryInterval = DefaultFailoverConfig().EmergencyRecoveryInterval
 	}
 	return &Failover[T]{
 		providers:    make([]*Provider, 0),
@@ -354,6 +376,10 @@ func (f *Failover[T]) performEmergencyRecoveryLocked() (*Provider, error) {
 		return nil, fmt.Errorf("no available providers")
 	}
 
+	if !f.lastEmergency.IsZero() && time.Since(f.lastEmergency) < f.config.EmergencyRecoveryInterval {
+		return nil, errAllProvidersBackoff
+	}
+
 	var blacklisted []*Provider
 	for _, p := range f.providers {
 		if p.State == StateBlacklisted {
@@ -373,6 +399,7 @@ func (f *Failover[T]) performEmergencyRecoveryLocked() (*Provider, error) {
 	first := blacklisted[0]
 	first.Recover()
 	f.currentIndex = 0
+	f.lastEmergency = time.Now()
 	f.metrics.IncrementEmergencyRecovery()
 
 	logger.Info("Emergency recovery", "name", first.Name)
@@ -414,7 +441,46 @@ func (f *Failover[T]) executeCore(ctx context.Context, provider *Provider, fn fu
 
 	f.metrics.IncrementSuccess()
 	provider.Success(elapsed)
+	f.evaluateSlowSuccess(provider, elapsed)
 	return nil
+}
+
+// evaluateSlowSuccess blacklists a slow-but-successful provider, unless that
+// would drop the available pool below MinActiveProviders.
+func (f *Failover[T]) evaluateSlowSuccess(provider *Provider, elapsed time.Duration) {
+	if !f.config.EnableBlacklisting || f.config.SlowResponseThreshold <= 0 {
+		return
+	}
+	if elapsed <= f.config.SlowResponseThreshold {
+		return
+	}
+	if len(f.GetAvailableProviders()) <= f.config.MinActiveProviders {
+		if f.logThrottler.ShouldLog(fmt.Sprintf("slow_success_min_%s", provider.Name)) {
+			logger.Warn("Provider slow but kept to preserve minimum active providers",
+				"provider", provider.Name,
+				"latency_ms", elapsed.Milliseconds(),
+				"threshold_ms", f.config.SlowResponseThreshold.Milliseconds(),
+				"min_active", f.config.MinActiveProviders,
+			)
+		}
+		return
+	}
+
+	if f.logThrottler.ShouldLog(fmt.Sprintf("slow_success_%s", provider.Name)) {
+		provider.mu.RLock()
+		providerURL := provider.URL
+		provider.mu.RUnlock()
+		logger.Warn("Blacklisting slow provider on successful-but-slow response",
+			"provider", provider.Name,
+			"url", providerURL,
+			"latency_ms", elapsed.Milliseconds(),
+			"threshold_ms", f.config.SlowResponseThreshold.Milliseconds(),
+			"cooldown", f.config.SlowResponseCooldown,
+		)
+	}
+	provider.Blacklist(f.config.SlowResponseCooldown)
+	f.metrics.IncrementBlacklist()
+	f.metrics.IncrementErrorType("slow_response")
 }
 
 // handleUnhealthyProvider marks provider as unhealthy and blacklists it
@@ -641,6 +707,13 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 			markUnhealthy: true,
 		},
 		{
+			// Node does not serve this chain (e.g. drpc free plan) — permanent.
+			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35"},
+			reason:        "chain_unavailable",
+			cooldown:      24 * time.Hour,
+			markUnhealthy: true,
+		},
+		{
 			patterns: []string{
 				"-32701",
 				"-32603",
@@ -692,9 +765,9 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 	}
 
 	// Check for slow response
-	if elapsed > 3*time.Second {
+	if f.config.SlowResponseThreshold > 0 && elapsed > f.config.SlowResponseThreshold {
 		issue.Reason = "slow_response"
-		issue.Cooldown = 2 * time.Minute
+		issue.Cooldown = f.config.SlowResponseCooldown
 		issue.MarkUnhealthy = true
 	}
 

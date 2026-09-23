@@ -10,6 +10,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/pkg/adaptive"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -25,6 +26,8 @@ type SolanaIndexer struct {
 	config      config.ChainConfig
 	failover    *rpc.Failover[solana.SolanaAPI]
 	pubkeyStore PubkeyStore
+	// shared across worker modes: one congestion controller per chain.
+	limiter *adaptive.Limiter
 }
 
 func NewSolanaIndexer(
@@ -33,7 +36,25 @@ func NewSolanaIndexer(
 	failover *rpc.Failover[solana.SolanaAPI],
 	pubkeyStore PubkeyStore,
 ) *SolanaIndexer {
-	return &SolanaIndexer{chainName: chainName, config: cfg, failover: failover, pubkeyStore: pubkeyStore}
+	maxConc := cfg.Throttle.Concurrency
+	if maxConc <= 0 {
+		maxConc = 1
+	}
+	limiter := adaptive.New(adaptive.Config{
+		Max:            maxConc,
+		Min:            1,
+		LowLatency:     1200 * time.Millisecond,
+		HighLatency:    2500 * time.Millisecond,
+		AdjustInterval: time.Second,
+		GrowStreak:     10,
+	})
+	return &SolanaIndexer{
+		chainName:   chainName,
+		config:      cfg,
+		failover:    failover,
+		pubkeyStore: pubkeyStore,
+		limiter:     limiter,
+	}
 }
 
 func (s *SolanaIndexer) GetName() string                  { return strings.ToUpper(s.chainName) }
@@ -150,36 +171,30 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 		return []BlockResult{}, nil
 	}
 
-	maxConc := s.config.Throttle.Concurrency
-	if maxConc <= 0 {
-		maxConc = 1
-	}
-
 	results := make([]BlockResult, len(blockNumbers))
 
 	eg, egCtx := errgroup.WithContext(ctx)
-	sem := make(chan struct{}, maxConc)
 
 	for i, slot := range blockNumbers {
 		i := i
 		slot := slot
 		eg.Go(func() error {
-			select {
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			case <-egCtx.Done():
-				return egCtx.Err()
+			if err := s.limiter.Acquire(egCtx); err != nil {
+				return err
 			}
+			defer s.limiter.Release()
 
 			var (
 				b    *solana.GetBlockResult
 				berr error
 			)
+			fetchStart := time.Now()
 			berr = s.failover.ExecuteWithRetry(egCtx, func(c solana.SolanaAPI) error {
 				blk, err := c.GetBlock(egCtx, slot)
 				b = blk
 				return err
 			})
+			s.limiter.Observe(time.Since(fetchStart), berr == nil)
 
 			if berr != nil {
 				results[i] = BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: berr.Error()}}
@@ -464,6 +479,23 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 	}
 }
 
+// solanaEffectiveAccountKeys appends v0 ALT accounts (static + writable + readonly)
+// so instruction/token-balance indices resolve under encoding=json.
+func solanaEffectiveAccountKeys(static []solana.AccountKey, loaded *solana.LoadedAddresses) []solana.AccountKey {
+	if loaded == nil || (len(loaded.Writable) == 0 && len(loaded.Readonly) == 0) {
+		return static
+	}
+	out := make([]solana.AccountKey, 0, len(static)+len(loaded.Writable)+len(loaded.Readonly))
+	out = append(out, static...)
+	for _, pk := range loaded.Writable {
+		out = append(out, solana.AccountKey{Pubkey: pk, Writable: true})
+	}
+	for _, pk := range loaded.Readonly {
+		out = append(out, solana.AccountKey{Pubkey: pk})
+	}
+	return out
+}
+
 func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
 	out := make([]types.Transaction, 0)
 	for txIdx, tx := range b.Transactions {
@@ -478,7 +510,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 		}
 		txHash := tx.Transaction.Signatures[0]
 		fee := decimal.NewFromInt(int64(tx.Meta.Fee))
-		accountKeys := tx.Transaction.Message.AccountKeys
+		accountKeys := solanaEffectiveAccountKeys(tx.Transaction.Message.AccountKeys, tx.Meta.LoadedAddresses)
 
 		// Build token-account -> (owner, mint) lookup from token balance metadata.
 		// This isn't used to infer transfers; only to map SPL token accounts to owners/mints.

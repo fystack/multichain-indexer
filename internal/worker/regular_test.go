@@ -119,6 +119,46 @@ func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T)
 	require.Equal(t, []uint64{100, 100}, chain.getBlockCalls)
 }
 
+func TestRegularWorkerProcessRegularBlocksSkipsSolanaSkippedSlot(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{
+		name:         "solana",
+		internalCode: "sol",
+		networkType:  enum.NetworkTypeSol,
+		latest:       102,
+		getBlocksFunc: func(context.Context, uint64, uint64, bool) ([]indexer.BlockResult, error) {
+			return []indexer.BlockResult{
+				{
+					Number: 100,
+					Block:  &types.Block{Number: 100, Hash: "h100", ParentHash: "h099"},
+				},
+				{
+					// Skipped slot: normal on Solana, must not be marked failed.
+					Number: 101,
+					Error:  &indexer.Error{ErrorType: indexer.ErrorTypeBlockNotFound, Message: "block not found (skipped slot?)"},
+				},
+				{
+					Number: 102,
+					Block:  &types.Block{Number: 102, Hash: "h102", ParentHash: "h101"},
+				},
+			}, nil
+		},
+	}
+	store := &stubBlockStore{}
+	rw := newTestRegularWorker(chain, store, 100, 3)
+
+	err := rw.processRegularBlocks()
+	require.NoError(t, err)
+	// currentBlock advances past the skipped slot to the next unindexed slot.
+	require.Equal(t, uint64(103), rw.currentBlock)
+	require.Equal(t, []uint64{102}, store.savedLatest)
+	// The skipped slot must NOT be persisted as a failed block.
+	require.Empty(t, store.failedBlocks)
+	// No single-block recovery is attempted for a skipped slot.
+	require.Empty(t, chain.getBlockCalls)
+}
+
 func TestBaseWorkerExecuteRecoverableConvertsPanicToError(t *testing.T) {
 	t.Parallel()
 

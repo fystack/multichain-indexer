@@ -2,8 +2,10 @@ package worker
 
 import (
 	"context"
+	"errors"
 
 	"github.com/fystack/multichain-indexer/pkg/model"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
@@ -28,6 +30,11 @@ func (l *DefaultDBLoader) LoadAddresses(ctx context.Context, params AddressLoade
 		Limit(params.Limit).
 		Find(&rows).Error
 	if err != nil {
+		// Filtering by an enum value the DB type does not define (22P02): no rows.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "22P02" {
+			return nil, nil
+		}
 		return nil, err
 	}
 
