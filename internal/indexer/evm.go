@@ -559,11 +559,34 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 		}
 	}
 
+	// candidateTx holds a tx whose match decision needs an address lookup,
+	// deferred so all addresses across every block in this batch can be
+	// resolved with a single ContainsBatch/ExistBatch call.
+	type candidateTx struct {
+		blockNum    uint64
+		hash        string
+		isSafe      bool
+		toAddress   string
+		fromAddress string // checked only when TwoWayIndexing is enabled
+	}
+	var candidates []candidateTx
+	blockSeen := make(map[uint64]map[string]bool) // shared dedup set per block, reused across both passes
+	seenAddresses := make(map[string]bool)
+	var addresses []string
+	collectAddress := func(addr string) {
+		if addr == "" || seenAddresses[addr] {
+			return
+		}
+		seenAddresses[addr] = true
+		addresses = append(addresses, addr)
+	}
+
 	for blockNum, block := range blocks {
 		if block == nil {
 			continue
 		}
 		seen := make(map[string]bool) // dedup within this block
+		blockSeen[blockNum] = seen
 		for _, tx := range block.Transactions {
 			totalTxs++
 			isSafeExecution := evm.IsSafeExecTransaction(tx.Input)
@@ -591,12 +614,17 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 				isNativeTransfer := tx.To != "" && (tx.Input == "" || tx.Input == "0x")
 
 				if isNativeTransfer {
-					toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
-					fromMonitored := e.config.TwoWayIndexing && tx.From != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.From))
-					if toMonitored || fromMonitored {
-						nativeTransfers++
-						appendHash(blockNum, tx.Hash, seen)
+					toAddress := evm.ToChecksumAddress(tx.To)
+					var fromAddress string
+					if e.config.TwoWayIndexing && tx.From != "" {
+						fromAddress = evm.ToChecksumAddress(tx.From)
 					}
+					collectAddress(toAddress)
+					collectAddress(fromAddress)
+					candidates = append(candidates, candidateTx{
+						blockNum: blockNum, hash: tx.Hash, isSafe: false,
+						toAddress: toAddress, fromAddress: fromAddress,
+					})
 				}
 			} else {
 				// Filter must match ExtractSafeTransfers acceptance criteria.
@@ -609,12 +637,17 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 					continue
 				}
 
-				toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(params.To))
-				fromMonitored := e.config.TwoWayIndexing && tx.To != "" && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(tx.To))
-				if toMonitored || fromMonitored {
-					safeTransfers++
-					appendHash(blockNum, tx.Hash, seen)
+				toAddress := evm.ToChecksumAddress(params.To)
+				var fromAddress string
+				if e.config.TwoWayIndexing && tx.To != "" {
+					fromAddress = evm.ToChecksumAddress(tx.To)
 				}
+				collectAddress(toAddress)
+				collectAddress(fromAddress)
+				candidates = append(candidates, candidateTx{
+					blockNum: blockNum, hash: tx.Hash, isSafe: true,
+					toAddress: toAddress, fromAddress: fromAddress,
+				})
 			}
 
 			// When trace mode is active, fetch receipts for ALL contract calls.
@@ -626,6 +659,28 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 					traceContractCalls++
 					appendHash(blockNum, tx.Hash, seen)
 				}
+			}
+		}
+	}
+
+	if e.pubkeyStore != nil && len(candidates) > 0 {
+		existsByAddress := make(map[string]bool, len(addresses))
+		for i, exists := range e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses) {
+			existsByAddress[addresses[i]] = exists
+		}
+
+		for _, c := range candidates {
+			seen := blockSeen[c.blockNum]
+
+			toMonitored := existsByAddress[c.toAddress]
+			fromMonitored := c.fromAddress != "" && existsByAddress[c.fromAddress]
+			if toMonitored || fromMonitored {
+				if c.isSafe {
+					safeTransfers++
+				} else {
+					nativeTransfers++
+				}
+				appendHash(c.blockNum, c.hash, seen)
 			}
 		}
 	}
