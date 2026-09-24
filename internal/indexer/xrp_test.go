@@ -25,6 +25,14 @@ func (m mockXRPPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 	return ok
 }
 
+func (m mockXRPPubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) []bool {
+	results := make([]bool, len(addresses))
+	for i, addr := range addresses {
+		_, results[i] = m.addresses[addr]
+	}
+	return results
+}
+
 type mockXRPAPI struct {
 	ledgers map[uint64]*xrp.Ledger
 }

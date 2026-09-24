@@ -48,6 +48,7 @@ func (e *EVMIndexer) traceModeActive() bool {
 // PubkeyStore interface for checking if an address is monitored
 type PubkeyStore interface {
 	Exist(addressType enum.NetworkType, address string) bool
+	ExistBatch(addressType enum.NetworkType, addresses []string) []bool
 }
 
 func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI], traceFailover *rpc.Failover[evm.EthereumAPI], pubkeyStore PubkeyStore) *EVMIndexer {
@@ -461,6 +462,17 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 	// When two_way_indexing is enabled, both 'to' and 'from' sides are considered.
 	matchedTxHashes := make(map[string]bool)
 
+	type transferAddresses struct {
+		txHash      string
+		fromAddress string
+		toAddress   string
+	}
+	transfers := make([]transferAddresses, 0, len(logs))
+	// Collected once per range and checked via a single ContainsBatch/BF.MEXISTS
+	// call instead of one bloom-filter round trip per log (costly on the Redis backend).
+	seenAddresses := make(map[string]bool, len(logs)*2)
+	addresses := make([]string, 0, len(logs)*2)
+
 	for _, log := range logs {
 		if len(log.Topics) < 3 {
 			logger.Warn("Transfer log has less than 3 topics",
@@ -484,17 +496,38 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 		}
 
 		// Get last 40 hex chars (20 bytes) and add 0x prefix.
-		fromAddress := "0x" + fromAddressTopic[len(fromAddressTopic)-40:]
-		toAddress := "0x" + toAddressTopic[len(toAddressTopic)-40:]
+		fromAddress := evm.ToChecksumAddress("0x" + fromAddressTopic[len(fromAddressTopic)-40:])
+		toAddress := evm.ToChecksumAddress("0x" + toAddressTopic[len(toAddressTopic)-40:])
 
-		fromMonitored := e.config.TwoWayIndexing && e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(fromAddress))
-		toMonitored := e.pubkeyStore.Exist(enum.NetworkTypeEVM, evm.ToChecksumAddress(toAddress))
+		transfers = append(transfers, transferAddresses{
+			txHash:      log.TransactionHash,
+			fromAddress: fromAddress,
+			toAddress:   toAddress,
+		})
+		if e.config.TwoWayIndexing && !seenAddresses[fromAddress] {
+			seenAddresses[fromAddress] = true
+			addresses = append(addresses, fromAddress)
+		}
+		if !seenAddresses[toAddress] {
+			seenAddresses[toAddress] = true
+			addresses = append(addresses, toAddress)
+		}
+	}
+
+	existsByAddress := make(map[string]bool, len(addresses))
+	for i, exists := range e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses) {
+		existsByAddress[addresses[i]] = exists
+	}
+
+	for _, t := range transfers {
+		fromMonitored := e.config.TwoWayIndexing && existsByAddress[t.fromAddress]
+		toMonitored := existsByAddress[t.toAddress]
 		if fromMonitored || toMonitored {
-			matchedTxHashes[log.TransactionHash] = true
+			matchedTxHashes[t.txHash] = true
 			logger.Info("MATCHED ERC20 TRANSFER",
-				"tx_hash", log.TransactionHash,
-				"from_address", fromAddress,
-				"to_address", toAddress,
+				"tx_hash", t.txHash,
+				"from_address", t.fromAddress,
+				"to_address", t.toAddress,
 			)
 		}
 	}

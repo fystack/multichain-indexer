@@ -29,6 +29,14 @@ func (m mockAptosPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 	return ok
 }
 
+func (m mockAptosPubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) []bool {
+	results := make([]bool, len(addresses))
+	for i, addr := range addresses {
+		_, results[i] = m.addresses[addr]
+	}
+	return results
+}
+
 type aptosRealTransferFixture struct {
 	name          string
 	version       uint64

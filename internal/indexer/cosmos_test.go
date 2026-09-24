@@ -25,6 +25,14 @@ func (m mockCosmosPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 	return ok
 }
 
+func (m mockCosmosPubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) []bool {
+	results := make([]bool, len(addresses))
+	for i, addr := range addresses {
+		_, results[i] = m.addresses[addr]
+	}
+	return results
+}
+
 func TestCosmosConvertBlock_ParsesTransfersAndFee(t *testing.T) {
 	txPayload := []byte("tx-one")
 	txEncoded := base64.StdEncoding.EncodeToString(txPayload)
