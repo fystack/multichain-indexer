@@ -174,7 +174,8 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 	// Only create a new range if no existing ranges found
 	if len(ranges) == 0 {
 		if latest, err1 := cw.blockStore.GetLatestBlock(cw.chain.GetNetworkInternalCode()); err1 == nil {
-			if head, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil && head > latest {
+			if chainHead, err2 := cw.chain.GetLatestBlockNumber(cw.ctx); err2 == nil {
+				head := cw.processingHead(chainHead)
 				if head <= latest {
 					// no gap between head and latest
 					return ranges
@@ -183,7 +184,8 @@ func (cw *CatchupWorker) loadCatchupProgress() []blockstore.CatchupRange {
 				cw.logger.Info("Creating new catchup range",
 					"chain", cw.chain.GetName(),
 					"latest_block", latest,
-					"head_block", head,
+					"chain_head", chainHead,
+					"processing_head", head,
 					"catchup_start", start, "catchup_end", end,
 					"blocks_to_catchup", end-latest,
 				)

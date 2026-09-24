@@ -184,6 +184,43 @@ func (rbf *redisBloomFilter) Contains(address string, addressType enum.NetworkTy
 	return result
 }
 
+func (rbf *redisBloomFilter) ContainsBatch(addresses []string, addressType enum.NetworkType) []bool {
+	results := make([]bool, len(addresses))
+	if len(addresses) == 0 {
+		return results
+	}
+
+	rbf.mu.RLock()
+	defer rbf.mu.RUnlock()
+
+	key := rbf.getKey(addressType)
+	client := rbf.redisClient.GetClient()
+
+	args := make([]any, 0, len(addresses)+2)
+	args = append(args, "BF.MEXISTS", key)
+	for _, addr := range addresses {
+		args = append(args, addr)
+	}
+
+	res, err := client.Do(rbf.ctx, args...).Result()
+	if err != nil {
+		logger.Error("Error checking Redis bloom filter batch", "error", err)
+		return results
+	}
+
+	items, ok := res.([]any)
+	if !ok || len(items) != len(addresses) {
+		logger.Error("Unexpected BF.MEXISTS result shape", "result", res)
+		return results
+	}
+	for i, item := range items {
+		if n, ok := item.(int64); ok {
+			results[i] = n == 1
+		}
+	}
+	return results
+}
+
 func (rbf *redisBloomFilter) Clear(addressType enum.NetworkType) {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()

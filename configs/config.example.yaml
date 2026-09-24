@@ -90,6 +90,7 @@ chains:
     type: "evm"
     start_block: 59040717
     reorg_rollback_window: 30 # custom rollback depth for BNB
+    confirmations: 10 # process 10 blocks behind the RPC head so receipts/logs are stable
     nodes:
       - url: "https://bsc-rpc.publicnode.com"
       - url: "https://bsc.blockrazor.xyz"

@@ -51,6 +51,16 @@ type BaseWorker struct {
 	statusRegistry status.StatusRegistry
 }
 
+// processingHead returns the highest block this worker may process after the
+// chain-specific confirmation delay. The guard prevents uint64 underflow while
+// a chain is still below its configured confirmation count.
+func (bw *BaseWorker) processingHead(latest uint64) uint64 {
+	if latest <= bw.config.Confirmations {
+		return 0
+	}
+	return latest - bw.config.Confirmations
+}
+
 // Stop stops the worker and cleans up internal resources
 func (bw *BaseWorker) Stop() {
 	bw.cancel()
