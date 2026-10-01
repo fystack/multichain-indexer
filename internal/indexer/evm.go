@@ -1046,6 +1046,9 @@ func (e *EVMIndexer) buildBlockResults(
 		for _, txHash := range txHashMap[num] {
 			if receipt := allReceipts[txHash]; receipt != nil {
 				txReceipts[txHash] = receipt
+			} else {
+				logger.Warn("requested receipt missing, tx will be skipped",
+					"chain", e.GetName(), "block", num, "tx", txHash)
 			}
 		}
 

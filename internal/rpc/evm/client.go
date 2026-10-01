@@ -117,16 +117,18 @@ func (c *Client) BatchGetBlocksByNumber(
 			batchErrs = append(batchErrs, r.Error.Error())
 			continue
 		}
-		if len(r.Result) == 0 || string(r.Result) == "null" {
-			continue
-		}
-
 		id, ok := r.IDInt64()
 		if !ok {
+			logger.Warn("batch get blocks: unparseable response id", "provider_url", c.GetURL())
 			continue
 		}
 		blockNum, ok := idToBlockNum[id]
 		if !ok {
+			logger.Warn("batch get blocks: unknown response id", "provider_url", c.GetURL(), "id", id)
+			continue
+		}
+		if len(r.Result) == 0 || string(r.Result) == "null" {
+			logger.Warn("batch get blocks: null result", "provider_url", c.GetURL(), "block", blockNum)
 			continue
 		}
 
@@ -250,14 +252,17 @@ func (c *Client) BatchGetTransactionReceipts(
 
 		id, ok := r.IDInt64()
 		if !ok {
+			logger.Warn("batch get receipts: unparseable response id", "provider_url", c.GetURL())
 			continue
 		}
 		hash, ok := idToHash[id]
 		if !ok {
+			logger.Warn("batch get receipts: unknown response id", "provider_url", c.GetURL(), "id", id)
 			continue
 		}
 
 		if len(r.Result) == 0 || string(r.Result) == "null" {
+			logger.Warn("batch get receipts: null result", "provider_url", c.GetURL(), "tx", hash)
 			continue
 		}
 

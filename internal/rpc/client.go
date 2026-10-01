@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
@@ -213,12 +214,25 @@ func (c *BaseClient) DoBatch(ctx context.Context, requests []*RPCRequest) ([]RPC
 	// Try to unmarshal as array first (standard batch response)
 	var rpcResponses []RPCResponse
 	if err := json.Unmarshal(raw, &rpcResponses); err == nil {
+		if len(rpcResponses) != len(requests) {
+			logger.Warn("batch RPC response count mismatch",
+				"provider_url", c.baseURL,
+				"requested", len(requests),
+				"received", len(rpcResponses),
+			)
+		}
 		return rpcResponses, nil
 	}
 
 	// If that fails, try to unmarshal as single object (some servers return single object for single request)
 	var singleResponse RPCResponse
 	if err := json.Unmarshal(raw, &singleResponse); err == nil {
+		if len(requests) > 1 {
+			logger.Warn("batch RPC returned single object",
+				"provider_url", c.baseURL,
+				"requested", len(requests),
+			)
+		}
 		return []RPCResponse{singleResponse}, nil
 	}
 
