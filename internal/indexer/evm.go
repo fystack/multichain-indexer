@@ -24,9 +24,73 @@ type EVMIndexer struct {
 	config              config.ChainConfig
 	failover            *rpc.Failover[evm.EthereumAPI]
 	traceFailover       *rpc.Failover[evm.EthereumAPI] // nil if no debug-capable nodes
-	maxBatchSize        int                             // Maximum batch size to prevent RPC timeouts
-	maxReceiptBatchSize int                             // Specific limit for receipt batches (usually smaller)
-	pubkeyStore         PubkeyStore                     // For selective receipt fetching
+	maxBatchSize        int                            // Maximum batch size to prevent RPC timeouts
+	maxReceiptBatchSize int                            // Specific limit for receipt batches (usually smaller)
+	pubkeyStore         PubkeyStore                    // For selective receipt fetching
+	logsRestrictedUntil sync.Map                       // provider name -> time.Time
+}
+
+const logsRestrictedCooldown = time.Hour
+
+func isLogsRestrictedError(err error) bool {
+	msg := strings.ToLower(err.Error())
+	for _, p := range []string{
+		"-32701",
+		"please specify an address",
+		"remove restrictions",
+		"dedicated full node",
+		"unregistered accounts",
+		"403",
+		"forbidden",
+	} {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e *EVMIndexer) logsRestricted(providerName string) bool {
+	v, ok := e.logsRestrictedUntil.Load(providerName)
+	return ok && time.Now().Before(v.(time.Time))
+}
+
+// Providers that reject address-less getLogs stay usable for blocks/receipts, so mark per-method instead of blacklisting.
+func (e *EVMIndexer) filterLogsWithFailover(ctx context.Context, query evm.FilterQuery) ([]evm.Log, error) {
+	var lastErr error
+	tried := 0
+	for _, provider := range e.failover.GetAvailableProviders() {
+		if e.logsRestricted(provider.Name) {
+			continue
+		}
+		client, ok := provider.Client.(evm.EthereumAPI)
+		if !ok {
+			continue
+		}
+		tried++
+
+		start := time.Now()
+		logs, err := client.FilterLogs(ctx, query)
+		elapsed := time.Since(start)
+		if err == nil {
+			e.failover.RecordSuccess(provider, elapsed)
+			return logs, nil
+		}
+
+		lastErr = err
+		if isLogsRestrictedError(err) {
+			logger.Warn("provider restricts eth_getLogs without address, skipping it for logs",
+				"provider", provider.Name, "cooldown", logsRestrictedCooldown, "error", err)
+			e.logsRestrictedUntil.Store(provider.Name, time.Now().Add(logsRestrictedCooldown))
+			continue
+		}
+		e.failover.AnalyzeAndHandleError(provider, err, elapsed)
+	}
+
+	if tried == 0 {
+		return nil, fmt.Errorf("no provider supports eth_getLogs without address")
+	}
+	return nil, lastErr
 }
 
 // traceModeActive returns true when tracing can actually run right now.
@@ -342,7 +406,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 		logger.Warn("parallel operations failed", "error", err)
 	}
 
-	if missingBlocks != nil && len(missingBlocks) > 0 {
+	if len(missingBlocks) > 0 {
 		maps.Copy(blocks, missingBlocks)
 		logger.Info("[MISSING BLOCKS FETCHED]", "count", len(missingBlocks))
 	}
@@ -447,13 +511,7 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 		Topics:    [][]string{{transferSignature}}, // Filter by Transfer event signature
 	}
 
-	var logs []evm.Log
-	err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
-		var err error
-		logs, err = c.FilterLogs(ctx, query)
-		return err
-	})
-
+	logs, err := e.filterLogsWithFailover(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query Transfer logs: %w", err)
 	}
