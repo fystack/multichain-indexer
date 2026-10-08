@@ -56,7 +56,8 @@ func (c Chains) Validate(names []string) error {
 func (c Chains) OverrideFromLatest(names []string) {
 	for _, name := range names {
 		if chain, ok := c[name]; ok {
-			chain.FromLatest = true
+			fromLatest := true
+			chain.FromLatest = &fromLatest
 			c[name] = chain
 		}
 	}
@@ -75,8 +76,9 @@ func (c Chains) ApplyDefaults(def Defaults) error {
 			enabled := *def.Enabled
 			chain.Enabled = &enabled
 		}
-		if !chain.FromLatest {
-			chain.FromLatest = def.FromLatest
+		if chain.FromLatest == nil && def.FromLatest != nil {
+			fromLatest := *def.FromLatest
+			chain.FromLatest = &fromLatest
 		}
 		if !chain.TwoWayIndexing {
 			chain.TwoWayIndexing = def.TwoWayIndexing
@@ -100,4 +102,13 @@ func (c Chains) ApplyDefaults(def Defaults) error {
 		c[name] = chain
 	}
 	return nil
+}
+
+// IsFromLatest reports whether a cold start begins at the chain head. Defaults to true when unset.
+func (c ChainConfig) IsFromLatest() bool {
+	return boolOrTrue(c.FromLatest)
+}
+
+func boolOrTrue(b *bool) bool {
+	return b == nil || *b
 }

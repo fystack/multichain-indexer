@@ -9,7 +9,7 @@ logging:
 # Global defaults - applies to all chains unless overridden
 defaults:
   enabled: false # chains inherit this unless they override enabled below
-  from_latest: true # start indexing from the latest block
+  from_latest: true # on cold start begin at chain head; set false per chain to start from start_block
   poll_interval: "5s" # how often to poll for new blocks
   reorg_rollback_window: 20 # number of blocks to roll back on reorg
   two_way_indexing: false # enable two-way indexing for all chains
