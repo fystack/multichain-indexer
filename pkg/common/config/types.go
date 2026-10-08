@@ -52,7 +52,7 @@ func (c *LoggingConfig) Normalize() {
 
 type Defaults struct {
 	Enabled             *bool              `yaml:"enabled"`
-	FromLatest          bool               `yaml:"from_latest"`
+	FromLatest          *bool              `yaml:"from_latest"`
 	TwoWayIndexing      bool               `yaml:"two_way_indexing"`
 	PollInterval        time.Duration      `yaml:"poll_interval"         validate:"required"`
 	ReorgRollbackWindow int                `yaml:"reorg_rollback_window" validate:"required,min=1"`
@@ -71,7 +71,7 @@ type ChainConfig struct {
 	InternalCode        string           `yaml:"internal_code"`
 	NativeDenom         string           `yaml:"native_denom"`
 	Type                enum.NetworkType `yaml:"type"                  validate:"required"`
-	FromLatest          bool             `yaml:"from_latest"`
+	FromLatest          *bool            `yaml:"from_latest"`
 	StartBlock          int              `yaml:"start_block"           validate:"min=0"`
 	PollInterval        time.Duration    `yaml:"poll_interval"`
 	ReorgRollbackWindow int              `yaml:"reorg_rollback_window"`

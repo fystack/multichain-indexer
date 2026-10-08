@@ -124,3 +124,27 @@ func TestEnabledNames_IncludesExplicitlyEnabledChains(t *testing.T) {
 
 	require.ElementsMatch(t, []string{"ethereum_mainnet"}, chains.EnabledNames())
 }
+
+func TestApplyDefaults_FromLatest(t *testing.T) {
+	t.Parallel()
+
+	f, tr := false, true
+	tests := []struct {
+		name     string
+		def      *bool
+		chain    *bool
+		expected bool
+	}{
+		{"unset everywhere defaults to true", nil, nil, true},
+		{"inherits default false", &f, nil, false},
+		{"chain overrides default", &tr, &f, false},
+		{"chain true overrides default false", &f, &tr, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chains := Chains{"eth": {FromLatest: tt.chain}}
+			require.NoError(t, chains.ApplyDefaults(Defaults{FromLatest: tt.def}))
+			require.Equal(t, tt.expected, chains["eth"].IsFromLatest())
+		})
+	}
+}

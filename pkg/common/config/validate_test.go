@@ -72,3 +72,14 @@ func TestLoggingConfigValidate_RejectsUnknownModeAndFormat(t *testing.T) {
 	invalid := LoggingConfig{Mode: "somewhere", Format: "plain"}
 	require.Error(t, validate.Struct(&invalid))
 }
+
+func TestValidateChainConfig_RequiresStartBlockWhenNotFromLatest(t *testing.T) {
+	t.Parallel()
+
+	fromLatest := false
+	chain := ChainConfig{Type: enum.NetworkTypeEVM, FromLatest: &fromLatest}
+	require.Error(t, validateChainConfig(chain))
+
+	chain.StartBlock = 100
+	require.NoError(t, validateChainConfig(chain))
+}

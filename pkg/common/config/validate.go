@@ -10,6 +10,9 @@ func validateChainConfig(chain ChainConfig) error {
 	if chain.Type == enum.NetworkTypeCosmos && chain.NativeDenom == "" {
 		return fmt.Errorf("native_denom is required for cosmos chains")
 	}
+	if !chain.IsFromLatest() && chain.StartBlock == 0 {
+		return fmt.Errorf("start_block is required when from_latest is false")
+	}
 	statusCfg := chain.Status.Normalize()
 	if statusCfg.HealthyMaxPendingBlocks >= statusCfg.SlowMaxPendingBlocks {
 		return fmt.Errorf(

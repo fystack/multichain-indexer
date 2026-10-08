@@ -247,6 +247,43 @@ func TestRegularWorkerDetermineStartingBlockColdStartChainUp(t *testing.T) {
 	require.Equal(t, uint64(500), rw.determineStartingBlock())
 }
 
+func TestRegularWorkerDetermineStartingBlockColdStartFromConfiguredStartBlock(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
+	store := &stubBlockStore{latestBlock: 0}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	fromLatest := false
+	rw.config.FromLatest = &fromLatest
+	rw.config.StartBlock = 120
+
+	require.Equal(t, uint64(120), rw.determineStartingBlock())
+}
+
+func TestRegularWorkerDetermineStartingBlockColdStartFromLatestIgnoresStartBlock(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 500}
+	store := &stubBlockStore{latestBlock: 0}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.config.StartBlock = 120
+
+	require.Equal(t, uint64(500), rw.determineStartingBlock())
+}
+
+func TestRegularWorkerDetermineStartingBlockResumeIgnoresStartBlock(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM, latest: 300}
+	store := &stubBlockStore{latestBlock: 300}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	fromLatest := false
+	rw.config.FromLatest = &fromLatest
+	rw.config.StartBlock = 120
+
+	require.Equal(t, uint64(300), rw.determineStartingBlock())
+}
+
 func TestRegularWorkerDetermineStartingBlockUsesConfirmedHead(t *testing.T) {
 	t.Parallel()
 
