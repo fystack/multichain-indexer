@@ -15,6 +15,9 @@ type Client struct {
 	base *rpc.BaseClient
 }
 
+// Includes legacy, v0, and v1. Raise only after verifying new version parsing.
+const maxSupportedTransactionVersion = 1
+
 func NewSolanaClient(
 	baseURL string,
 	auth *rpc.AuthConfig,
@@ -53,7 +56,7 @@ func (c *Client) GetSlot(ctx context.Context) (uint64, error) {
 func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTransactionResult, error) {
 	cfg := map[string]any{
 		"encoding":                       "jsonParsed",
-		"maxSupportedTransactionVersion": 0,
+		"maxSupportedTransactionVersion": maxSupportedTransactionVersion,
 		"commitment":                     "finalized",
 	}
 	resp, err := c.base.CallRPC(ctx, "getTransaction", []any{signature, cfg})
@@ -80,7 +83,7 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 		Encoding:                       "json",
 		TransactionDetails:             "full",
 		Rewards:                        false,
-		MaxSupportedTransactionVersion: 0,
+		MaxSupportedTransactionVersion: maxSupportedTransactionVersion,
 		Commitment:                     "finalized",
 	}
 	resp, err := c.base.CallRPC(ctx, "getBlock", []any{slot, cfg})
@@ -108,4 +111,3 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 	}
 	return &out, nil
 }
-

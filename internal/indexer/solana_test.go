@@ -2,6 +2,9 @@ package indexer
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,9 +13,45 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/mr-tron/base58"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSolanaTransfersAcrossVersions(t *testing.T) {
+	data := make([]byte, 12)
+	binary.LittleEndian.PutUint32(data, 2)
+	binary.LittleEndian.PutUint64(data[4:], 1000000)
+	for _, version := range []string{`"legacy"`, "0", "1"} {
+		t.Run(version, func(t *testing.T) {
+			keys := `["sender","receiver","11111111111111111111111111111111"]`
+			programIndex, destinationIndex := 2, 1
+			loaded, config := "", ""
+			if version == "0" {
+				keys = `["sender","11111111111111111111111111111111"]`
+				programIndex, destinationIndex = 1, 2
+				loaded = `,"loadedAddresses":{"writable":["receiver"],"readonly":[]}`
+			}
+			if version == "1" {
+				config = `,"transactionConfig":{"computeUnitLimit":30000,"heapSize":null,"loadedAccountsDataSizeLimit":200000,"priorityFee":1000}`
+			}
+			raw := fmt.Sprintf(`{"blockhash":"block","transactions":[{
+				"version":%s,"meta":{"err":null,"fee":6000%s},
+				"transaction":{"signatures":["sig"],"message":{
+					"accountKeys":%s,"instructions":[{"programIdIndex":%d,"accounts":[0,%d],"data":%q}]%s
+				}}
+			}]}`, version, loaded, keys, programIndex, destinationIndex, base58.Encode(data), config)
+			var block solana.GetBlockResult
+			require.NoError(t, json.Unmarshal([]byte(raw), &block))
+			transfers := newTestSolanaIndexer().extractSolanaTransfers("solana", 42, 100, &block)
+			require.Len(t, transfers, 1)
+			assert.Equal(t, "sender", transfers[0].FromAddress)
+			assert.Equal(t, "receiver", transfers[0].ToAddress)
+			assert.Equal(t, "1000000", transfers[0].Amount)
+			assert.Equal(t, "6000", transfers[0].TxFee.String())
+		})
+	}
+}
 
 const solanaMainnetRPC = "https://api.mainnet-beta.solana.com"
 

@@ -29,7 +29,7 @@ type GetBlockConfig struct {
 	Encoding                       string `json:"encoding"`                       // json | jsonParsed
 	TransactionDetails             string `json:"transactionDetails"`             // full
 	Rewards                        bool   `json:"rewards"`                        // false
-	MaxSupportedTransactionVersion int    `json:"maxSupportedTransactionVersion"` // 0
+	MaxSupportedTransactionVersion int    `json:"maxSupportedTransactionVersion"` // highest supported version
 	Commitment                     string `json:"commitment,omitempty"`           // processed | confirmed | finalized
 }
 
