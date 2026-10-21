@@ -110,7 +110,11 @@ func (m *Manager) StatusSnapshot(version string) status.StatusResponse {
 			Networks:  []status.NetworkStatus{},
 		}
 	}
-	return m.registry.Snapshot(version)
+	snapshot := m.registry.Snapshot(version)
+	for i := range snapshot.Networks {
+		snapshot.Networks[i].NodesOverridden = nodesOverridden(snapshot.Networks[i].ChainName)
+	}
+	return snapshot
 }
 
 // Inject workers into manager

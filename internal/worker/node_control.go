@@ -28,6 +28,7 @@ var (
 type nodeController struct {
 	replace    func([]config.NodeConfig) error
 	configured []config.NodeConfig
+	overridden bool
 }
 
 var (
@@ -69,6 +70,7 @@ func applyNodeOverride(kv infra.KVStore, chainName string, chainCfg *config.Chai
 		return
 	}
 	chainCfg.Nodes = nodesFromURLs(urls)
+	markOverridden(chainName, true)
 	logger.Info("Using operator-set RPC nodes", "chain", chainName, "count", len(urls))
 }
 
@@ -110,6 +112,7 @@ func (m *Manager) SetChainNodes(chainName string, urls []string) error {
 	if err := controller.replace(nodesFromURLs(trimmed)); err != nil {
 		return err
 	}
+	markOverridden(chainName, true)
 	if m.kvstore != nil {
 		if err := m.kvstore.SetAny(nodeOverridePrefix+chainName, trimmed); err != nil {
 			return fmt.Errorf("nodes changed but not saved, so a restart reverts them: %w", err)
@@ -128,6 +131,7 @@ func (m *Manager) ResetChainNodes(chainName string) error {
 	if err := controller.replace(controller.configured); err != nil {
 		return err
 	}
+	markOverridden(chainName, false)
 	if m.kvstore != nil {
 		_ = m.kvstore.Delete(nodeOverridePrefix + chainName)
 	}
@@ -157,6 +161,21 @@ func (m *Manager) ChainForNetwork(network string) (string, bool) {
 	}
 	chain, ok := m.networkChains[network]
 	return chain, ok
+}
+
+func markOverridden(chainName string, overridden bool) {
+	nodeControllersMu.Lock()
+	defer nodeControllersMu.Unlock()
+	if controller, ok := nodeControllers[chainName]; ok {
+		controller.overridden = overridden
+	}
+}
+
+func nodesOverridden(chainName string) bool {
+	nodeControllersMu.RLock()
+	defer nodeControllersMu.RUnlock()
+	controller, ok := nodeControllers[chainName]
+	return ok && controller.overridden
 }
 
 func controllerFor(chainName string) (*nodeController, error) {

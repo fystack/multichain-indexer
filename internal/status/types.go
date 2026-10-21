@@ -30,6 +30,8 @@ type NetworkStatus struct {
 	LastIndexedAt        *time.Time   `json:"last_indexed_at,omitempty"`
 	// The chain's RPC providers as the regular worker sees them, in configured order.
 	Providers []ProviderStatus `json:"providers,omitempty"`
+	// True when an operator replaced the configured nodes at runtime (PUT /admin/chains/{network}/nodes).
+	NodesOverridden bool `json:"nodes_overridden"`
 }
 
 type StatusResponse struct {

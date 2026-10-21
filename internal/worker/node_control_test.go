@@ -29,10 +29,13 @@ func TestSetAndResetChainNodes(t *testing.T) {
 	if len(got) != 1 || got[0].URL != "https://new.example" {
 		t.Fatalf("nodes not replaced: %+v", got)
 	}
+	if !nodesOverridden("test_chain") {
+		t.Fatal("not marked overridden")
+	}
 	if err := m.ResetChainNodes("test_chain"); err != nil {
 		t.Fatal(err)
 	}
-	if got[0].URL != "https://configured.example" {
+	if got[0].URL != "https://configured.example" || nodesOverridden("test_chain") {
 		t.Fatalf("not reset to config: %+v", got)
 	}
 	if err := m.SetChainNodes("no_such_chain", []string{"https://x.example"}); err != ErrUnknownChain {
