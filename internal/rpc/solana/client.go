@@ -53,7 +53,7 @@ func (c *Client) GetSlot(ctx context.Context) (uint64, error) {
 func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTransactionResult, error) {
 	cfg := map[string]any{
 		"encoding":                       "jsonParsed",
-		"maxSupportedTransactionVersion": 0,
+		"maxSupportedTransactionVersion": MaxSupportedTransactionVersion,
 		"commitment":                     "finalized",
 	}
 	resp, err := c.base.CallRPC(ctx, "getTransaction", []any{signature, cfg})
@@ -78,7 +78,7 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 		Encoding:                       "jsonParsed",
 		TransactionDetails:             "full",
 		Rewards:                        false,
-		MaxSupportedTransactionVersion: 0,
+		MaxSupportedTransactionVersion: MaxSupportedTransactionVersion,
 		Commitment:                     "finalized",
 	}
 	resp, err := c.base.CallRPC(ctx, "getBlock", []any{slot, cfg})
