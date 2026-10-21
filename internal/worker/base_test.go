@@ -135,9 +135,9 @@ func TestBaseWorkerEmitBlock_AppliesTokenOutgoingOverrides(t *testing.T) {
 				Type:          constant.TxTypeNativeTransfer,
 				Memo:          "invoice-42",
 				Metadata: map[string]any{
-					testSourceTypeKey:     string(constant.TxTypeTokenTransfer),
-					testSourceAmountKey:   "10.0000000",
-					testSourceAssetKey:    "GISSUER:USDC",
+					testSourceTypeKey:   string(constant.TxTypeTokenTransfer),
+					testSourceAmountKey: "10.0000000",
+					testSourceAssetKey:  "GISSUER:USDC",
 				},
 			},
 		},
@@ -206,8 +206,8 @@ func TestBaseWorkerEmitBlock_AppliesNativeOutgoingOverrides(t *testing.T) {
 				AssetAddress:  "GISSUER:USDC",
 				MemoType:      types.MemoTypeText,
 				Metadata: map[string]any{
-					testSourceTypeKey:         string(constant.TxTypeNativeTransfer),
-					testSourceAmountKey:       "7.5000000",
+					testSourceTypeKey:   string(constant.TxTypeNativeTransfer),
+					testSourceAmountKey: "7.5000000",
 				},
 			},
 		},

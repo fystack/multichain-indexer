@@ -232,6 +232,26 @@ func (f *Failover[T]) AddProvider(p *Provider) error {
 	return nil
 }
 
+// ReplaceProviders swaps the whole provider list at runtime (an operator changed the chain's nodes). Calls in
+// flight finish on the provider they hold; new calls start from the first of the new list.
+func (f *Failover[T]) ReplaceProviders(providers []*Provider) error {
+	if len(providers) == 0 {
+		return fmt.Errorf("a chain needs at least one provider")
+	}
+	for _, p := range providers {
+		if _, ok := p.Client.(T); !ok {
+			return fmt.Errorf("invalid provider client type: expected %T, got %T", *new(T), p.Client)
+		}
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.providers = append([]*Provider(nil), providers...)
+	f.currentIndex = 0
+	logger.Info("Replaced providers", "count", len(providers))
+	return nil
+}
+
 // GetBestProvider returns the current best provider
 func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 	f.mu.RLock()

@@ -259,6 +259,10 @@ func startHealthServer(port int, cfg *config.Config, manager *worker.Manager) *h
 		json.NewEncoder(w).Encode(response)
 	})
 
+	if token := os.Getenv("INDEXER_ADMIN_TOKEN"); token != "" && manager != nil {
+		registerAdminRoutes(mux, manager, token)
+	}
+
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.WriteHeader(http.StatusMethodNotAllowed)

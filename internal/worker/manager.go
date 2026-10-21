@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"github.com/fystack/multichain-indexer/pkg/store/missingblockstore"
 	"sync"
 	"time"
 
@@ -24,6 +25,11 @@ type Manager struct {
 	emitter     events.Emitter
 	pubkeyStore pubkeystore.Store
 	registry    *status.Registry
+
+	// For operator actions: chain config key -> internal code, network_id -> chain config key.
+	internalCodes map[string]string
+	networkChains map[string]string
+	missingBlocks missingblockstore.MissingBlocksStore
 }
 
 func NewManager(
@@ -39,6 +45,9 @@ func NewManager(
 		blockStore:  blockStore,
 		emitter:     emitter,
 		pubkeyStore: pubkeyStore,
+
+		internalCodes: map[string]string{},
+		networkChains: map[string]string{},
 	}
 }
 
