@@ -1,4 +1,4 @@
-package main
+package adminapi
 
 import (
 	"crypto/subtle"
@@ -10,13 +10,13 @@ import (
 	"github.com/fystack/multichain-indexer/internal/worker"
 )
 
-// Operator endpoints on the health server, enabled only when INDEXER_ADMIN_TOKEN is set; callers send it as a
+// Register adds operator endpoints to the health server, enabled only when INDEXER_ADMIN_TOKEN is set; callers send it as a
 // bearer token. {network} is a chain's network_id or its config key.
 //
 //	PUT    /admin/chains/{network}/nodes   {"urls": ["https://..."]}  replace the RPC nodes now, kept across restarts
 //	DELETE /admin/chains/{network}/nodes                              back to the nodes in config
 //	POST   /admin/chains/{network}/rescan  {"from": 1, "to": 2}       queue a block range for the manual worker
-func registerAdminRoutes(mux *http.ServeMux, manager *worker.Manager, token string) {
+func Register(mux *http.ServeMux, manager *worker.Manager, token string) {
 	authorized := func(next func(http.ResponseWriter, *http.Request, string)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			given := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
