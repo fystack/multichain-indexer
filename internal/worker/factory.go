@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,8 +20,8 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
-	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/internal/rpc/xrp"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -904,6 +905,11 @@ func CreateManagerWithWorkers(
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
 		statusRegistry.RegisterChain(idxr.GetName(), chainName, chainCfg)
+		if source, ok := idxr.(interface{ ProviderSnapshot() []rpc.ProviderSnapshot }); ok {
+			statusRegistry.SetProviderSource(idxr.GetName(), func() []status.ProviderStatus {
+				return providerStatuses(source.ProviderSnapshot())
+			})
+		}
 		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
 			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
 		}
@@ -968,4 +974,37 @@ func CreateManagerWithWorkers(
 	}
 
 	return manager
+}
+
+// providerStatuses turns provider snapshots into status entries, keeping only the host of each URL.
+func providerStatuses(snapshots []rpc.ProviderSnapshot) []status.ProviderStatus {
+	out := make([]status.ProviderStatus, 0, len(snapshots))
+	for _, s := range snapshots {
+		item := status.ProviderStatus{
+			Name:              s.Name,
+			Host:              hostOf(s.URL),
+			State:             s.State,
+			AvgLatencyMs:      s.AverageResponseTime.Milliseconds(),
+			ConsecutiveErrors: s.ConsecutiveErrors,
+		}
+		if s.BlacklistedUntil.After(time.Now()) {
+			t := s.BlacklistedUntil.UTC()
+			item.BlacklistedUntil = &t
+		}
+		if !s.LastHealthCheck.IsZero() {
+			t := s.LastHealthCheck.UTC()
+			item.LastCheckedAt = &t
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// hostOf drops scheme, path and query from a node URL; API keys often live there.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "unknown"
+	}
+	return u.Host
 }

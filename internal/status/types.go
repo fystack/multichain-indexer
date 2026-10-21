@@ -28,6 +28,8 @@ type NetworkStatus struct {
 	CatchupRanges        int          `json:"catchup_ranges"`
 	FailedBlocks         int          `json:"failed_blocks"`
 	LastIndexedAt        *time.Time   `json:"last_indexed_at,omitempty"`
+	// The chain's RPC providers as the regular worker sees them, in configured order.
+	Providers []ProviderStatus `json:"providers,omitempty"`
 }
 
 type StatusResponse struct {
@@ -39,6 +41,17 @@ type StatusResponse struct {
 type catchupRangeKey struct {
 	start uint64
 	end   uint64
+}
+
+// ProviderStatus is one RPC provider's health. Host carries no path or query: node URLs often embed API keys.
+type ProviderStatus struct {
+	Name              string     `json:"name"`
+	Host              string     `json:"host"`
+	State             string     `json:"state"`
+	AvgLatencyMs      int64      `json:"avg_latency_ms"`
+	ConsecutiveErrors int        `json:"consecutive_errors"`
+	BlacklistedUntil  *time.Time `json:"blacklisted_until,omitempty"`
+	LastCheckedAt     *time.Time `json:"last_checked_at,omitempty"`
 }
 
 type chainState struct {
@@ -53,6 +66,7 @@ type chainState struct {
 	failedBlocks         map[uint64]struct{}
 	catchupRanges        map[catchupRangeKey]uint64
 	catchupPendingBlocks uint64
+	providers            func() []ProviderStatus
 }
 
 type chainSnapshot struct {
@@ -67,4 +81,5 @@ type chainSnapshot struct {
 	failedBlocksCount    int
 	catchupRangesCount   int
 	catchupPendingBlocks uint64
+	providers            func() []ProviderStatus
 }
