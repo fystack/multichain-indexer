@@ -290,6 +290,39 @@ func (f *Failover[T]) recoverExpiredBlacklists(providers []*Provider) {
 }
 
 // GetAvailableProviders returns all currently available providers
+// ProviderSnapshot is a copy of one provider's health, safe to hand out (status endpoint).
+type ProviderSnapshot struct {
+	Name                string
+	URL                 string
+	State               string
+	AverageResponseTime time.Duration
+	ConsecutiveErrors   int
+	BlacklistedUntil    time.Time
+	LastHealthCheck     time.Time
+}
+
+// Snapshot copies every provider's health, in configured order.
+func (f *Failover[T]) Snapshot() []ProviderSnapshot {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	out := make([]ProviderSnapshot, 0, len(f.providers))
+	for _, p := range f.providers {
+		p.mu.RLock()
+		out = append(out, ProviderSnapshot{
+			Name:                p.Name,
+			URL:                 p.URL,
+			State:               p.State,
+			AverageResponseTime: p.AverageResponseTime,
+			ConsecutiveErrors:   p.ConsecutiveErrors,
+			BlacklistedUntil:    p.BlacklistedUntil,
+			LastHealthCheck:     p.LastHealthCheck,
+		})
+		p.mu.RUnlock()
+	}
+	return out
+}
+
 func (f *Failover[T]) GetAvailableProviders() []*Provider {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
