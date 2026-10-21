@@ -214,11 +214,22 @@ func (rbf *redisBloomFilter) ContainsBatch(addresses []string, addressType enum.
 		return results
 	}
 	for i, item := range items {
-		if n, ok := item.(int64); ok {
-			results[i] = n == 1
-		}
+		results[i] = bloomReplyTrue(item)
 	}
 	return results
+}
+
+// bloomReplyTrue reads one BF.MEXISTS reply item. RESP2 answers 1 or 0; RESP3, go-redis v9's default protocol,
+// answers true or false. Reading only integers would report every address as unwatched.
+func bloomReplyTrue(item any) bool {
+	switch v := item.(type) {
+	case int64:
+		return v == 1
+	case bool:
+		return v
+	default:
+		return false
+	}
 }
 
 func (rbf *redisBloomFilter) Clear(addressType enum.NetworkType) {
