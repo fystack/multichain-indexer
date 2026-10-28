@@ -133,6 +133,25 @@ func (bs *blockStore) GetFailedBlocks(chainName string) ([]uint64, error) {
 	return failedBlocks, nil
 }
 
+// MaxFailedBlocks caps a chain's failed-block list. The list is one value rewritten on every change, so a chain
+// whose node fails every block would otherwise grow it (and the store) without bound. Past the cap the oldest
+// entries are dropped and logged, so they can be re-scanned once the node is fixed.
+const MaxFailedBlocks = 5000
+
+func capFailedBlocks(chainName string, blocks []uint64) []uint64 {
+	if len(blocks) <= MaxFailedBlocks {
+		return blocks
+	}
+	dropped := blocks[:len(blocks)-MaxFailedBlocks]
+	logger.Error("Too many failed blocks; dropping the oldest, re-scan them once the chain's node works",
+		"chain", chainName,
+		"dropped", len(dropped),
+		"from", dropped[0],
+		"to", dropped[len(dropped)-1],
+	)
+	return blocks[len(blocks)-MaxFailedBlocks:]
+}
+
 // SaveFailedBlock appends a failed block to the per-chain list (deduplicated and sorted)
 func (bs *blockStore) SaveFailedBlock(chainName string, blockNumber uint64) error {
 	if chainName == "" {
@@ -151,6 +170,7 @@ func (bs *blockStore) SaveFailedBlock(chainName string, blockNumber uint64) erro
 	if !found {
 		blocks = append(blocks, blockNumber)
 		slices.Sort(blocks)
+		blocks = capFailedBlocks(chainName, blocks)
 		if err := bs.store.SetAny(key, blocks); err != nil {
 			return err
 		}
@@ -182,7 +202,7 @@ func (bs *blockStore) SaveFailedBlocks(chainName string, blocksToAdd []uint64) e
 	}
 	slices.Sort(blocks)
 
-	return bs.store.SetAny(key, blocks)
+	return bs.store.SetAny(key, capFailedBlocks(chainName, blocks))
 }
 
 // RemoveFailedBlocks removes a set of blocks from the failed list.

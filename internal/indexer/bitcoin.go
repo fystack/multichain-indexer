@@ -533,3 +533,8 @@ func (b *BitcoinIndexer) GetMempoolTransactions(ctx context.Context) ([]types.Tr
 
 	return allTransfers, allUTXOEvents, nil
 }
+
+// ProviderSnapshot reports the health of this chain's RPC providers for the status endpoint.
+func (b *BitcoinIndexer) ProviderSnapshot() []rpc.ProviderSnapshot {
+	return b.failover.Snapshot()
+}
