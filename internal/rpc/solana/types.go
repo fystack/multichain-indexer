@@ -23,11 +23,17 @@ type jsonRPCError struct {
 
 type GetSlotResult uint64
 
+// MaxSupportedTransactionVersion is the newest transaction format getBlock and getTransaction may return.
+// Clusters now include version 1 transactions in most blocks; asking for at most 0 makes the RPC reject the
+// whole block ("Transaction version (1) is not supported by the requesting client"). Version 1 parses like
+// version 0 for transfers (it adds a transactionConfig field and drops addressTableLookups).
+const MaxSupportedTransactionVersion = 1
+
 type GetBlockConfig struct {
 	Encoding                       string `json:"encoding"`                       // json | jsonParsed
 	TransactionDetails             string `json:"transactionDetails"`             // full
 	Rewards                        bool   `json:"rewards"`                        // false
-	MaxSupportedTransactionVersion int    `json:"maxSupportedTransactionVersion"` // 0
+	MaxSupportedTransactionVersion int    `json:"maxSupportedTransactionVersion"` // MaxSupportedTransactionVersion
 	Commitment                     string `json:"commitment,omitempty"`           // processed | confirmed | finalized
 }
 
