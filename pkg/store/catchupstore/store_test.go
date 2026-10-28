@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
@@ -13,13 +14,9 @@ import (
 
 func dialRedis(t *testing.T) infra.RedisClient {
 	t.Helper()
-	rc, err := infra.NewRedisClient("localhost:6379", "", "test", false)
-	if err != nil {
-		t.Skip("Redis not available, skipping test")
-	}
-	if err := rc.GetClient().Ping(context.Background()).Err(); err != nil {
-		t.Skip("Redis not available, skipping test")
-	}
+	mr := miniredis.RunT(t)
+	rc, err := infra.NewRedisClient(mr.Addr(), "", "test", false)
+	require.NoError(t, err)
 	t.Cleanup(func() { _ = rc.Close() })
 	return rc
 }
@@ -95,13 +92,34 @@ func TestSaveRangesMergesOverlapping(t *testing.T) {
 	ctx := context.Background()
 
 	require.NoError(t, s.SaveRanges(ctx, chain, []blockstore.CatchupRange{{Start: 1, End: 10, Current: 4}}))
-	// Adjacent range should merge into a single field.
-	require.NoError(t, s.SaveRanges(ctx, chain, []blockstore.CatchupRange{{Start: 11, End: 20, Current: 15}}))
+	require.NoError(t, s.SaveRanges(ctx, chain, []blockstore.CatchupRange{{Start: 8, End: 20, Current: 15}}))
 
 	got, err := s.GetProgress(ctx, chain)
 	require.NoError(t, err)
-	require.Len(t, got, 1)
-	require.Equal(t, blockstore.CatchupRange{Start: 1, End: 20, Current: 4}, got[0])
+	require.Equal(t, []blockstore.CatchupRange{{Start: 1, End: 20, Current: 4}}, got)
+}
+
+func TestSaveRangesKeepsAdjacentRangesSeparate(t *testing.T) {
+	rc := dialRedis(t)
+	chain := "test_adjacent"
+	cleanupChain(t, rc, chain)
+
+	s := New(rc, nil)
+	ctx := context.Background()
+
+	require.NoError(t, s.SaveRanges(ctx, chain, []blockstore.CatchupRange{
+		{Start: 1, End: 10, Current: 4},
+		{Start: 11, End: 20, Current: 15},
+	}))
+	require.NoError(t, s.SaveRanges(ctx, chain, []blockstore.CatchupRange{{Start: 21, End: 30, Current: 20}}))
+
+	got, err := s.GetProgress(ctx, chain)
+	require.NoError(t, err)
+	require.Equal(t, []blockstore.CatchupRange{
+		{Start: 1, End: 10, Current: 4},
+		{Start: 11, End: 20, Current: 15},
+		{Start: 21, End: 30, Current: 20},
+	}, got)
 }
 
 // fakeKV is a minimal infra.KVStore exposing seeded catchup pairs via List.

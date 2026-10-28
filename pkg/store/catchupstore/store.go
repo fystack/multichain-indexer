@@ -24,8 +24,10 @@ const (
 )
 
 // addRangesScript merges the incoming ranges (flat (start,end,current) triplets
-// in ARGV) with existing overlapping/adjacent ones in a single HGETALL + rewrite,
-// keeping the whole save O(n) in one round-trip.
+// in ARGV) with existing overlapping ones in a single HGETALL + rewrite, keeping
+// the whole save O(n) in one round-trip. Adjacent ranges must stay separate:
+// workers save progress and delete by the split chunk's own field, so a merged
+// field would never be completed and the whole gap would be indexed again.
 const addRangesScript = `
 	local key = KEYS[1]
 
@@ -67,7 +69,7 @@ const addRangesScript = `
 	local merged = {}
 	for _, r in ipairs(ranges) do
 		local last = merged[#merged]
-		if last and r.s <= last.e + 1 then
+		if last and r.s <= last.e then
 			if r.e > last.e then last.e = r.e end
 			if r.current < last.current then last.current = r.current end
 			clamp(last)

@@ -10,10 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -102,7 +105,7 @@ func newTestCatchupWorker(
 	ctx context.Context,
 	chain *stubIndexer,
 	store *stubBlockStore,
-	catchupStore *fakeCatchupStore,
+	catchupStore catchupstore.Store,
 ) *CatchupWorker {
 	cfg := testChainConfig()
 	return &CatchupWorker{
@@ -205,4 +208,64 @@ func TestCatchupWorkerLoadProgressStopsAtConfirmedHead(t *testing.T) {
 	ranges := cw.loadCatchupProgress()
 	require.Equal(t, []blockstore.CatchupRange{{Start: 81, End: 90, Current: 80}}, ranges)
 	require.Equal(t, map[string]uint64{"81-90": 80}, catchupStore.current)
+}
+
+// Regression: the Redis store used to merge adjacent split chunks into one
+// field the workers never address, so after the chunks drained the merged
+// range was reloaded and the whole gap was indexed a second time.
+func TestCatchupWorkerIndexesSplitGapOnceWithRedisStore(t *testing.T) {
+	t.Parallel()
+	initTestLogger() // NewRedisClient logs via the global logger
+
+	mr := miniredis.RunT(t)
+	rc, err := infra.NewRedisClient(mr.Addr(), "", "test", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rc.Close() })
+	catchupStore := catchupstore.New(rc, nil)
+
+	var mu sync.Mutex
+	fetched := map[uint64]int{}
+	chain := &stubIndexer{
+		name:         "bsc",
+		internalCode: "BSC_MAINNET",
+		networkType:  enum.NetworkTypeEVM,
+		latest:       1100,
+		getBlocksFunc: func(ctx context.Context, from, to uint64, p bool) ([]indexer.BlockResult, error) {
+			mu.Lock()
+			for n := from; n <= to; n++ {
+				fetched[n]++
+			}
+			mu.Unlock()
+			return allBlocksOK(ctx, from, to, p)
+		},
+	}
+	store := &stubBlockStore{latestBlock: 1000}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cw := newTestCatchupWorker(ctx, chain, store, catchupStore)
+	cw.blockRanges = cw.loadCatchupProgress()
+	require.Len(t, cw.blockRanges, 5)
+
+	done := make(chan struct{})
+	go func() {
+		cw.runCatchup()
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		left, err := catchupStore.GetProgress(ctx, "BSC_MAINNET")
+		return err == nil && len(left) == 0
+	}, 2*time.Second, 5*time.Millisecond, "catchup ranges were not drained")
+
+	// Give the idle loop a few reloads to pick up anything left behind.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	for n := uint64(1001); n <= 1100; n++ {
+		require.Equalf(t, 1, fetched[n], "block %d fetched %d times", n, fetched[n])
+	}
 }
