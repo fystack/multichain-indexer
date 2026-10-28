@@ -32,7 +32,7 @@ type GetSlotResult uint64
 const MaxSupportedTransactionVersion = 1
 
 type GetBlockConfig struct {
-	Encoding                       string `json:"encoding"`                       // json | jsonParsed
+	Encoding                       string `json:"encoding"`                       // json
 	TransactionDetails             string `json:"transactionDetails"`             // full
 	Rewards                        bool   `json:"rewards"`                        // false
 	MaxSupportedTransactionVersion int    `json:"maxSupportedTransactionVersion"` // MaxSupportedTransactionVersion
@@ -40,11 +40,11 @@ type GetBlockConfig struct {
 }
 
 type GetBlockResult struct {
-	Blockhash         string            `json:"blockhash"`
-	PreviousBlockhash string            `json:"previousBlockhash"`
-	ParentSlot        uint64            `json:"parentSlot"`
-	BlockTime         *int64            `json:"blockTime"`
-	Transactions      []BlockTxn        `json:"transactions"`
+	Blockhash         string     `json:"blockhash"`
+	PreviousBlockhash string     `json:"previousBlockhash"`
+	ParentSlot        uint64     `json:"parentSlot"`
+	BlockTime         *int64     `json:"blockTime"`
+	Transactions      []BlockTxn `json:"transactions"`
 }
 
 type BlockTxn struct {
@@ -53,15 +53,14 @@ type BlockTxn struct {
 }
 
 type TxnMeta struct {
-	Err              any            `json:"err"`
-	Fee              uint64         `json:"fee"`
-	PreBalances      []uint64       `json:"preBalances"`
-	PostBalances     []uint64       `json:"postBalances"`
-	PreTokenBalances []TokenBalance `json:"preTokenBalances"`
-	PostTokenBalances []TokenBalance `json:"postTokenBalances"`
+	Err               any                `json:"err"`
+	Fee               uint64             `json:"fee"`
+	PreBalances       []uint64           `json:"preBalances"`
+	PostBalances      []uint64           `json:"postBalances"`
+	PreTokenBalances  []TokenBalance     `json:"preTokenBalances"`
+	PostTokenBalances []TokenBalance     `json:"postTokenBalances"`
 	InnerInstructions []InnerInstruction `json:"innerInstructions"`
-	// v0 ALT accounts; present only under encoding=json (jsonParsed pre-merges them).
-	LoadedAddresses *LoadedAddresses `json:"loadedAddresses"`
+	LoadedAddresses   *LoadedAddresses   `json:"loadedAddresses"`
 }
 
 type LoadedAddresses struct {
@@ -75,9 +74,9 @@ type InnerInstruction struct {
 }
 
 type TokenBalance struct {
-	AccountIndex uint64 `json:"accountIndex"`
-	Mint         string `json:"mint"`
-	Owner        string `json:"owner"`
+	AccountIndex  uint64 `json:"accountIndex"`
+	Mint          string `json:"mint"`
+	Owner         string `json:"owner"`
 	UiTokenAmount struct {
 		Amount   string `json:"amount"`
 		Decimals uint8  `json:"decimals"`
@@ -86,8 +85,8 @@ type TokenBalance struct {
 
 type TxnEnvelope struct {
 	Message struct {
-		AccountKeys  []AccountKey   `json:"accountKeys"`
-		Instructions []Instruction  `json:"instructions"`
+		AccountKeys  []AccountKey  `json:"accountKeys"`
+		Instructions []Instruction `json:"instructions"`
 	} `json:"message"`
 	Signatures []string `json:"signatures"`
 }
@@ -124,12 +123,10 @@ func (a *AccountKey) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// Instruction is a compiled instruction as returned under encoding=json: the program and
+// accounts are indices into the transaction's account keys, and Data is base58.
 type Instruction struct {
-	ProgramIdIndex uint64 `json:"programIdIndex"`
-	Accounts       any    `json:"accounts"`
-	Data           string `json:"data"` // base58 (when encoding=json); may be "" for jsonParsed
-	Parsed         any    `json:"parsed"` // object for jsonParsed, can be "" for encoding=json
-	Program        string `json:"program"`
-	ProgramId      string `json:"programId"`
+	ProgramIdIndex int    `json:"programIdIndex"`
+	Accounts       []int  `json:"accounts"`
+	Data           string `json:"data"`
 }
-
