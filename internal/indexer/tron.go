@@ -319,3 +319,8 @@ func (t *TronIndexer) IsHealthy() bool {
 	_, err := t.GetLatestBlockNumber(ctx)
 	return err == nil
 }
+
+// ProviderSnapshot reports the health of this chain's RPC providers for the status endpoint.
+func (t *TronIndexer) ProviderSnapshot() []rpc.ProviderSnapshot {
+	return t.failover.Snapshot()
+}

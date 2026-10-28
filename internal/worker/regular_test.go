@@ -652,3 +652,25 @@ func TestCatchupWorkerLoadCatchupProgressResumeQueuesGap(t *testing.T) {
 	require.Equal(t, uint64(101), ranges[0].Start)
 	require.Equal(t, uint64(150), ranges[len(ranges)-1].End)
 }
+
+func TestRegularWorkerColdStartWhileBuildingDoesNotWaitForTheChain(t *testing.T) {
+	t.Parallel()
+
+	// Cold start against a node that keeps failing (a rate-limited Solana node held up every chain's start):
+	// building the worker must return at once and leave the wait to Start.
+	chain := &stubIndexer{name: "solana", internalCode: "SOL", networkType: enum.NetworkTypeSol, latestErr: errors.New("429 Too Many Requests")}
+	store := &stubBlockStore{latestBlock: 0}
+	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.startBlockRetryDelay = time.Hour
+	rw.deferHeadWait = true
+
+	done := make(chan uint64, 1)
+	go func() { done <- rw.determineStartingBlock() }()
+	select {
+	case start := <-done:
+		require.Equal(t, uint64(0), start)
+		require.True(t, rw.awaitingHead)
+	case <-time.After(5 * time.Second):
+		t.Fatal("building the worker waited for the chain head")
+	}
+}

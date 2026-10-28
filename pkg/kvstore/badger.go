@@ -1,7 +1,9 @@
 package kvstore
 
 import (
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -9,23 +11,67 @@ import (
 	"github.com/hashicorp/consul/api"
 )
 
+// Badger never deletes overwritten values on its own: every rewrite of a key adds a new copy to the value log,
+// and only RunValueLogGC reclaims the old ones. The indexer rewrites the same few keys constantly (latest block,
+// failed blocks, block hashes), so without it the store grows without bound (a staging node reached 24 GB of
+// garbage over 3.8 MB of live data in under 9 hours).
+const (
+	badgerValueLogFileSize = 64 << 20 // smaller files, so GC can reclaim space file by file
+	badgerGCInterval       = 5 * time.Minute
+	badgerGCDiscardRatio   = 0.5
+)
+
 type BadgerStore struct {
 	db     *badger.DB
 	prefix string
 	codec  infra.Codec
+	stopGC chan struct{}
+	gcDone chan struct{}
 }
 
 func NewBadgerStore(path string, prefix string, codec infra.Codec) (*BadgerStore, error) {
-	opts := badger.DefaultOptions(path).WithLogger(nil)
+	opts := badger.DefaultOptions(path).WithLogger(nil).WithValueLogFileSize(badgerValueLogFileSize)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
 	}
-	return &BadgerStore{
+	store := &BadgerStore{
 		db:     db,
 		prefix: prefix,
 		codec:  codec,
-	}, nil
+		stopGC: make(chan struct{}),
+		gcDone: make(chan struct{}),
+	}
+	go store.collectGarbage()
+	return store, nil
+}
+
+// collectGarbage runs value-log GC once at start (reclaiming what earlier runs left) and then periodically.
+// Each RunValueLogGC call rewrites at most one file, so it loops until there is nothing left worth rewriting.
+func (b *BadgerStore) collectGarbage() {
+	defer close(b.gcDone)
+	ticker := time.NewTicker(badgerGCInterval)
+	defer ticker.Stop()
+	for {
+		for {
+			select {
+			case <-b.stopGC:
+				return
+			default:
+			}
+			if err := b.db.RunValueLogGC(badgerGCDiscardRatio); err != nil {
+				if !errors.Is(err, badger.ErrNoRewrite) && !errors.Is(err, badger.ErrRejected) {
+					fmt.Printf("badger value log GC failed: %v\n", err)
+				}
+				break
+			}
+		}
+		select {
+		case <-b.stopGC:
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 func (b *BadgerStore) fullKey(k string) (string, error) {
@@ -200,5 +246,7 @@ func (b *BadgerStore) Delete(key string) error {
 }
 
 func (b *BadgerStore) Close() error {
+	close(b.stopGC)
+	<-b.gcDone
 	return b.db.Close()
 }
