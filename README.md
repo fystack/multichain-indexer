@@ -6,7 +6,7 @@
 
 A production-ready indexer that parses every on-chain transaction, matches destination addresses against your system via bloom filters, and streams matched transfers to NATS JetStream.
 
-![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?logo=go&logoColor=white)
+![Go](https://img.shields.io/badge/Go-1.27+-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Chains](https://img.shields.io/badge/chains-12+-blue)
 

@@ -4,7 +4,7 @@ Guidance for AI agents working in this repo. Keep changes small, tested, and con
 
 ## What this is
 
-Multi-chain blockchain transaction indexer (Go 1.25). Watches configured chains, fetches blocks, extracts transfers for monitored addresses, and emits events. Supported chains live in `internal/indexer/` (EVM, Solana, Bitcoin, Tron, Sui, Cosmos, Aptos, TON, XRP, Stellar).
+Multi-chain blockchain transaction indexer (Go 1.27). Watches configured chains, fetches blocks, extracts transfers for monitored addresses, and emits events. Supported chains live in `internal/indexer/` (EVM, Solana, Bitcoin, Tron, Sui, Cosmos, Aptos, TON, XRP, Stellar).
 
 ## Commands
 
