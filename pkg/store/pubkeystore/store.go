@@ -13,7 +13,7 @@ func composeKey(addressType enum.NetworkType, publicKey string) string {
 
 type Store interface {
 	Exist(addressType enum.NetworkType, publicKey string) bool
-	ExistBatch(addressType enum.NetworkType, publicKeys []string) []bool
+	ExistBatch(addressType enum.NetworkType, publicKeys []string) ([]bool, error)
 	Save(addressType enum.NetworkType, publicKey string) error
 	Close() error
 }
@@ -35,9 +35,9 @@ func (s *publicKeyStore) Exist(addressType enum.NetworkType, publicKey string) b
 	return s.bloomFilter.Contains(publicKey, addressType)
 }
 
-func (s *publicKeyStore) ExistBatch(addressType enum.NetworkType, publicKeys []string) []bool {
+func (s *publicKeyStore) ExistBatch(addressType enum.NetworkType, publicKeys []string) ([]bool, error) {
 	if s.bloomFilter == nil {
-		return make([]bool, len(publicKeys))
+		return make([]bool, len(publicKeys)), nil
 	}
 	return s.bloomFilter.ContainsBatch(publicKeys, addressType)
 }

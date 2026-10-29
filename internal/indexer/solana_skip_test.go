@@ -79,3 +79,13 @@ func TestSolanaConfirmSkippedSlotsGetBlocksFails(t *testing.T) {
 
 	assert.Equal(t, ErrorTypeUnknown, results[0].Error.ErrorType)
 }
+
+func TestSolanaBlockFailsWhenAddressCheckFails(t *testing.T) {
+	idx := newSolanaParseIndexer(&countingPubkeyStore{batchErr: errors.New("redis timeout")}, false)
+
+	res := idx.toBlockResult(100, solTestBlock(), nil)
+
+	require.NotNil(t, res.Error, "a failed address check must not mark the block processed")
+	assert.Equal(t, ErrorTypeUnknown, res.Error.ErrorType)
+	assert.Nil(t, res.Block)
+}

@@ -178,12 +178,17 @@ func (s *SolanaIndexer) toBlockResult(slot uint64, b *solana.GetBlockResult, err
 		"parent", b.PreviousBlockhash,
 	)
 
+	transfers, err := s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b)
+	if err != nil {
+		// Failing the block sends it to the rescanner instead of marking it processed with no deposits.
+		return BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()}}
+	}
 	return BlockResult{Number: slot, Block: &types.Block{
 		Number:       slot,
 		Hash:         b.Blockhash,
 		ParentHash:   b.PreviousBlockhash,
 		Timestamp:    timestamp,
-		Transactions: s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b),
+		Transactions: transfers,
 	}}
 }
 
@@ -449,8 +454,11 @@ func solanaApplyTransferFees(transfers []solanaTransfer, tokenAccounts map[strin
 	}
 }
 
-func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
-	transfers := s.filterMonitored(s.parseSolanaTransfers(slot, b))
+func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) ([]types.Transaction, error) {
+	transfers, err := s.filterMonitored(s.parseSolanaTransfers(slot, b))
+	if err != nil {
+		return nil, err
+	}
 	out := make([]types.Transaction, 0, len(transfers))
 	for _, t := range transfers {
 		tx := b.Transactions[t.txIdx]
@@ -482,7 +490,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 		}
 		out = append(out, transfer)
 	}
-	return out
+	return out, nil
 }
 
 // NormalizeForDirection gives an outgoing event the amount the sender spent, fee included.
@@ -581,9 +589,9 @@ func (s *SolanaIndexer) parseSolanaTransfers(slot uint64, b *solana.GetBlockResu
 
 // filterMonitored keeps transfers touching a watched address, resolving every address in the
 // block with one ExistBatch (BF.MEXISTS) call instead of a Redis round trip per transfer.
-func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTransfer {
+func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) ([]solanaTransfer, error) {
 	if s.pubkeyStore == nil || len(transfers) == 0 {
-		return transfers
+		return transfers, nil
 	}
 
 	monitored := make(map[string]bool)
@@ -605,7 +613,11 @@ func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTran
 		}
 	}
 
-	for i, exists := range s.pubkeyStore.ExistBatch(enum.NetworkTypeSol, addresses) {
+	found, err := s.pubkeyStore.ExistBatch(enum.NetworkTypeSol, addresses)
+	if err != nil {
+		return nil, fmt.Errorf("check monitored addresses: %w", err)
+	}
+	for i, exists := range found {
 		monitored[addresses[i]] = exists
 	}
 
@@ -615,7 +627,7 @@ func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTran
 			out = append(out, t)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // Margin around candidate slots so a confirmed skip has produced blocks on both sides of it.

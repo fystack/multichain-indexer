@@ -48,7 +48,7 @@ func (e *EVMIndexer) traceModeActive() bool {
 // PubkeyStore interface for checking if an address is monitored
 type PubkeyStore interface {
 	Exist(addressType enum.NetworkType, address string) bool
-	ExistBatch(addressType enum.NetworkType, addresses []string) []bool
+	ExistBatch(addressType enum.NetworkType, addresses []string) ([]bool, error)
 }
 
 func NewEVMIndexer(chainName string, config config.ChainConfig, failover *rpc.Failover[evm.EthereumAPI], traceFailover *rpc.Failover[evm.EthereumAPI], pubkeyStore PubkeyStore) *EVMIndexer {
@@ -514,8 +514,12 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 		}
 	}
 
+	monitored, err := e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses)
+	if err != nil {
+		return nil, fmt.Errorf("check monitored addresses: %w", err)
+	}
 	existsByAddress := make(map[string]bool, len(addresses))
-	for i, exists := range e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses) {
+	for i, exists := range monitored {
 		existsByAddress[addresses[i]] = exists
 	}
 
@@ -664,8 +668,12 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 	}
 
 	if e.pubkeyStore != nil && len(candidates) > 0 {
+		monitored, err := e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses)
+		if err != nil {
+			logger.Error("Failed to check monitored addresses; native transfers in these blocks are not matched", "error", err)
+		}
 		existsByAddress := make(map[string]bool, len(addresses))
-		for i, exists := range e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses) {
+		for i, exists := range monitored {
 			existsByAddress[addresses[i]] = exists
 		}
 

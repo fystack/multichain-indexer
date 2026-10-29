@@ -19,6 +19,7 @@ type countingPubkeyStore struct {
 	watched    map[string]bool
 	existCalls int
 	batches    [][]string
+	batchErr   error
 }
 
 func (m *countingPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
@@ -26,13 +27,16 @@ func (m *countingPubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 	return m.watched[address]
 }
 
-func (m *countingPubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) []bool {
+func (m *countingPubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) ([]bool, error) {
 	m.batches = append(m.batches, append([]string(nil), addresses...))
+	if m.batchErr != nil {
+		return nil, m.batchErr
+	}
 	out := make([]bool, len(addresses))
 	for i, a := range addresses {
 		out[i] = m.watched[a]
 	}
-	return out
+	return out, nil
 }
 
 func solSystemData(tag uint32, lamports uint64, extra ...byte) string {
@@ -158,7 +162,8 @@ func summarize(txs []types.Transaction) []solTransferSummary {
 
 func TestSolanaExtractTransfers(t *testing.T) {
 	idx := newSolanaParseIndexer(nil, false)
-	got := idx.extractSolanaTransfers("solana-mainnet", 100, 1234567890, solTestBlock())
+	got, err := idx.extractSolanaTransfers("solana-mainnet", 100, 1234567890, solTestBlock())
+	require.NoError(t, err)
 
 	native, token := constant.TxTypeNativeTransfer, constant.TxTypeTokenTransfer
 	assert.Equal(t, []solTransferSummary{
@@ -183,7 +188,8 @@ func TestSolanaExtractTransfers(t *testing.T) {
 
 func TestSolanaTransferIndexIgnoresWatchList(t *testing.T) {
 	store := &countingPubkeyStore{watched: map[string]bool{"ownerY": true}}
-	got := newSolanaParseIndexer(store, false).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	got, err := newSolanaParseIndexer(store, false).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	require.NoError(t, err)
 
 	var indices []string
 	for _, tx := range got {
@@ -195,7 +201,8 @@ func TestSolanaTransferIndexIgnoresWatchList(t *testing.T) {
 
 func TestSolanaFilterUsesOneBatchCall(t *testing.T) {
 	store := &countingPubkeyStore{watched: map[string]bool{"walletC": true, "ownerY": true}}
-	got := newSolanaParseIndexer(store, false).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	got, err := newSolanaParseIndexer(store, false).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	require.NoError(t, err)
 
 	assert.Zero(t, store.existCalls, "per-address Exist must not be used")
 	require.Len(t, store.batches, 1)
@@ -212,11 +219,13 @@ func TestSolanaFilterUsesOneBatchCall(t *testing.T) {
 func TestSolanaFilterTwoWay(t *testing.T) {
 	store := &countingPubkeyStore{watched: map[string]bool{"walletA": true}}
 
-	got := newSolanaParseIndexer(store, false).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	got, err := newSolanaParseIndexer(store, false).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	require.NoError(t, err)
 	assert.Empty(t, got, "a watched sender alone does not match without two-way indexing")
 
 	store.batches = nil
-	got = newSolanaParseIndexer(store, true).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	got, err = newSolanaParseIndexer(store, true).extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	require.NoError(t, err)
 	require.Len(t, store.batches, 1)
 	assert.Contains(t, store.batches[0], "walletA")
 	assert.Equal(t, []solTransferSummary{
@@ -372,7 +381,8 @@ func TestSolanaToken2022TransferFees(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			block := solFeeBlock(tc.program, tc.pre, tc.post, tc.ixs...)
-			got := newSolanaParseIndexer(nil, false).extractSolanaTransfers("solana-mainnet", 1, 0, block)
+			got, err := newSolanaParseIndexer(nil, false).extractSolanaTransfers("solana-mainnet", 1, 0, block)
+			require.NoError(t, err)
 			require.Len(t, got, len(tc.amounts))
 			for i, tx := range got {
 				assert.Equal(t, tc.amounts[i], tx.Amount, "amount %d", i)
@@ -386,7 +396,8 @@ func TestSolanaToken2022TransferFees(t *testing.T) {
 
 func TestSolanaFeeTransferAmountByDirection(t *testing.T) {
 	idx := newSolanaParseIndexer(nil, false)
-	got := idx.extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	got, err := idx.extractSolanaTransfers("solana-mainnet", 100, 0, solTestBlock())
+	require.NoError(t, err)
 	var fee types.Transaction
 	for _, tx := range got {
 		if tx.TransferIndex == "4.1" {
@@ -423,7 +434,8 @@ func TestSolanaInnerInstructionIndexOutOfRange(t *testing.T) {
 		Instructions: []solana.Instruction{solTransferChecked(5, 1)},
 	}}
 
-	got := newSolanaParseIndexer(nil, false).extractSolanaTransfers("solana-mainnet", 1, 0, block)
+	got, err := newSolanaParseIndexer(nil, false).extractSolanaTransfers("solana-mainnet", 1, 0, block)
+	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "0", got[0].TransferIndex)
 	assert.Equal(t, "100", got[0].Amount)

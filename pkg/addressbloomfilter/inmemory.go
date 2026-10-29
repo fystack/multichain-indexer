@@ -119,7 +119,7 @@ func (abf *addressBloomFilter) Contains(address string, addressType enum.Network
 	return bf.filter.Test([]byte(address))
 }
 
-func (abf *addressBloomFilter) ContainsBatch(addresses []string, addressType enum.NetworkType) []bool {
+func (abf *addressBloomFilter) ContainsBatch(addresses []string, addressType enum.NetworkType) ([]bool, error) {
 	bf := abf.getOrCreateFilter(addressType)
 	bf.mu.RLock()
 	defer bf.mu.RUnlock()
@@ -128,7 +128,7 @@ func (abf *addressBloomFilter) ContainsBatch(addresses []string, addressType enu
 	for i, address := range addresses {
 		results[i] = bf.filter.Test([]byte(address))
 	}
-	return results
+	return results, nil
 }
 
 func (abf *addressBloomFilter) Clear(addressType enum.NetworkType) {

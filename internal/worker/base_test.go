@@ -30,12 +30,12 @@ func (m capturePubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 	return ok
 }
 
-func (m capturePubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) []bool {
+func (m capturePubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) ([]bool, error) {
 	results := make([]bool, len(addresses))
 	for i, addr := range addresses {
 		_, results[i] = m.addresses[addr]
 	}
-	return results
+	return results, nil
 }
 
 func (m capturePubkeyStore) Save(enum.NetworkType, string) error { return nil }
