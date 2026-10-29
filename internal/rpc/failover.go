@@ -557,6 +557,15 @@ func (f *Failover[T]) ExecuteWithRetry(ctx context.Context, fn func(T) error) er
 	}, retry.DefaultInterval, retry.DefaultMaxAttempts)
 }
 
+// Execute runs fn once on the best provider, for callers that have a cheaper fallback than retry sleeps.
+func (f *Failover[T]) Execute(ctx context.Context, fn func(T) error) error {
+	provider, err := f.GetBestProvider()
+	if err != nil {
+		return fmt.Errorf("no available provider: %w", err)
+	}
+	return f.executeCore(ctx, provider, fn)
+}
+
 // ExecuteWithRetryProvider runs fn against a specific provider with optional fallback
 func (f *Failover[T]) ExecuteWithRetryProvider(
 	ctx context.Context,

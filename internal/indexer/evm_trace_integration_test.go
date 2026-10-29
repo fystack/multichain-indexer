@@ -254,11 +254,13 @@ func TestRuntimeTracePoolExhaustion(t *testing.T) {
 	}
 
 	// With traceActive=false, contract call without NeedReceipt should be skipped
-	result := idx.extractReceiptTxHashes(blocks, false)
+	result, err := idx.extractReceiptTxHashes(blocks, false)
+	require.NoError(t, err)
 	assert.Empty(t, result[1], "contract call should NOT get receipt when trace mode collapsed")
 
 	// With traceActive=true it would be included
-	result = idx.extractReceiptTxHashes(blocks, true)
+	result, err = idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 	assert.Len(t, result[1], 1, "contract call should get receipt when trace mode active")
 }
 

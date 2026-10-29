@@ -88,7 +88,8 @@ func TestExtractReceiptTxHashes_SelectsSafeOutgoingWhenTwoWayEnabled(t *testing.
 		},
 	}
 
-	got := idx.extractReceiptTxHashes(blocks, false)
+	got, err := idx.extractReceiptTxHashes(blocks, false)
+	require.NoError(t, err)
 	require.Equal(t, []string{"0xabc123"}, got[blockNum])
 }
 
@@ -405,7 +406,8 @@ func TestExtractReceiptTxHashes_TraceInactive_BackwardCompatible(t *testing.T) {
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, false)
+	result, err := idx.extractReceiptTxHashes(blocks, false)
+	require.NoError(t, err)
 
 	// Only native transfer passes NeedReceipt gate
 	assert.Equal(t, []string{"0x1"}, result[1])
@@ -428,7 +430,8 @@ func TestExtractReceiptTxHashes_TraceActive_IncludesContractCalls(t *testing.T) 
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, true)
+	result, err := idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 
 	// trace active: native transfer (NeedReceipt) + contract call
 	// 0x3 has input "0x" which is NOT a contract call and NeedReceipt returns true for it
@@ -467,7 +470,8 @@ func TestExtractReceiptTxHashes_TraceActive_NoDuplicateHashes(t *testing.T) {
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, true)
+	result, err := idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 
 	// Should appear exactly once despite matching both address filter and trace contract-call branch
 	assert.Len(t, result[1], 1)
@@ -492,7 +496,8 @@ func TestExtractReceiptTxHashes_PubkeyStoreNil_TraceActive_OnlyContractCallsAndN
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, true)
+	result, err := idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 
 	// All 3 should be included: 0x1 via NeedReceipt, 0x2 and 0x3 as contract calls
 	assert.Len(t, result[1], 3)

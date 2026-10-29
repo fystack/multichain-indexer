@@ -348,7 +348,10 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	}
 
 	// Extract transaction hashes for native transfers to monitored addresses
-	txHashMap := e.extractReceiptTxHashes(blocks, traceActive)
+	txHashMap, err := e.extractReceiptTxHashes(blocks, traceActive)
+	if err != nil {
+		return nil, err
+	}
 	// Add ERC20 transfer tx hashes to the map
 	if len(erc20TxHashes) > 0 {
 		// Use a set to track already added hashes for efficient deduplication
@@ -546,7 +549,7 @@ func (e *EVMIndexer) queryERC20TransfersToMonitoredAddresses(ctx context.Context
 	return matchedTxHashes, nil
 }
 
-func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceActive bool) map[uint64][]string {
+func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceActive bool) (map[uint64][]string, error) {
 	txHashMap := make(map[uint64][]string)
 	totalTxs := 0
 	nativeTransfers := 0
@@ -670,7 +673,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 	if e.pubkeyStore != nil && len(candidates) > 0 {
 		monitored, err := e.pubkeyStore.ExistBatch(enum.NetworkTypeEVM, addresses)
 		if err != nil {
-			logger.Error("Failed to check monitored addresses; native transfers in these blocks are not matched", "error", err)
+			return nil, fmt.Errorf("check monitored addresses: %w", err)
 		}
 		existsByAddress := make(map[string]bool, len(addresses))
 		for i, exists := range monitored {
@@ -702,7 +705,7 @@ func (e *EVMIndexer) extractReceiptTxHashes(blocks map[uint64]*evm.Block, traceA
 		)
 	}
 
-	return txHashMap
+	return txHashMap, nil
 }
 
 // fetchTraces calls debug_traceTransaction for successful contract calls.

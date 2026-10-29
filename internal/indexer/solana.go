@@ -111,7 +111,7 @@ func (s *SolanaIndexer) GetBlocks(ctx context.Context, from, to uint64, isParall
 func (s *SolanaIndexer) getBlocksByNumbersSequential(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
 	results := make([]BlockResult, 0, len(blockNumbers))
 	for _, slot := range blockNumbers {
-		b, err := s.fetchRawBlock(ctx, slot)
+		b, err := s.fetchRawBlock(ctx, slot, false)
 		results = append(results, s.toBlockResult(slot, b, err))
 	}
 	s.confirmSkippedSlots(ctx, results)
@@ -130,7 +130,7 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 			if err := s.limiter.Acquire(egCtx); err != nil {
 				return err
 			}
-			b, err := s.fetchRawBlock(egCtx, slot)
+			b, err := s.fetchRawBlock(egCtx, slot, true)
 			// Parsing is CPU-only; free the RPC slot before it.
 			s.limiter.Release()
 
@@ -145,13 +145,15 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 	return results, nil
 }
 
-func (s *SolanaIndexer) fetchRawBlock(ctx context.Context, slot uint64) (*solana.GetBlockResult, error) {
+func (s *SolanaIndexer) fetchRawBlock(ctx context.Context, slot uint64, observeLimiter bool) (*solana.GetBlockResult, error) {
 	var b *solana.GetBlockResult
 	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
 		attemptStart := time.Now()
 		blk, err := c.GetBlock(ctx, slot)
 		// Per attempt, so retry back-off sleeps are not mistaken for congestion.
-		s.limiter.Observe(time.Since(attemptStart), err == nil)
+		if observeLimiter && ctx.Err() == nil {
+			s.limiter.Observe(time.Since(attemptStart), err == nil)
+		}
 		b = blk
 		return err
 	})
@@ -633,34 +635,27 @@ func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) ([]solanaTra
 // Margin around candidate slots so a confirmed skip has produced blocks on both sides of it.
 const solanaSkipConfirmMargin = 64
 
-// confirmSkippedSlots keeps a "not found" slot as a skip only when getBlocks (possibly from another
-// provider) lists blocks on both sides of it but not the slot itself. A node that pruned, jumped
-// its ledger or lags returns null or -32007 for real blocks too; those become retryable failures.
+// Nodes return null or -32007 for pruned or lagging slots too, so only getBlocks-confirmed skips stay skips.
 func (s *SolanaIndexer) confirmSkippedSlots(ctx context.Context, results []BlockResult) {
 	var candidates []int
-	var lo, hi uint64
+	var slots []uint64
 	for i, r := range results {
-		if r.Error == nil || r.Error.ErrorType != ErrorTypeBlockNotFound {
-			continue
+		if r.Error != nil && r.Error.ErrorType == ErrorTypeBlockNotFound {
+			candidates = append(candidates, i)
+			slots = append(slots, r.Number)
 		}
-		if len(candidates) == 0 || r.Number < lo {
-			lo = r.Number
-		}
-		if len(candidates) == 0 || r.Number > hi {
-			hi = r.Number
-		}
-		candidates = append(candidates, i)
 	}
 	if len(candidates) == 0 {
 		return
 	}
+	lo, hi := slices.Min(slots), slices.Max(slots)
 	lo -= min(lo, solanaSkipConfirmMargin)
 	hi += solanaSkipConfirmMargin
 
 	var produced []uint64
-	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
-		slots, err := c.GetBlocks(ctx, lo, hi)
-		produced = slots
+	err := s.failover.Execute(ctx, func(c solana.SolanaAPI) error {
+		listed, err := c.GetBlocks(ctx, lo, hi)
+		produced = listed
 		return err
 	})
 	for _, i := range candidates {

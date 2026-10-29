@@ -2,7 +2,9 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -195,8 +197,13 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 		return false
 	}
 
-	// Emit transactions if relevant
-	bw.emitBlock(result.Block)
+	if err := bw.emitBlock(result.Block); err != nil {
+		_ = bw.blockStore.SaveFailedBlock(bw.chain.GetNetworkInternalCode(), result.Number)
+		registry.MarkFailedBlock(bw.chain.GetName(), result.Number)
+		bw.logger.Error("Failed to emit block", "block", result.Number, "err", err)
+		bw.notifyObserver(result.Number, BlockStatusFailed)
+		return false
+	}
 
 	bw.logger.Info("Processed block successfully",
 		"block", result.Block.Number,
@@ -209,18 +216,21 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 // emitBlock emits relevant transactions for subscribed addresses.
 // When two_way_indexing is enabled, both incoming (to) and outgoing (from) transfers are emitted.
 // For internal transfers where both addresses are monitored, two events are emitted — one per direction.
-func (bw *BaseWorker) emitBlock(block *types.Block) {
+func (bw *BaseWorker) emitBlock(block *types.Block) error {
 	if block == nil || bw.pubkeyStore == nil {
-		return
+		return nil
 	}
 
-	addressType := bw.chain.GetNetworkType()
+	monitored, err := bw.monitoredAddresses(block)
+	if err != nil {
+		return err
+	}
 	for _, tx := range block.Transactions {
-		toMonitored := tx.ToAddress != "" && bw.pubkeyStore.Exist(addressType, tx.ToAddress)
+		toMonitored := tx.ToAddress != "" && monitored[tx.ToAddress]
 		fromMonitored := false
 		if bw.config.TwoWayIndexing {
 			for _, addr := range tx.AllSenderAddresses() {
-				if bw.pubkeyStore.Exist(addressType, addr) {
+				if monitored[addr] {
 					fromMonitored = true
 					break
 				}
@@ -261,6 +271,31 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 	}
 
 	bw.emitUTXOs(block)
+	return nil
+}
+
+func (bw *BaseWorker) monitoredAddresses(block *types.Block) (map[string]bool, error) {
+	var addresses []string
+	for _, tx := range block.Transactions {
+		if tx.ToAddress != "" {
+			addresses = append(addresses, tx.ToAddress)
+		}
+		if bw.config.TwoWayIndexing {
+			addresses = append(addresses, tx.AllSenderAddresses()...)
+		}
+	}
+	slices.Sort(addresses)
+	addresses = slices.Compact(addresses)
+
+	found, err := bw.pubkeyStore.ExistBatch(bw.chain.GetNetworkType(), addresses)
+	if err != nil {
+		return nil, fmt.Errorf("check monitored addresses: %w", err)
+	}
+	monitored := make(map[string]bool, len(addresses))
+	for i, exists := range found {
+		monitored[addresses[i]] = exists
+	}
+	return monitored, nil
 }
 
 func normalizeTransactionForDirection(

@@ -23,6 +23,7 @@ const (
 
 type capturePubkeyStore struct {
 	addresses map[string]struct{}
+	batchErr  error
 }
 
 func (m capturePubkeyStore) Exist(_ enum.NetworkType, address string) bool {
@@ -31,6 +32,9 @@ func (m capturePubkeyStore) Exist(_ enum.NetworkType, address string) bool {
 }
 
 func (m capturePubkeyStore) ExistBatch(_ enum.NetworkType, addresses []string) ([]bool, error) {
+	if m.batchErr != nil {
+		return nil, m.batchErr
+	}
 	results := make([]bool, len(addresses))
 	for i, addr := range addresses {
 		_, results[i] = m.addresses[addr]
@@ -143,7 +147,9 @@ func TestBaseWorkerEmitBlock_AppliesTokenOutgoingOverrides(t *testing.T) {
 		},
 	}
 
-	bw.emitBlock(block)
+	if err := bw.emitBlock(block); err != nil {
+		t.Fatalf("emitBlock: %v", err)
+	}
 	if len(emitter.txs) != 2 {
 		t.Fatalf("expected 2 emitted txs, got %d", len(emitter.txs))
 	}
@@ -213,7 +219,9 @@ func TestBaseWorkerEmitBlock_AppliesNativeOutgoingOverrides(t *testing.T) {
 		},
 	}
 
-	bw.emitBlock(block)
+	if err := bw.emitBlock(block); err != nil {
+		t.Fatalf("emitBlock: %v", err)
+	}
 	if len(emitter.txs) != 2 {
 		t.Fatalf("expected 2 emitted txs, got %d", len(emitter.txs))
 	}
@@ -230,5 +238,25 @@ func TestBaseWorkerEmitBlock_AppliesNativeOutgoingOverrides(t *testing.T) {
 	}
 	if outTx.GetMetadataString(testSourceTypeKey) != "" || outTx.GetMetadataString(testSourceAmountKey) != "" || outTx.GetMetadataString(testSourceAssetKey) != "" {
 		t.Fatalf("outgoing tx should not leak directional override metadata")
+	}
+}
+
+func TestBaseWorkerEmitBlock_AddressCheckErrorEmitsNothing(t *testing.T) {
+	t.Parallel()
+
+	emitter := &captureEmitter{}
+	bw := &BaseWorker{
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		chain:       directionalTestIndexer{},
+		pubkeyStore: capturePubkeyStore{batchErr: errors.New("redis timeout")},
+		emitter:     emitter,
+	}
+	block := &types.Block{Transactions: []types.Transaction{{TxHash: "tx", ToAddress: "GDEST"}}}
+
+	if err := bw.emitBlock(block); err == nil {
+		t.Fatal("expected address-check error")
+	}
+	if len(emitter.txs) != 0 {
+		t.Fatalf("expected no emitted txs, got %d", len(emitter.txs))
 	}
 }
