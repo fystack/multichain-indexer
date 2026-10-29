@@ -73,6 +73,21 @@ func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTran
 	return &out, nil
 }
 
+func (c *Client) GetBlocks(ctx context.Context, startSlot, endSlot uint64) ([]uint64, error) {
+	resp, err := c.base.CallRPC(ctx, "getBlocks", []any{startSlot, endSlot, map[string]any{"commitment": "finalized"}})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != nil {
+		return nil, fmt.Errorf("getBlocks RPC error: %w", resp.Error)
+	}
+	var slots []uint64
+	if err := json.Unmarshal(resp.Result, &slots); err != nil {
+		return nil, fmt.Errorf("decode getBlocks result: %w", err)
+	}
+	return slots, nil
+}
+
 func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, error) {
 	// json is smaller/faster than jsonParsed; parser handles it via account
 	// indices + base58 data + meta.loadedAddresses (see extractSolanaTransfers).

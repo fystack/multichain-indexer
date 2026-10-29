@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -110,9 +111,10 @@ func (s *SolanaIndexer) GetBlocks(ctx context.Context, from, to uint64, isParall
 func (s *SolanaIndexer) getBlocksByNumbersSequential(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
 	results := make([]BlockResult, 0, len(blockNumbers))
 	for _, slot := range blockNumbers {
-		b, err := s.fetchRawBlock(ctx, slot)
+		b, err := s.fetchRawBlock(ctx, slot, false)
 		results = append(results, s.toBlockResult(slot, b, err))
 	}
+	s.confirmSkippedSlots(ctx, results)
 	return results, nil
 }
 
@@ -128,9 +130,7 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 			if err := s.limiter.Acquire(egCtx); err != nil {
 				return err
 			}
-			fetchStart := time.Now()
-			b, err := s.fetchRawBlock(egCtx, slot)
-			s.limiter.Observe(time.Since(fetchStart), err == nil)
+			b, err := s.fetchRawBlock(egCtx, slot, true)
 			// Parsing is CPU-only; free the RPC slot before it.
 			s.limiter.Release()
 
@@ -141,13 +141,19 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
+	s.confirmSkippedSlots(ctx, results)
 	return results, nil
 }
 
-func (s *SolanaIndexer) fetchRawBlock(ctx context.Context, slot uint64) (*solana.GetBlockResult, error) {
+func (s *SolanaIndexer) fetchRawBlock(ctx context.Context, slot uint64, observeLimiter bool) (*solana.GetBlockResult, error) {
 	var b *solana.GetBlockResult
 	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
+		attemptStart := time.Now()
 		blk, err := c.GetBlock(ctx, slot)
+		// Per attempt, so retry back-off sleeps are not mistaken for congestion.
+		if observeLimiter && ctx.Err() == nil {
+			s.limiter.Observe(time.Since(attemptStart), err == nil)
+		}
 		b = blk
 		return err
 	})
@@ -174,12 +180,17 @@ func (s *SolanaIndexer) toBlockResult(slot uint64, b *solana.GetBlockResult, err
 		"parent", b.PreviousBlockhash,
 	)
 
+	transfers, err := s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b)
+	if err != nil {
+		// Failing the block sends it to the rescanner instead of marking it processed with no deposits.
+		return BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()}}
+	}
 	return BlockResult{Number: slot, Block: &types.Block{
 		Number:       slot,
 		Hash:         b.Blockhash,
 		ParentHash:   b.PreviousBlockhash,
 		Timestamp:    timestamp,
-		Transactions: s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b),
+		Transactions: transfers,
 	}}
 }
 
@@ -445,8 +456,11 @@ func solanaApplyTransferFees(transfers []solanaTransfer, tokenAccounts map[strin
 	}
 }
 
-func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
-	transfers := s.filterMonitored(s.parseSolanaTransfers(slot, b))
+func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) ([]types.Transaction, error) {
+	transfers, err := s.filterMonitored(s.parseSolanaTransfers(slot, b))
+	if err != nil {
+		return nil, err
+	}
 	out := make([]types.Transaction, 0, len(transfers))
 	for _, t := range transfers {
 		tx := b.Transactions[t.txIdx]
@@ -478,7 +492,7 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 		}
 		out = append(out, transfer)
 	}
-	return out
+	return out, nil
 }
 
 // NormalizeForDirection gives an outgoing event the amount the sender spent, fee included.
@@ -577,9 +591,9 @@ func (s *SolanaIndexer) parseSolanaTransfers(slot uint64, b *solana.GetBlockResu
 
 // filterMonitored keeps transfers touching a watched address, resolving every address in the
 // block with one ExistBatch (BF.MEXISTS) call instead of a Redis round trip per transfer.
-func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTransfer {
+func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) ([]solanaTransfer, error) {
 	if s.pubkeyStore == nil || len(transfers) == 0 {
-		return transfers
+		return transfers, nil
 	}
 
 	monitored := make(map[string]bool)
@@ -601,7 +615,11 @@ func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTran
 		}
 	}
 
-	for i, exists := range s.pubkeyStore.ExistBatch(enum.NetworkTypeSol, addresses) {
+	found, err := s.pubkeyStore.ExistBatch(enum.NetworkTypeSol, addresses)
+	if err != nil {
+		return nil, fmt.Errorf("check monitored addresses: %w", err)
+	}
+	for i, exists := range found {
 		monitored[addresses[i]] = exists
 	}
 
@@ -611,5 +629,49 @@ func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTran
 			out = append(out, t)
 		}
 	}
-	return out
+	return out, nil
+}
+
+// Margin around candidate slots so a confirmed skip has produced blocks on both sides of it.
+const solanaSkipConfirmMargin = 64
+
+// Nodes return null or -32007 for pruned or lagging slots too, so only getBlocks-confirmed skips stay skips.
+func (s *SolanaIndexer) confirmSkippedSlots(ctx context.Context, results []BlockResult) {
+	var candidates []int
+	var slots []uint64
+	for i, r := range results {
+		if r.Error != nil && r.Error.ErrorType == ErrorTypeBlockNotFound {
+			candidates = append(candidates, i)
+			slots = append(slots, r.Number)
+		}
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	lo, hi := slices.Min(slots), slices.Max(slots)
+	lo -= min(lo, solanaSkipConfirmMargin)
+	hi += solanaSkipConfirmMargin
+
+	var produced []uint64
+	err := s.failover.Execute(ctx, func(c solana.SolanaAPI) error {
+		listed, err := c.GetBlocks(ctx, lo, hi)
+		produced = listed
+		return err
+	})
+	for _, i := range candidates {
+		slot := results[i].Number
+		if err == nil && solanaSlotConfirmedSkipped(produced, slot) {
+			continue
+		}
+		msg := fmt.Sprintf("slot %d returned no block and is not a confirmed skip", slot)
+		if err != nil {
+			msg = fmt.Sprintf("%s: getBlocks failed: %v", msg, err)
+		}
+		results[i].Error = &Error{ErrorType: ErrorTypeUnknown, Message: msg}
+	}
+}
+
+func solanaSlotConfirmedSkipped(produced []uint64, slot uint64) bool {
+	idx, found := slices.BinarySearch(produced, slot)
+	return !found && idx > 0 && idx < len(produced)
 }

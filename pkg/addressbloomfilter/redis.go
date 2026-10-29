@@ -178,16 +178,17 @@ func (rbf *redisBloomFilter) Contains(address string, addressType enum.NetworkTy
 
 	result, err := client.Do(rbf.ctx, "BF.EXISTS", key, address).Bool()
 	if err != nil {
+		// Fail open: callers pre-filter with this, and emitBlock's ExistBatch re-check fails the block.
 		logger.Error("Error checking Redis bloom filter", "error", err)
-		return false
+		return true
 	}
 	return result
 }
 
-func (rbf *redisBloomFilter) ContainsBatch(addresses []string, addressType enum.NetworkType) []bool {
+func (rbf *redisBloomFilter) ContainsBatch(addresses []string, addressType enum.NetworkType) ([]bool, error) {
 	results := make([]bool, len(addresses))
 	if len(addresses) == 0 {
-		return results
+		return results, nil
 	}
 
 	rbf.mu.RLock()
@@ -204,19 +205,17 @@ func (rbf *redisBloomFilter) ContainsBatch(addresses []string, addressType enum.
 
 	res, err := client.Do(rbf.ctx, args...).Result()
 	if err != nil {
-		logger.Error("Error checking Redis bloom filter batch", "error", err)
-		return results
+		return nil, fmt.Errorf("BF.MEXISTS: %w", err)
 	}
 
 	items, ok := res.([]any)
 	if !ok || len(items) != len(addresses) {
-		logger.Error("Unexpected BF.MEXISTS result shape", "result", res)
-		return results
+		return nil, fmt.Errorf("unexpected BF.MEXISTS result shape: %v", res)
 	}
 	for i, item := range items {
 		results[i] = bloomReplyTrue(item)
 	}
-	return results
+	return results, nil
 }
 
 // bloomReplyTrue reads one BF.MEXISTS reply item. RESP2 answers 1 or 0; RESP3, go-redis v9's default protocol,

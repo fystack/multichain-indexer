@@ -328,7 +328,8 @@ func buildBitcoinIndexer(
 
 // buildSolanaIndexer constructs a Solana indexer with failover and providers.
 func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
-	failover := rpc.NewFailover[solana.SolanaAPI](nil)
+	solanaFailoverCfg := rpc.SolanaFailoverConfig()
+	failover := rpc.NewFailover[solana.SolanaAPI](&solanaFailoverCfg)
 
 	rl := ratelimiter.GetOrCreateSharedPooledRateLimiter(
 		chainName, chainCfg.Throttle.RPS, chainCfg.Throttle.Burst,

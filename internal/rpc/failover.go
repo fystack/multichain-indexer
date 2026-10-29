@@ -16,15 +16,16 @@ import (
 
 // FailoverConfig defines runtime behavior of the failover system.
 type FailoverConfig struct {
-	HealthCheckInterval  time.Duration
-	EnableBlacklisting   bool
-	MinActiveProviders   int
-	ErrorThreshold       int
-	ForceRotateThreshold int
-	DefaultTimeout       time.Duration
-	// SlowResponseThreshold rotates away a provider that is slow even on success.
+	HealthCheckInterval   time.Duration
+	EnableBlacklisting    bool
+	MinActiveProviders    int
+	ErrorThreshold        int
+	ForceRotateThreshold  int
+	DefaultTimeout        time.Duration
 	SlowResponseThreshold time.Duration
-	SlowResponseCooldown  time.Duration
+	// SlowSuccessThreshold blacklists a provider that is slow even on success; 0 disables it.
+	SlowSuccessThreshold time.Duration
+	SlowResponseCooldown time.Duration
 	// EmergencyRecoveryInterval spaces emergency recoveries when the whole pool
 	// is blacklisted, to avoid hot recover→fail→recover across callers.
 	EmergencyRecoveryInterval time.Duration
@@ -32,16 +33,23 @@ type FailoverConfig struct {
 
 func DefaultFailoverConfig() FailoverConfig {
 	return FailoverConfig{
-		HealthCheckInterval:   30 * time.Second,
-		EnableBlacklisting:    true,
-		MinActiveProviders:    2,
-		ErrorThreshold:        5,
-		ForceRotateThreshold:  3,
-		DefaultTimeout:        10 * time.Second,
+		HealthCheckInterval:       30 * time.Second,
+		EnableBlacklisting:        true,
+		MinActiveProviders:        2,
+		ErrorThreshold:            5,
+		ForceRotateThreshold:      3,
+		DefaultTimeout:            10 * time.Second,
 		SlowResponseThreshold:     3 * time.Second,
 		SlowResponseCooldown:      2 * time.Minute,
 		EmergencyRecoveryInterval: 2 * time.Second,
 	}
+}
+
+// SolanaFailoverConfig rotates off slow getBlock nodes; other chains have heavy calls that are legitimately slow.
+func SolanaFailoverConfig() FailoverConfig {
+	cfg := DefaultFailoverConfig()
+	cfg.SlowSuccessThreshold = 3 * time.Second
+	return cfg
 }
 
 // FailoverMetrics tracks operational metrics
@@ -448,18 +456,31 @@ func (f *Failover[T]) executeCore(ctx context.Context, provider *Provider, fn fu
 // evaluateSlowSuccess blacklists a slow-but-successful provider, unless that
 // would drop the available pool below MinActiveProviders.
 func (f *Failover[T]) evaluateSlowSuccess(provider *Provider, elapsed time.Duration) {
-	if !f.config.EnableBlacklisting || f.config.SlowResponseThreshold <= 0 {
+	threshold := f.config.SlowSuccessThreshold
+	if !f.config.EnableBlacklisting || threshold <= 0 || elapsed <= threshold {
 		return
 	}
-	if elapsed <= f.config.SlowResponseThreshold {
-		return
+
+	// Count and blacklist under one lock so concurrent slow calls can't drain the pool below the minimum.
+	f.mu.Lock()
+	available := 0
+	for _, p := range f.providers {
+		if p.IsAvailable() {
+			available++
+		}
 	}
-	if len(f.GetAvailableProviders()) <= f.config.MinActiveProviders {
+	keep := available <= f.config.MinActiveProviders
+	if !keep {
+		provider.Blacklist(f.config.SlowResponseCooldown)
+	}
+	f.mu.Unlock()
+
+	if keep {
 		if f.logThrottler.ShouldLog(fmt.Sprintf("slow_success_min_%s", provider.Name)) {
 			logger.Warn("Provider slow but kept to preserve minimum active providers",
 				"provider", provider.Name,
 				"latency_ms", elapsed.Milliseconds(),
-				"threshold_ms", f.config.SlowResponseThreshold.Milliseconds(),
+				"threshold_ms", threshold.Milliseconds(),
 				"min_active", f.config.MinActiveProviders,
 			)
 		}
@@ -474,11 +495,10 @@ func (f *Failover[T]) evaluateSlowSuccess(provider *Provider, elapsed time.Durat
 			"provider", provider.Name,
 			"url", providerURL,
 			"latency_ms", elapsed.Milliseconds(),
-			"threshold_ms", f.config.SlowResponseThreshold.Milliseconds(),
+			"threshold_ms", threshold.Milliseconds(),
 			"cooldown", f.config.SlowResponseCooldown,
 		)
 	}
-	provider.Blacklist(f.config.SlowResponseCooldown)
 	f.metrics.IncrementBlacklist()
 	f.metrics.IncrementErrorType("slow_response")
 }
@@ -535,6 +555,15 @@ func (f *Failover[T]) ExecuteWithRetry(ctx context.Context, fn func(T) error) er
 		}
 		return f.executeCore(ctx, provider, fn)
 	}, retry.DefaultInterval, retry.DefaultMaxAttempts)
+}
+
+// Execute runs fn once on the best provider, for callers that have a cheaper fallback than retry sleeps.
+func (f *Failover[T]) Execute(ctx context.Context, fn func(T) error) error {
+	provider, err := f.GetBestProvider()
+	if err != nil {
+		return fmt.Errorf("no available provider: %w", err)
+	}
+	return f.executeCore(ctx, provider, fn)
 }
 
 // ExecuteWithRetryProvider runs fn against a specific provider with optional fallback
@@ -708,7 +737,7 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 		},
 		{
 			// Node does not serve this chain (e.g. drpc free plan) — permanent.
-			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35"},
+			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35", "is not served by this endpoint"},
 			reason:        "chain_unavailable",
 			cooldown:      24 * time.Hour,
 			markUnhealthy: true,

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -278,7 +279,7 @@ func TestEmergencyRecovery_SpacedByInterval(t *testing.T) {
 
 func TestExecuteCore_SlowSuccessBlacklistsProvider(t *testing.T) {
 	cfg := DefaultFailoverConfig()
-	cfg.SlowResponseThreshold = 10 * time.Millisecond
+	cfg.SlowSuccessThreshold = 10 * time.Millisecond
 	cfg.SlowResponseCooldown = time.Minute
 	cfg.MinActiveProviders = 2
 	f := NewFailover[NetworkClient](&cfg)
@@ -290,7 +291,7 @@ func TestExecuteCore_SlowSuccessBlacklistsProvider(t *testing.T) {
 	require.NoError(t, f.AddProvider(newTestProvider("third")))
 
 	err := f.executeCore(context.Background(), first, func(NetworkClient) error {
-		time.Sleep(30 * time.Millisecond) // exceeds SlowResponseThreshold
+		time.Sleep(30 * time.Millisecond) // exceeds SlowSuccessThreshold
 		return nil
 	})
 	require.NoError(t, err)
@@ -309,7 +310,7 @@ func TestExecuteCore_SlowSuccessBlacklistsProvider(t *testing.T) {
 
 func TestExecuteCore_SlowSuccessKeepsProviderWhenPoolAtMinimum(t *testing.T) {
 	cfg := DefaultFailoverConfig()
-	cfg.SlowResponseThreshold = 10 * time.Millisecond
+	cfg.SlowSuccessThreshold = 10 * time.Millisecond
 	cfg.SlowResponseCooldown = time.Minute
 	cfg.MinActiveProviders = 2
 	f := NewFailover[NetworkClient](&cfg)
@@ -331,7 +332,7 @@ func TestExecuteCore_SlowSuccessKeepsProviderWhenPoolAtMinimum(t *testing.T) {
 
 func TestExecuteCore_FastSuccessDoesNotBlacklist(t *testing.T) {
 	cfg := DefaultFailoverConfig()
-	cfg.SlowResponseThreshold = 500 * time.Millisecond
+	cfg.SlowSuccessThreshold = 500 * time.Millisecond
 	f := NewFailover[NetworkClient](&cfg)
 
 	first := newTestProvider("first")
@@ -398,4 +399,50 @@ func TestAnalyzeError_StatusCodesNotMatchedInsideNumbers(t *testing.T) {
 	for msg, want := range cases {
 		assert.Equal(t, want, f.analyzeError(fmt.Errorf("%s", msg), time.Millisecond).Reason, msg)
 	}
+}
+
+func TestExecuteCore_SlowSuccessIgnoredByDefault(t *testing.T) {
+	f := NewFailover[NetworkClient](nil)
+	first := newTestProvider("first")
+	require.NoError(t, f.AddProvider(first))
+	require.NoError(t, f.AddProvider(newTestProvider("second")))
+	require.NoError(t, f.AddProvider(newTestProvider("third")))
+
+	f.evaluateSlowSuccess(first, time.Minute)
+
+	assert.True(t, first.IsAvailable(), "slow successes must not blacklist unless the chain opts in")
+}
+
+func TestExecuteCore_ConcurrentSlowSuccessKeepsMinimumPool(t *testing.T) {
+	cfg := DefaultFailoverConfig()
+	cfg.SlowSuccessThreshold = time.Millisecond
+	cfg.MinActiveProviders = 2
+	f := NewFailover[NetworkClient](&cfg)
+
+	providers := []*Provider{newTestProvider("a"), newTestProvider("b"), newTestProvider("c")}
+	for _, p := range providers {
+		require.NoError(t, f.AddProvider(p))
+	}
+
+	var wg sync.WaitGroup
+	for _, p := range providers {
+		wg.Add(1)
+		go func(p *Provider) {
+			defer wg.Done()
+			f.evaluateSlowSuccess(p, time.Second)
+		}(p)
+	}
+	wg.Wait()
+
+	assert.Len(t, f.GetAvailableProviders(), cfg.MinActiveProviders)
+}
+
+func TestAnalyzeError_EndpointNotServingFullBlocksIsChainUnavailable(t *testing.T) {
+	f := NewFailover[*mockNetworkClient](nil)
+	err := fmt.Errorf(`getBlock failed: HTTP 400 Bad Request: {"jsonrpc":"2.0","id":60,"error":{"code":-32602,"message":"getBlock with full transaction details is not served by this endpoint (send transactionDetails: signatures or none)"}}`)
+
+	issue := f.analyzeError(err, time.Millisecond)
+
+	assert.Equal(t, "chain_unavailable", issue.Reason)
+	assert.True(t, issue.MarkUnhealthy)
 }

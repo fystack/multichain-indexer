@@ -23,12 +23,12 @@ func (s evmPubkeyStoreStub) Exist(_ enum.NetworkType, address string) bool {
 	return s.addresses[address]
 }
 
-func (s evmPubkeyStoreStub) ExistBatch(_ enum.NetworkType, addresses []string) []bool {
+func (s evmPubkeyStoreStub) ExistBatch(_ enum.NetworkType, addresses []string) ([]bool, error) {
 	results := make([]bool, len(addresses))
 	for i, addr := range addresses {
 		results[i] = s.addresses[addr]
 	}
-	return results
+	return results, nil
 }
 
 const safeExecInputTest = "0x6a761202000000000000000000000000c26dc13d057824342d5480b153f288bd1c5e3e9d000000000000000000000000000000000000000000000000016345785d8a000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000008200000000000000000000000040a1ade6e21129c09cfb3c501efba5e56ba9a3e50000000000000000000000000000000000000000000000000000000000000000010000000000000000000000005c45ee16de1570b662e32e7960e1e501dd93cde4000000000000000000000000000000000000000000000000000000000000000001a5aa81e56a92b6f46bf78edb6a34e0086c0bb5c1e9d2c20ae60d49c1a8de6b4f15c14847f1ba3f6c35b51dbefae4c74a01bf7c28a0a0c53fb4e73a6d40e36f76b1c00000000000000000000000000000000000000000000000000000000000000"
@@ -88,7 +88,8 @@ func TestExtractReceiptTxHashes_SelectsSafeOutgoingWhenTwoWayEnabled(t *testing.
 		},
 	}
 
-	got := idx.extractReceiptTxHashes(blocks, false)
+	got, err := idx.extractReceiptTxHashes(blocks, false)
+	require.NoError(t, err)
 	require.Equal(t, []string{"0xabc123"}, got[blockNum])
 }
 
@@ -405,7 +406,8 @@ func TestExtractReceiptTxHashes_TraceInactive_BackwardCompatible(t *testing.T) {
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, false)
+	result, err := idx.extractReceiptTxHashes(blocks, false)
+	require.NoError(t, err)
 
 	// Only native transfer passes NeedReceipt gate
 	assert.Equal(t, []string{"0x1"}, result[1])
@@ -428,7 +430,8 @@ func TestExtractReceiptTxHashes_TraceActive_IncludesContractCalls(t *testing.T) 
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, true)
+	result, err := idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 
 	// trace active: native transfer (NeedReceipt) + contract call
 	// 0x3 has input "0x" which is NOT a contract call and NeedReceipt returns true for it
@@ -467,7 +470,8 @@ func TestExtractReceiptTxHashes_TraceActive_NoDuplicateHashes(t *testing.T) {
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, true)
+	result, err := idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 
 	// Should appear exactly once despite matching both address filter and trace contract-call branch
 	assert.Len(t, result[1], 1)
@@ -492,7 +496,8 @@ func TestExtractReceiptTxHashes_PubkeyStoreNil_TraceActive_OnlyContractCallsAndN
 		},
 	}
 
-	result := idx.extractReceiptTxHashes(blocks, true)
+	result, err := idx.extractReceiptTxHashes(blocks, true)
+	require.NoError(t, err)
 
 	// All 3 should be included: 0x1 via NeedReceipt, 0x2 and 0x3 as contract calls
 	assert.Len(t, result[1], 3)

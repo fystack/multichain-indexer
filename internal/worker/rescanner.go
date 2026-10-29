@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -123,10 +124,22 @@ func (rw *RescannerWorker) addFailedBlock(block uint64, errMsg string) {
 }
 
 func (rw *RescannerWorker) syncFromKV() error {
+	// Snapshot before reading KV: a block removed after this point is already gone from KV.
+	rw.batchMu.Lock()
+	pendingRemove := make(map[uint64]struct{}, len(rw.pendingRemoves))
+	for _, b := range rw.pendingRemoves {
+		pendingRemove[b] = struct{}{}
+	}
+	rw.batchMu.Unlock()
+
 	blocks, err := rw.blockStore.GetFailedBlocks(rw.chain.GetNetworkInternalCode())
 	if err != nil {
 		return err
 	}
+	blocks = slices.DeleteFunc(blocks, func(b uint64) bool {
+		_, removing := pendingRemove[b]
+		return removing
+	})
 	rw.statusRegistry.SetFailedBlocks(rw.chain.GetName(), blocks)
 	rw.mu.Lock()
 	defer rw.mu.Unlock()

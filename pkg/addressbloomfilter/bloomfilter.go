@@ -26,7 +26,7 @@ type WalletAddressBloomFilter interface {
 	Contains(address string, addressType enum.NetworkType) bool
 
 	// ContainsBatch checks multiple addresses in a single call, returning a result per address in order.
-	ContainsBatch(addresses []string, addressType enum.NetworkType) []bool
+	ContainsBatch(addresses []string, addressType enum.NetworkType) ([]bool, error)
 
 	// Clear deletes the bloom filter for a given address type.
 	Clear(addressType enum.NetworkType)

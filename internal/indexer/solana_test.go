@@ -67,7 +67,8 @@ func TestParseSPLTransfer(t *testing.T) {
 	if txResult.BlockTime != nil {
 		ts = uint64(*txResult.BlockTime)
 	}
-	transfers := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	transfers, err := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	require.NoError(t, err)
 
 	// Find the token transfer
 	var tokenTransfer *types.Transaction
@@ -116,7 +117,8 @@ func TestParseSPLTransferChecked(t *testing.T) {
 	if txResult.BlockTime != nil {
 		ts = uint64(*txResult.BlockTime)
 	}
-	transfers := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	transfers, err := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	require.NoError(t, err)
 
 	// Find the token transfer
 	var tokenTransfer *types.Transaction
@@ -165,7 +167,8 @@ func TestParseBatchSOLTransfer(t *testing.T) {
 	if txResult.BlockTime != nil {
 		ts = uint64(*txResult.BlockTime)
 	}
-	transfers := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	transfers, err := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	require.NoError(t, err)
 
 	// This transaction contains 20 native SOL transfers of 1 lamport each
 	expectedRecipients := []string{
@@ -243,7 +246,8 @@ func TestParseSquadsMultisigTransfer(t *testing.T) {
 	if txResult.BlockTime != nil {
 		ts = uint64(*txResult.BlockTime)
 	}
-	transfers := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	transfers, err := idx.extractSolanaTransfers("solana-mainnet", txResult.Slot, ts, block)
+	require.NoError(t, err)
 
 	// This transaction contains a Token-2022 transferCheckedWithFee via Squads multisig CPI.
 	// Token: HeLp6NuQkmYB4pYWo2zYs22mESHXPQYzXbB8n4V98jwC, Amount: 13000000 (0.013 with 9 decimals)
