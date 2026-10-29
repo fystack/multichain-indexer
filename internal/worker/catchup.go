@@ -24,6 +24,7 @@ const (
 	catchupPanicRetryDelay = time.Second
 	// catchupIdleInterval is the wait between store re-checks when idle.
 	catchupIdleInterval = 3 * time.Second
+	catchupStoreTimeout = 5 * time.Second
 )
 
 type CatchupWorker struct {
@@ -398,7 +399,9 @@ func (cw *CatchupWorker) saveProgress(r blockstore.CatchupRange, current uint64)
 		"current", current,
 	)
 	current = min(current, r.End)
-	if err := cw.catchupStore.SaveProgress(cw.ctx, cw.chain.GetNetworkInternalCode(), r.Start, r.End, current); err != nil {
+	ctx, cancel := cw.storeCtx()
+	defer cancel()
+	if err := cw.catchupStore.SaveProgress(ctx, cw.chain.GetNetworkInternalCode(), r.Start, r.End, current); err != nil {
 		cw.logger.Warn("Failed to save catchup progress",
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"current", current,
@@ -428,7 +431,9 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 		"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 	)
 
-	if err := cw.catchupStore.DeleteRange(cw.ctx, cw.chain.GetNetworkInternalCode(), r.Start, r.End); err != nil {
+	ctx, cancel := cw.storeCtx()
+	defer cancel()
+	if err := cw.catchupStore.DeleteRange(ctx, cw.chain.GetNetworkInternalCode(), r.Start, r.End); err != nil {
 		cw.logger.Warn("Failed to delete catchup range",
 			"range", fmt.Sprintf("%d-%d", r.Start, r.End),
 			"error", err,
@@ -446,6 +451,18 @@ func (cw *CatchupWorker) completeRange(r blockstore.CatchupRange) error {
 	}
 
 	return nil
+}
+
+// storeCtx outlives worker cancellation so progress can still be saved on the stop path.
+func (cw *CatchupWorker) storeCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(cw.ctx), catchupStoreTimeout)
+}
+
+func (cw *CatchupWorker) Stop() {
+	cw.BaseWorker.Stop()
+	if err := cw.Close(); err != nil {
+		cw.logger.Error("Failed to close catchup worker", "error", err)
+	}
 }
 
 func (cw *CatchupWorker) Close() error {
@@ -474,7 +491,9 @@ func (cw *CatchupWorker) Close() error {
 		)
 	}
 
-	if err := cw.catchupStore.SaveRanges(cw.ctx, cw.chain.GetNetworkInternalCode(), rangesToSave); err != nil {
+	ctx, cancel := cw.storeCtx()
+	defer cancel()
+	if err := cw.catchupStore.SaveRanges(ctx, cw.chain.GetNetworkInternalCode(), rangesToSave); err != nil {
 		cw.logger.Error("Failed to batch save progress on close",
 			"ranges", len(rangesToSave),
 			"error", err,

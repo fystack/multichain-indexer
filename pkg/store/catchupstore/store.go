@@ -258,11 +258,10 @@ func (s *catchupStore) migrateFromLegacy(ctx context.Context, chain string) erro
 		return nil
 	}
 
-	mctx, cancel := context.WithTimeout(ctx, defaultTimeout)
-	defer cancel()
-
 	marker := composeMigratedKey(chain)
-	exists, err := s.redisClient.GetClient().Exists(mctx, marker).Result()
+	existsCtx, cancelExists := context.WithTimeout(ctx, defaultTimeout)
+	exists, err := s.redisClient.GetClient().Exists(existsCtx, marker).Result()
+	cancelExists()
 	if err != nil {
 		return fmt.Errorf("check catchup migration marker: %w", err)
 	}
@@ -281,7 +280,9 @@ func (s *catchupStore) migrateFromLegacy(ctx context.Context, chain string) erro
 	}
 
 	// Mark migrated even when legacy was empty, to avoid a re-read on every GetProgress.
-	if err := s.redisClient.GetClient().Set(mctx, marker, "1", 0).Err(); err != nil {
+	markCtx, cancelMark := context.WithTimeout(ctx, defaultTimeout)
+	defer cancelMark()
+	if err := s.redisClient.GetClient().Set(markCtx, marker, "1", 0).Err(); err != nil {
 		return fmt.Errorf("set catchup migration marker: %w", err)
 	}
 	return nil
