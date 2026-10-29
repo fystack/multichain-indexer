@@ -245,15 +245,8 @@ func (s *catchupStore) DeleteRange(
 	key := composeKey(chain)
 	pipe := s.redisClient.GetClient().Pipeline()
 	pipe.HDel(ctx, key, composeField(start, end))
-	lenCmd := pipe.HLen(ctx, key)
 	if _, err := pipe.Exec(ctx); err != nil {
 		return fmt.Errorf("delete catchup range: %w", err)
-	}
-	// Drop the empty hash so the chain leaves no dangling key.
-	if lenCmd.Val() == 0 {
-		if err := s.redisClient.GetClient().Del(ctx, key).Err(); err != nil {
-			return fmt.Errorf("cleanup catchup key: %w", err)
-		}
 	}
 	return nil
 }
@@ -278,7 +271,10 @@ func (s *catchupStore) migrateFromLegacy(ctx context.Context, chain string) erro
 	}
 
 	legacyRanges, err := s.legacy.GetCatchupProgress(chain)
-	if err == nil && len(legacyRanges) > 0 {
+	if err != nil {
+		return fmt.Errorf("read legacy catchup ranges: %w", err)
+	}
+	if len(legacyRanges) > 0 {
 		if err := s.SaveRanges(ctx, chain, legacyRanges); err != nil {
 			return fmt.Errorf("migrate catchup ranges: %w", err)
 		}
