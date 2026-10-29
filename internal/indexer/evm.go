@@ -325,9 +325,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 			erc20Start := time.Now()
 			matchedTxHashes, err := e.queryERC20TransfersToMonitoredAddresses(gctx, fromBlock, toBlock)
 			if err != nil {
-				logger.Warn("failed to query ERC20 transfers", "error", err)
-				// Don't fail the entire operation, just log
-				return nil
+				return fmt.Errorf("query ERC20 transfers: %w", err)
 			}
 			erc20TxHashes = matchedTxHashes
 			logger.Info("[ERC20 QUERY COMPLETE]",
@@ -339,7 +337,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	}
 
 	if err := g.Wait(); err != nil {
-		logger.Warn("parallel operations failed", "error", err)
+		return nil, err
 	}
 
 	if missingBlocks != nil && len(missingBlocks) > 0 {

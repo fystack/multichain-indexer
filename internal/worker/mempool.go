@@ -98,14 +98,24 @@ func (mw *MempoolWorker) processMempool() error {
 
 	newTxCount := 0
 	newUTXOCount := 0
-	networkType := mw.chain.GetNetworkType()
+	addresses := utxoAddresses(utxoEvents)
+	for _, tx := range transactions {
+		addresses = append(addresses, tx.ToAddress)
+		addresses = append(addresses, tx.AllSenderAddresses()...)
+	}
+	// Skip the poll rather than drop deposits; unseen txs are retried next poll.
+	monitored, err := lookupMonitored(mw.pubkeyStore, mw.chain.GetNetworkType(), addresses)
+	if err != nil {
+		mw.logger.Error("Failed to check mempool addresses", "err", err)
+		return err
+	}
 
 	for _, tx := range transactions {
-		toMonitored := tx.ToAddress != "" && mw.pubkeyStore.Exist(networkType, tx.ToAddress)
+		toMonitored := tx.ToAddress != "" && monitored[tx.ToAddress]
 		fromMonitored := false
 		if mw.config.TwoWayIndexing {
 			for _, addr := range tx.AllSenderAddresses() {
-				if mw.pubkeyStore.Exist(networkType, addr) {
+				if monitored[addr] {
 					fromMonitored = true
 					break
 				}
@@ -168,7 +178,7 @@ func (mw *MempoolWorker) processMempool() error {
 
 			isRelevant := false
 			for _, utxo := range event.Created {
-				if mw.pubkeyStore.Exist(networkType, utxo.Address) {
+				if monitored[utxo.Address] {
 					isRelevant = true
 					break
 				}
@@ -176,7 +186,7 @@ func (mw *MempoolWorker) processMempool() error {
 
 			if !isRelevant {
 				for _, spent := range event.Spent {
-					if mw.pubkeyStore.Exist(networkType, spent.Address) {
+					if monitored[spent.Address] {
 						isRelevant = true
 						break
 					}

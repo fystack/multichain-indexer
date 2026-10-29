@@ -178,8 +178,9 @@ func (rbf *redisBloomFilter) Contains(address string, addressType enum.NetworkTy
 
 	result, err := client.Do(rbf.ctx, "BF.EXISTS", key, address).Bool()
 	if err != nil {
+		// Fail open: callers pre-filter with this, and emitBlock's ExistBatch re-check fails the block.
 		logger.Error("Error checking Redis bloom filter", "error", err)
-		return false
+		return true
 	}
 	return result
 }

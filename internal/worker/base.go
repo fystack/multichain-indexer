@@ -13,6 +13,7 @@ import (
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
 	"github.com/fystack/multichain-indexer/pkg/events"
@@ -270,8 +271,7 @@ func (bw *BaseWorker) emitBlock(block *types.Block) error {
 		}
 	}
 
-	bw.emitUTXOs(block)
-	return nil
+	return bw.emitUTXOs(block)
 }
 
 func (bw *BaseWorker) monitoredAddresses(block *types.Block) (map[string]bool, error) {
@@ -284,10 +284,13 @@ func (bw *BaseWorker) monitoredAddresses(block *types.Block) (map[string]bool, e
 			addresses = append(addresses, tx.AllSenderAddresses()...)
 		}
 	}
+	return lookupMonitored(bw.pubkeyStore, bw.chain.GetNetworkType(), addresses)
+}
+
+func lookupMonitored(store pubkeystore.Store, networkType enum.NetworkType, addresses []string) (map[string]bool, error) {
 	slices.Sort(addresses)
 	addresses = slices.Compact(addresses)
-
-	found, err := bw.pubkeyStore.ExistBatch(bw.chain.GetNetworkType(), addresses)
+	found, err := store.ExistBatch(networkType, addresses)
 	if err != nil {
 		return nil, fmt.Errorf("check monitored addresses: %w", err)
 	}
@@ -322,40 +325,43 @@ func cloneTransactionMetadata(tx types.Transaction) types.Transaction {
 }
 
 // emitUTXOs emits UTXO events for monitored addresses.
-func (bw *BaseWorker) emitUTXOs(block *types.Block) {
+func (bw *BaseWorker) emitUTXOs(block *types.Block) error {
 	if block == nil || bw.pubkeyStore == nil {
-		return
+		return nil
 	}
 
 	if !bw.config.IndexUTXO {
-		return
+		return nil
 	}
 
 	utxoEvents, ok := block.GetMetadata("utxo_events")
 	if !ok {
-		return
+		return nil
 	}
 
 	events, ok := utxoEvents.([]types.UTXOEvent)
 	if !ok {
-		return
+		return nil
 	}
 
-	addressType := bw.chain.GetNetworkType()
+	monitored, err := lookupMonitored(bw.pubkeyStore, bw.chain.GetNetworkType(), utxoAddresses(events))
+	if err != nil {
+		return err
+	}
 	for i := range events {
 		event := &events[i]
 
 		// Filter to only include UTXOs where the address is in the pubkey store
 		var filteredCreated []types.UTXO
 		for _, utxo := range event.Created {
-			if bw.pubkeyStore.Exist(addressType, utxo.Address) {
+			if monitored[utxo.Address] {
 				filteredCreated = append(filteredCreated, utxo)
 			}
 		}
 
 		var filteredSpent []types.SpentUTXO
 		for _, spent := range event.Spent {
-			if bw.pubkeyStore.Exist(addressType, spent.Address) {
+			if monitored[spent.Address] {
 				filteredSpent = append(filteredSpent, spent)
 			}
 		}
@@ -376,4 +382,18 @@ func (bw *BaseWorker) emitUTXOs(block *types.Block) {
 		)
 		_ = bw.emitter.EmitUTXO(bw.chain.GetName(), event)
 	}
+	return nil
+}
+
+func utxoAddresses(events []types.UTXOEvent) []string {
+	var addresses []string
+	for _, event := range events {
+		for _, utxo := range event.Created {
+			addresses = append(addresses, utxo.Address)
+		}
+		for _, spent := range event.Spent {
+			addresses = append(addresses, spent.Address)
+		}
+	}
+	return addresses
 }

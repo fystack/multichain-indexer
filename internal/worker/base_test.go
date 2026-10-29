@@ -260,3 +260,21 @@ func TestBaseWorkerEmitBlock_AddressCheckErrorEmitsNothing(t *testing.T) {
 		t.Fatalf("expected no emitted txs, got %d", len(emitter.txs))
 	}
 }
+
+func TestBaseWorkerEmitBlock_UTXOAddressCheckErrorFailsBlock(t *testing.T) {
+	t.Parallel()
+
+	bw := &BaseWorker{
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		config:      config.ChainConfig{IndexUTXO: true},
+		chain:       directionalTestIndexer{},
+		pubkeyStore: capturePubkeyStore{batchErr: errors.New("redis timeout")},
+		emitter:     &captureEmitter{},
+	}
+	block := &types.Block{}
+	block.SetMetadata("utxo_events", []types.UTXOEvent{{TxHash: "tx", Created: []types.UTXO{{Address: "bc1q"}}}})
+
+	if err := bw.emitBlock(block); err == nil {
+		t.Fatal("expected address-check error")
+	}
+}
