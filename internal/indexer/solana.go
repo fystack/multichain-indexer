@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -113,6 +114,7 @@ func (s *SolanaIndexer) getBlocksByNumbersSequential(ctx context.Context, blockN
 		b, err := s.fetchRawBlock(ctx, slot)
 		results = append(results, s.toBlockResult(slot, b, err))
 	}
+	s.confirmSkippedSlots(ctx, results)
 	return results, nil
 }
 
@@ -139,6 +141,7 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 	if err := eg.Wait(); err != nil {
 		return nil, err
 	}
+	s.confirmSkippedSlots(ctx, results)
 	return results, nil
 }
 
@@ -613,4 +616,55 @@ func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTran
 		}
 	}
 	return out
+}
+
+// Margin around candidate slots so a confirmed skip has produced blocks on both sides of it.
+const solanaSkipConfirmMargin = 64
+
+// confirmSkippedSlots keeps a "not found" slot as a skip only when getBlocks (possibly from another
+// provider) lists blocks on both sides of it but not the slot itself. A node that pruned, jumped
+// its ledger or lags returns null or -32007 for real blocks too; those become retryable failures.
+func (s *SolanaIndexer) confirmSkippedSlots(ctx context.Context, results []BlockResult) {
+	var candidates []int
+	var lo, hi uint64
+	for i, r := range results {
+		if r.Error == nil || r.Error.ErrorType != ErrorTypeBlockNotFound {
+			continue
+		}
+		if len(candidates) == 0 || r.Number < lo {
+			lo = r.Number
+		}
+		if len(candidates) == 0 || r.Number > hi {
+			hi = r.Number
+		}
+		candidates = append(candidates, i)
+	}
+	if len(candidates) == 0 {
+		return
+	}
+	lo -= min(lo, solanaSkipConfirmMargin)
+	hi += solanaSkipConfirmMargin
+
+	var produced []uint64
+	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
+		slots, err := c.GetBlocks(ctx, lo, hi)
+		produced = slots
+		return err
+	})
+	for _, i := range candidates {
+		slot := results[i].Number
+		if err == nil && solanaSlotConfirmedSkipped(produced, slot) {
+			continue
+		}
+		msg := fmt.Sprintf("slot %d returned no block and is not a confirmed skip", slot)
+		if err != nil {
+			msg = fmt.Sprintf("%s: getBlocks failed: %v", msg, err)
+		}
+		results[i].Error = &Error{ErrorType: ErrorTypeUnknown, Message: msg}
+	}
+}
+
+func solanaSlotConfirmedSkipped(produced []uint64, slot uint64) bool {
+	idx, found := slices.BinarySearch(produced, slot)
+	return !found && idx > 0 && idx < len(produced)
 }

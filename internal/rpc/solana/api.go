@@ -13,6 +13,7 @@ type SolanaAPI interface {
 
 	GetSlot(ctx context.Context) (uint64, error)
 	GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, error)
+	GetBlocks(ctx context.Context, startSlot, endSlot uint64) ([]uint64, error)
 	GetTransaction(ctx context.Context, signature string) (*GetTransactionResult, error)
 }
 
