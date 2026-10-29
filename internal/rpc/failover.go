@@ -737,7 +737,7 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 		},
 		{
 			// Node does not serve this chain (e.g. drpc free plan) — permanent.
-			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35"},
+			patterns:      []string{"not available on free plan", "upgrade to paid plan", "\"code\":35", "\"code\": 35", "is not served by this endpoint"},
 			reason:        "chain_unavailable",
 			cooldown:      24 * time.Hour,
 			markUnhealthy: true,

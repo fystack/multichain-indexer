@@ -436,3 +436,13 @@ func TestExecuteCore_ConcurrentSlowSuccessKeepsMinimumPool(t *testing.T) {
 
 	assert.Len(t, f.GetAvailableProviders(), cfg.MinActiveProviders)
 }
+
+func TestAnalyzeError_EndpointNotServingFullBlocksIsChainUnavailable(t *testing.T) {
+	f := NewFailover[*mockNetworkClient](nil)
+	err := fmt.Errorf(`getBlock failed: HTTP 400 Bad Request: {"jsonrpc":"2.0","id":60,"error":{"code":-32602,"message":"getBlock with full transaction details is not served by this endpoint (send transactionDetails: signatures or none)"}}`)
+
+	issue := f.analyzeError(err, time.Millisecond)
+
+	assert.Equal(t, "chain_unavailable", issue.Reason)
+	assert.True(t, issue.MarkUnhealthy)
+}
