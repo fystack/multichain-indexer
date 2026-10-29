@@ -177,6 +177,7 @@ func (rw *RegularWorker) processBatch(
 			rw.notifyObserver(res.Number, BlockStatusNotFound)
 			if res.Number > lastSuccess {
 				lastSuccess = res.Number
+				lastSuccessHash = ""
 			}
 			continue
 		}

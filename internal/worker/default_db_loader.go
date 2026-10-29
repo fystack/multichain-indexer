@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/fystack/multichain-indexer/pkg/model"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -32,7 +33,7 @@ func (l *DefaultDBLoader) LoadAddresses(ctx context.Context, params AddressLoade
 	if err != nil {
 		// Filtering by an enum value the DB type does not define (22P02): no rows.
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "22P02" {
+		if errors.As(err, &pgErr) && pgErr.Code == "22P02" && strings.Contains(pgErr.Message, "for enum") {
 			return nil, nil
 		}
 		return nil, err
