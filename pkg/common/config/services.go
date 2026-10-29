@@ -51,21 +51,14 @@ type RedisConfig struct {
 
 type KVSConfig struct {
 	Type   enum.KVStoreType `yaml:"type"`
-	Consul ConsulConfig     `yaml:"consul"`
+	Redis  KVSRedisConfig   `yaml:"redis"`
 	Badger BadgerConfig     `yaml:"badger"`
 }
 
-type ConsulConfig struct {
-	Scheme   string         `yaml:"scheme"`
-	Address  string         `yaml:"address"`
-	Folder   string         `yaml:"folder"`
-	Token    string         `yaml:"token"`
-	HttpAuth HttpAuthConfig `yaml:"http_auth"`
-}
-
-type HttpAuthConfig struct {
-	Username string `yaml:"username"`
-	Password string `yaml:"password"`
+// KVSRedisConfig configures the Redis-backed KVStore. It reuses the shared
+// Redis connection (services.redis); only the key namespace is set here.
+type KVSRedisConfig struct {
+	Prefix string `yaml:"prefix"`
 }
 
 type BadgerConfig struct {
@@ -74,12 +67,12 @@ type BadgerConfig struct {
 }
 
 type BloomfilterConfig struct {
-	Type              enum.BFType      `yaml:"type"`
-	WalletAddressRepo string           `yaml:"wallet_address_repo"`
-	BatchSize         int              `yaml:"batch_size"`
-	Redis             RedisBFConfig    `yaml:"redis"`
-	InMemory          InMemoryConfig   `yaml:"in_memory"`
-	Sync              BloomSyncConfig  `yaml:"sync"`
+	Type              enum.BFType     `yaml:"type"`
+	WalletAddressRepo string          `yaml:"wallet_address_repo"`
+	BatchSize         int             `yaml:"batch_size"`
+	Redis             RedisBFConfig   `yaml:"redis"`
+	InMemory          InMemoryConfig  `yaml:"in_memory"`
+	Sync              BloomSyncConfig `yaml:"sync"`
 }
 
 type BloomSyncConfig struct {
