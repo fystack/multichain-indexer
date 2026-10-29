@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -38,6 +39,13 @@ func NewRedisStore(client *redis.Client, prefix string, codec infra.Codec) (*Red
 func (r *RedisStore) fullKey(k string) string {
 	if r.prefix != "" {
 		return r.prefix + "/" + k
+	}
+	return k
+}
+
+func (r *RedisStore) unprefixedKey(k string) string {
+	if r.prefix != "" {
+		return strings.TrimPrefix(k, r.prefix+"/")
 	}
 	return k
 }
@@ -153,7 +161,7 @@ func (r *RedisStore) List(prefix string) ([]*infra.KVPair, error) {
 		if !ok {
 			continue
 		}
-		result = append(result, &infra.KVPair{Key: k, Value: []byte(s)})
+		result = append(result, &infra.KVPair{Key: r.unprefixedKey(k), Value: []byte(s)})
 	}
 	return result, nil
 }
