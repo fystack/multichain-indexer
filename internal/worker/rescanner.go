@@ -13,6 +13,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
@@ -43,6 +44,7 @@ func NewRescannerWorker(
 	cfg config.ChainConfig,
 	kv infra.KVStore,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
@@ -55,6 +57,7 @@ func NewRescannerWorker(
 			cfg,
 			kv,
 			blockStore,
+			catchupStore,
 			emitter,
 			pubkeyStore,
 			ModeRescanner,
@@ -71,7 +74,6 @@ func NewRescannerWorker(
 
 func (rw *RescannerWorker) Start() {
 	rw.logger.Info("Starting rescanner worker",
-		"chain", rw.chain.GetName(),
 		"interval", rw.interval,
 		"maxRetries", rw.maxRetries,
 	)
@@ -157,7 +159,7 @@ func (rw *RescannerWorker) incrementRetry(block uint64) {
 			delete(rw.failedBlocks, block)
 			rw.addRemove(block)
 			rw.logger.Error("Max retries reached; giving up",
-				"chain", rw.chain.GetName(), "block", block)
+				"block", block)
 		} else {
 			rw.failedBlocks[block] = count + 1
 			rw.addSave(block)
@@ -184,7 +186,7 @@ func (rw *RescannerWorker) processRescan() error {
 		time.Sleep(rw.interval)
 		return nil
 	}
-	rw.logger.Info("Got blocks for rescan", "chain", rw.chain.GetName(), "blocks", len(blocks))
+	rw.logger.Info("Got blocks for rescan", "blocks", len(blocks))
 	return rw.processBatch(blocks)
 }
 
@@ -220,7 +222,6 @@ func (rw *RescannerWorker) processBatch(blocks []uint64) error {
 	}
 
 	rw.logger.Info("Rescanner pass",
-		"chain", rw.chain.GetName(),
 		"retried", len(blocks),
 		"success", success,
 		"remaining", len(rw.failedBlocks),
@@ -257,14 +258,12 @@ func (rw *RescannerWorker) flushUnsafe() {
 	if len(rw.pendingSaves) > 0 {
 		_ = rw.blockStore.SaveFailedBlocks(rw.chain.GetNetworkInternalCode(), rw.pendingSaves)
 		rw.logger.Debug("Batch saved failed blocks",
-			"chain", rw.chain.GetName(),
 			"count", len(rw.pendingSaves))
 		rw.pendingSaves = rw.pendingSaves[:0]
 	}
 	if len(rw.pendingRemoves) > 0 {
 		_ = rw.blockStore.RemoveFailedBlocks(rw.chain.GetNetworkInternalCode(), rw.pendingRemoves)
 		rw.logger.Debug("Batch removed failed blocks",
-			"chain", rw.chain.GetName(),
 			"count", len(rw.pendingRemoves))
 		rw.pendingRemoves = rw.pendingRemoves[:0]
 	}

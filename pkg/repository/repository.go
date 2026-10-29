@@ -27,6 +27,9 @@ var (
 	// https://github.com/jackc/pgerrcode/blob/master/errcode.go
 	UniqueViolation     = "23505"
 	ForeignKeyViolation = "23503"
+	// InvalidTextRepresentation: e.g. filtering by an enum value the DB type
+	// does not define — treated as no matching rows.
+	InvalidTextRepresentation = "22P02"
 )
 
 type Repository[T any] interface {
@@ -79,6 +82,12 @@ func (r *repository[T]) WrapError(ctx context.Context, err error) error {
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// skip if is error record not found
+		return nil
+	}
+
+	// Unknown enum value (22P02): no rows can match, so return empty, not error.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == InvalidTextRepresentation && strings.Contains(pgErr.Message, "for enum") {
 		return nil
 	}
 

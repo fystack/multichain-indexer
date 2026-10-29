@@ -19,8 +19,8 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
-	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/internal/rpc/xrp"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -31,6 +31,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 	"github.com/fystack/multichain-indexer/pkg/repository"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 	tonaddr "github.com/xssnick/tonutils-go/address"
 	"gorm.io/gorm"
@@ -41,6 +42,7 @@ type WorkerDeps struct {
 	Ctx            context.Context
 	KVStore        infra.KVStore
 	BlockStore     blockstore.Store
+	CatchupStore   catchupstore.Store
 	Emitter        events.Emitter
 	Pubkey         pubkeystore.Store
 	Redis          infra.RedisClient
@@ -106,6 +108,7 @@ func BuildWorkers(
 				cfg,
 				deps.KVStore,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -120,6 +123,7 @@ func BuildWorkers(
 				cfg,
 				deps.KVStore,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -134,6 +138,7 @@ func BuildWorkers(
 				cfg,
 				deps.KVStore,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -149,6 +154,7 @@ func BuildWorkers(
 				deps.KVStore,
 				deps.Redis,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -163,6 +169,7 @@ func BuildWorkers(
 				cfg,
 				deps.KVStore,
 				deps.BlockStore,
+				deps.CatchupStore,
 				deps.Emitter,
 				deps.Pubkey,
 				deps.FailedChan,
@@ -863,6 +870,7 @@ func CreateManagerWithWorkers(
 ) *Manager {
 	// Shared stores
 	blockStore := blockstore.NewBlockStore(kvstore)
+	catchupStore := catchupstore.New(redisClient, blockStore)
 	pubkeyStore := pubkeystore.NewPublicKeyStore(addressBF)
 	statusRegistry := status.NewRegistry()
 
@@ -907,7 +915,7 @@ func CreateManagerWithWorkers(
 		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
 			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
 		}
-		if existingCatchup, err := blockStore.GetCatchupProgress(idxr.GetNetworkInternalCode()); err == nil {
+		if existingCatchup, err := catchupStore.GetProgress(ctx, idxr.GetNetworkInternalCode()); err == nil {
 			statusRegistry.SetCatchupRanges(idxr.GetName(), existingCatchup)
 		} else {
 			logger.Warn("Failed to load catchup progress for status registry",
@@ -924,6 +932,7 @@ func CreateManagerWithWorkers(
 			Ctx:            ctx,
 			KVStore:        kvstore,
 			BlockStore:     blockStore,
+			CatchupStore:   catchupStore,
 			Emitter:        emitter,
 			Pubkey:         pubkeyStore,
 			Redis:          redisClient,

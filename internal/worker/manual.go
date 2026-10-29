@@ -10,6 +10,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/missingblockstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
@@ -39,6 +40,7 @@ func NewManualWorker(
 	kv infra.KVStore,
 	redisClient infra.RedisClient,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	failedChan chan FailedBlockEvent,
@@ -51,6 +53,7 @@ func NewManualWorker(
 			cfg,
 			kv,
 			blockStore,
+			catchupStore,
 			emitter,
 			pubkeyStore,
 			ModeManual,
@@ -63,7 +66,7 @@ func NewManualWorker(
 }
 
 func (mw *ManualWorker) Start() {
-	mw.logger.Info("Starting manual worker", "chain", mw.chain.GetName())
+	mw.logger.Info("Starting manual worker")
 
 	// Periodic metrics
 	mw.executeWithRecovery("manual metrics", func() {
@@ -89,14 +92,14 @@ func (mw *ManualWorker) loop() {
 	for {
 		select {
 		case <-ctx.Done():
-			mw.logger.Info("Manual worker stopped", "chain", mw.chain.GetName())
+			mw.logger.Info("Manual worker stopped")
 			return
 		default:
 		}
 
 		start, end, err := mw.mbs.GetNextRange(ctx, mw.chain.GetNetworkInternalCode())
 		if err != nil {
-			mw.logger.Error("GetNextRange failed", "err", err, "chain", mw.chain.GetName())
+			mw.logger.Error("GetNextRange failed", "err", err)
 			time.Sleep(time.Second)
 			continue
 		}
@@ -105,7 +108,6 @@ func (mw *ManualWorker) loop() {
 			count, _ := mw.mbs.CountRanges(ctx, mw.chain.GetNetworkInternalCode())
 			if emptyAttempts >= mw.config.MaxEmptyAttempts {
 				mw.logger.Info("No ranges to process, sleeping",
-					"chain", mw.chain.GetName(),
 					"sleep", mw.config.EmptySleep,
 					"queued_ranges", count,
 				)
@@ -127,14 +129,13 @@ func (mw *ManualWorker) loop() {
 
 func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 	mw.logger.Info("Processing range",
-		"chain", mw.chain.GetName(),
 		"start", start,
 		"end", end,
 	)
 
 	results, err := mw.chain.GetBlocks(ctx, start, end, false)
 	if err != nil {
-		mw.logger.Error("GetBlocks failed", "err", err, "chain", mw.chain.GetName())
+		mw.logger.Error("GetBlocks failed", "err", err)
 		time.Sleep(time.Second)
 		return
 	}
@@ -147,7 +148,6 @@ func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 	}
 
 	mw.logger.Info("Finished processing",
-		"chain", mw.chain.GetName(),
 		"start", start,
 		"end", end,
 		"lastSuccess", lastSuccess,
@@ -158,7 +158,7 @@ func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 	}
 	if lastSuccess >= end {
 		if err := mw.mbs.RemoveRange(ctx, mw.chain.GetNetworkInternalCode(), start, end); err != nil {
-			mw.logger.Error("RemoveRange failed", "err", err, "chain", mw.chain.GetName())
+			mw.logger.Error("RemoveRange failed", "err", err)
 		}
 	}
 }
@@ -166,7 +166,7 @@ func (mw *ManualWorker) handleRange(ctx context.Context, start, end uint64) {
 func (mw *ManualWorker) logMissingRangesMetric() {
 	ranges, err := mw.mbs.ListRanges(mw.ctx, mw.chain.GetNetworkInternalCode())
 	if err != nil {
-		mw.logger.Warn("ListRanges failed", "chain", mw.chain.GetName(), "err", err)
+		mw.logger.Warn("ListRanges failed", "err", err)
 		return
 	}
 
@@ -180,7 +180,6 @@ func (mw *ManualWorker) logMissingRangesMetric() {
 	}
 
 	mw.logger.Info("Missing block ranges status",
-		"chain", mw.chain.GetName(),
 		"status", status,
 		"missing_count", rangeCount,
 	)

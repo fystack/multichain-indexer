@@ -52,7 +52,7 @@ func (c *Client) GetSlot(ctx context.Context) (uint64, error) {
 
 func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTransactionResult, error) {
 	cfg := map[string]any{
-		"encoding":                       "jsonParsed",
+		"encoding":                       "json",
 		"maxSupportedTransactionVersion": MaxSupportedTransactionVersion,
 		"commitment":                     "finalized",
 	}
@@ -74,8 +74,10 @@ func (c *Client) GetTransaction(ctx context.Context, signature string) (*GetTran
 }
 
 func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, error) {
+	// json is smaller/faster than jsonParsed; parser handles it via account
+	// indices + base58 data + meta.loadedAddresses (see extractSolanaTransfers).
 	cfg := GetBlockConfig{
-		Encoding:                       "jsonParsed",
+		Encoding:                       "json",
 		TransactionDetails:             "full",
 		Rewards:                        false,
 		MaxSupportedTransactionVersion: MaxSupportedTransactionVersion,
@@ -106,4 +108,3 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 	}
 	return &out, nil
 }
-

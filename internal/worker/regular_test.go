@@ -168,6 +168,46 @@ func TestRegularWorkerProcessRegularBlocksMarksUnresolvedGapFailed(t *testing.T)
 	require.Equal(t, []uint64{100, 100}, chain.getBlockCalls)
 }
 
+func TestRegularWorkerProcessRegularBlocksSkipsSolanaSkippedSlot(t *testing.T) {
+	t.Parallel()
+
+	chain := &stubIndexer{
+		name:         "solana",
+		internalCode: "sol",
+		networkType:  enum.NetworkTypeSol,
+		latest:       102,
+		getBlocksFunc: func(context.Context, uint64, uint64, bool) ([]indexer.BlockResult, error) {
+			return []indexer.BlockResult{
+				{
+					Number: 100,
+					Block:  &types.Block{Number: 100, Hash: "h100", ParentHash: "h099"},
+				},
+				{
+					// Skipped slot: normal on Solana, must not be marked failed.
+					Number: 101,
+					Error:  &indexer.Error{ErrorType: indexer.ErrorTypeBlockNotFound, Message: "block not found (skipped slot?)"},
+				},
+				{
+					Number: 102,
+					Block:  &types.Block{Number: 102, Hash: "h102", ParentHash: "h101"},
+				},
+			}, nil
+		},
+	}
+	store := &stubBlockStore{}
+	rw := newTestRegularWorker(chain, store, 100, 3)
+
+	err := rw.processRegularBlocks()
+	require.NoError(t, err)
+	// currentBlock advances past the skipped slot to the next unindexed slot.
+	require.Equal(t, uint64(103), rw.currentBlock)
+	require.Equal(t, []uint64{102}, store.savedLatest)
+	// The skipped slot must NOT be persisted as a failed block.
+	require.Empty(t, store.failedBlocks)
+	// No single-block recovery is attempted for a skipped slot.
+	require.Empty(t, chain.getBlockCalls)
+}
+
 func TestBaseWorkerExecuteRecoverableConvertsPanicToError(t *testing.T) {
 	t.Parallel()
 
@@ -289,11 +329,13 @@ func TestRegularWorkerDetermineStartingBlockUsesConfirmedHead(t *testing.T) {
 
 	chain := &stubIndexer{name: "bsc", internalCode: "BSC_MAINNET", networkType: enum.NetworkTypeEVM, latest: 100}
 	store := &stubBlockStore{latestBlock: 80}
+	catchupStore := newFakeCatchupStore()
 	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.catchupStore = catchupStore
 	rw.config.Confirmations = 10
 
 	require.Equal(t, uint64(90), rw.determineStartingBlock())
-	require.Equal(t, []blockstore.CatchupRange{{Start: 81, End: 90, Current: 80}}, store.savedCatchupRanges)
+	require.Equal(t, map[string]uint64{"81-90": 80}, catchupStore.current)
 }
 
 func TestRegularWorkerDetermineStartingBlockDoesNotRewindPastCheckpoint(t *testing.T) {
@@ -301,11 +343,13 @@ func TestRegularWorkerDetermineStartingBlockDoesNotRewindPastCheckpoint(t *testi
 
 	chain := &stubIndexer{name: "bsc", internalCode: "BSC_MAINNET", networkType: enum.NetworkTypeEVM, latest: 100}
 	store := &stubBlockStore{latestBlock: 95}
+	catchupStore := newFakeCatchupStore()
 	rw := newTestRegularWorker(chain, store, 0, 2)
+	rw.catchupStore = catchupStore
 	rw.config.Confirmations = 10
 
 	require.Equal(t, uint64(95), rw.determineStartingBlock())
-	require.Empty(t, store.savedCatchupRanges)
+	require.Empty(t, catchupStore.current)
 }
 
 func TestRegularWorkerDetermineStartingBlockConfirmedHeadDoesNotUnderflow(t *testing.T) {
@@ -369,6 +413,7 @@ func TestCatchupWorkerUpdatesCatchupRegistryOnProgressAndCompletion(t *testing.T
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			chain:          &stubIndexer{name: "ethereum", internalCode: "ETH", networkType: enum.NetworkTypeEVM},
 			blockStore:     store,
+			catchupStore:   stubCatchupStore{},
 			statusRegistry: statusRegistry,
 		},
 		blockRanges: []blockstore.CatchupRange{{
@@ -408,13 +453,14 @@ func newTestRegularWorker(chain *stubIndexer, store *stubBlockStore, currentBloc
 
 	return &RegularWorker{
 		BaseWorker: &BaseWorker{
-			ctx:        context.Background(),
-			cancel:     func() {},
-			logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			config:     cfg,
-			chain:      chain,
-			blockStore: store,
-			failedChan: make(chan FailedBlockEvent, 1),
+			ctx:          context.Background(),
+			cancel:       func() {},
+			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			config:       cfg,
+			chain:        chain,
+			blockStore:   store,
+			catchupStore: stubCatchupStore{},
+			failedChan:   make(chan FailedBlockEvent, 1),
 		},
 		currentBlock: currentBlock,
 		blockHashes:  make([]blockstore.BlockHashEntry, 0, MaxBlockHashSize),
@@ -478,6 +524,19 @@ func (s *stubIndexer) GetBlocksByNumbers(context.Context, []uint64) ([]indexer.B
 func (s *stubIndexer) IsHealthy() bool {
 	return true
 }
+
+type stubCatchupStore struct{}
+
+func (stubCatchupStore) SaveRanges(context.Context, string, []blockstore.CatchupRange) error {
+	return nil
+}
+func (stubCatchupStore) SaveProgress(context.Context, string, uint64, uint64, uint64) error {
+	return nil
+}
+func (stubCatchupStore) GetProgress(context.Context, string) ([]blockstore.CatchupRange, error) {
+	return nil, nil
+}
+func (stubCatchupStore) DeleteRange(context.Context, string, uint64, uint64) error { return nil }
 
 type stubBlockStore struct {
 	mu                     sync.Mutex
@@ -616,6 +675,7 @@ func TestCatchupWorkerLoadCatchupProgressColdStartQueuesNothing(t *testing.T) {
 	// so no catchup range must be created (regression: issue #104 queued
 	// 1..head and re-indexed the whole chain).
 	store := &stubBlockStore{latestBlock: 0}
+	catchupStore := newFakeCatchupStore()
 	cw := &CatchupWorker{
 		BaseWorker: &BaseWorker{
 			ctx:            context.Background(),
@@ -623,12 +683,13 @@ func TestCatchupWorkerLoadCatchupProgressColdStartQueuesNothing(t *testing.T) {
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			chain:          &stubIndexer{name: "bsc", internalCode: "BSC", networkType: enum.NetworkTypeEVM, latest: 109195919},
 			blockStore:     store,
+			catchupStore:   catchupStore,
 			statusRegistry: status.NewRegistry(),
 		},
 	}
 
 	require.Empty(t, cw.loadCatchupProgress())
-	require.Empty(t, store.savedCatchupRanges)
+	require.Empty(t, catchupStore.current)
 }
 
 func TestCatchupWorkerLoadCatchupProgressResumeQueuesGap(t *testing.T) {
@@ -643,6 +704,7 @@ func TestCatchupWorkerLoadCatchupProgressResumeQueuesGap(t *testing.T) {
 			logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
 			chain:          &stubIndexer{name: "bsc", internalCode: "BSC", networkType: enum.NetworkTypeEVM, latest: 150},
 			blockStore:     store,
+			catchupStore:   newFakeCatchupStore(),
 			statusRegistry: status.NewRegistry(),
 		},
 	}

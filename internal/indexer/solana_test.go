@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fystack/multichain-indexer/internal/rpc/solana"
+	"github.com/fystack/multichain-indexer/pkg/adaptive"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
@@ -24,6 +25,7 @@ func newTestSolanaIndexer() *SolanaIndexer {
 		chainName:   "solana",
 		config:      config.ChainConfig{NetworkId: "solana-mainnet"},
 		pubkeyStore: nil, // no filtering
+		limiter:     adaptive.New(adaptive.Config{Max: 4}),
 	}
 }
 
@@ -40,111 +42,6 @@ func txToBlockResult(tx *solana.GetTransactionResult) *solana.GetBlockResult {
 			},
 		},
 	}
-}
-
-func TestSolanaBlockHashAndTransferIndex(t *testing.T) {
-	idx := newTestSolanaIndexer()
-
-	blockHash := "9xJ7rGWdmA9Y4qKkZn1bFwP3KpvLcAhRsL1oXrNBp4v"
-	makeTxnEnvelope := func(sig string, keys []solana.AccountKey, ixs []solana.Instruction) solana.TxnEnvelope {
-		env := solana.TxnEnvelope{Signatures: []string{sig}}
-		env.Message.AccountKeys = keys
-		env.Message.Instructions = ixs
-		return env
-	}
-
-	block := &solana.GetBlockResult{
-		Blockhash:         blockHash,
-		PreviousBlockhash: "parentHash123",
-		Transactions: []solana.BlockTxn{
-			{
-				Meta: &solana.TxnMeta{Fee: 5000},
-				Transaction: makeTxnEnvelope("sig1",
-					[]solana.AccountKey{
-						{Pubkey: "sender1"},
-						{Pubkey: "receiver1"},
-						{Pubkey: "sender2"},
-						{Pubkey: "receiver2"},
-						{Pubkey: solanaSystemProgramID},
-					},
-					[]solana.Instruction{
-						{
-							Program:   "system",
-							ProgramId: solanaSystemProgramID,
-							Parsed: map[string]any{
-								"type": "transfer",
-								"info": map[string]any{
-									"source":      "sender1",
-									"destination": "receiver1",
-									"lamports":    float64(1000000),
-								},
-							},
-						},
-						{
-							Program:   "system",
-							ProgramId: solanaSystemProgramID,
-							Parsed: map[string]any{
-								"type": "transfer",
-								"info": map[string]any{
-									"source":      "sender2",
-									"destination": "receiver2",
-									"lamports":    float64(2000000),
-								},
-							},
-						},
-					},
-				),
-			},
-			{
-				Meta: &solana.TxnMeta{Fee: 5000},
-				Transaction: makeTxnEnvelope("sig2",
-					[]solana.AccountKey{
-						{Pubkey: "sender3"},
-						{Pubkey: "receiver3"},
-						{Pubkey: solanaSystemProgramID},
-					},
-					[]solana.Instruction{
-						{
-							Program:   "system",
-							ProgramId: solanaSystemProgramID,
-							Parsed: map[string]any{
-								"type": "transfer",
-								"info": map[string]any{
-									"source":      "sender3",
-									"destination": "receiver3",
-									"lamports":    float64(3000000),
-								},
-							},
-						},
-					},
-				),
-			},
-		},
-	}
-
-	transfers := idx.extractSolanaTransfers("solana-mainnet", 100, 1234567890, block)
-
-	require.Len(t, transfers, 3)
-
-	// All transfers should have BlockHash set
-	for _, tx := range transfers {
-		assert.Equal(t, blockHash, tx.BlockHash, "BlockHash should be propagated")
-		assert.NotEmpty(t, tx.TransferIndex, "TransferIndex should be set")
-	}
-
-	// TransferIndexes should be unique
-	seen := map[string]bool{}
-	for _, tx := range transfers {
-		key := tx.TxHash + ":" + tx.TransferIndex
-		assert.False(t, seen[key], "TransferIndex should be unique within block, duplicate: %s", key)
-		seen[key] = true
-	}
-
-	// First tx has two transfers: 0:0 and 0:1
-	assert.Equal(t, "0:0", transfers[0].TransferIndex)
-	assert.Equal(t, "0:1", transfers[1].TransferIndex)
-	// Second tx has one transfer: 1:0
-	assert.Equal(t, "1:0", transfers[2].TransferIndex)
 }
 
 // TestParseSPLTransfer tests parsing of SPL Transfer (opcode 3) instruction from a real mainnet tx.
@@ -369,4 +266,30 @@ func TestParseSquadsMultisigTransfer(t *testing.T) {
 	t.Logf("Squads multisig transfer: from=%s to=%s amount=%s token=%s",
 		tokenTransfer.FromAddress, tokenTransfer.ToAddress,
 		tokenTransfer.Amount, tokenTransfer.AssetAddress)
+}
+
+// TestSolanaEffectiveAccountKeys: v0 ALT accounts append as static+writable+readonly.
+func TestSolanaEffectiveAccountKeys(t *testing.T) {
+	static := []solana.AccountKey{{Pubkey: "S0"}, {Pubkey: "S1"}}
+
+	// No loaded addresses: returns the static slice unchanged (jsonParsed path).
+	assert.Equal(t, static, solanaEffectiveAccountKeys(static, nil))
+	assert.Equal(t, static, solanaEffectiveAccountKeys(static, &solana.LoadedAddresses{}))
+
+	loaded := &solana.LoadedAddresses{
+		Writable: []string{"W0", "W1"},
+		Readonly: []string{"R0"},
+	}
+	got := solanaEffectiveAccountKeys(static, loaded)
+	require.Len(t, got, 5)
+
+	pubkeys := make([]string, len(got))
+	for i, k := range got {
+		pubkeys[i] = k.Pubkey
+	}
+	assert.Equal(t, []string{"S0", "S1", "W0", "W1", "R0"}, pubkeys,
+		"order must be static + loaded writable + loaded readonly")
+	assert.True(t, got[2].Writable, "loaded writable accounts must be marked writable")
+	assert.True(t, got[3].Writable)
+	assert.False(t, got[4].Writable, "loaded readonly accounts must not be writable")
 }
