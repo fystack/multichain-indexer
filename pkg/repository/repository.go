@@ -88,7 +88,7 @@ func (r *repository[T]) WrapError(ctx context.Context, err error) error {
 	// Filtering by an enum value the DB type does not define (22P02): no such
 	// rows exist, so treat it as an empty result rather than a hard error.
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == InvalidTextRepresentation {
+	if errors.As(err, &pgErr) && pgErr.Code == InvalidTextRepresentation && strings.Contains(pgErr.Message, "for enum") {
 		return nil
 	}
 

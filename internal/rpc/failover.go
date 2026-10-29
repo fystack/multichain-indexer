@@ -689,7 +689,7 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 		markUnhealthy bool
 	}{
 		{
-			patterns:      []string{"rate limit", "429", "too many requests"},
+			patterns:      []string{"rate limit", "too many requests", "http 429", "status 429", "status code 429", "error 429", "\"code\":429", "\"code\": 429"},
 			reason:        "rate_limit",
 			cooldown:      5 * time.Minute,
 			markUnhealthy: true,
@@ -701,7 +701,7 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 			markUnhealthy: true,
 		},
 		{
-			patterns:      []string{"forbidden", "403"},
+			patterns:      []string{"forbidden", "http 403", "status 403", "status code 403", "error 403", "\"code\":403", "\"code\": 403"},
 			reason:        "forbidden",
 			cooldown:      24 * time.Hour,
 			markUnhealthy: true,

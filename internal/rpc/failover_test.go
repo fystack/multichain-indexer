@@ -386,3 +386,16 @@ func TestExecuteCore_TransientGenericErrorsDoNotForceRotate(t *testing.T) {
 	metrics := f.GetMetrics()
 	assert.Equal(t, int64(0), metrics["provider_switches"])
 }
+
+func TestAnalyzeError_StatusCodesNotMatchedInsideNumbers(t *testing.T) {
+	f := NewFailover[*mockNetworkClient](nil)
+	cases := map[string]string{
+		"HTTP 429 Too Many Requests: slow down":                   "rate_limit",
+		"HTTP 403 Forbidden: bad key":                             "forbidden",
+		"getBlock RPC error: RPC error -32004: slot 342940312 ok": "generic_error",
+		"getBlock RPC error: RPC error -32004: slot 340312429":    "generic_error",
+	}
+	for msg, want := range cases {
+		assert.Equal(t, want, f.analyzeError(fmt.Errorf("%s", msg), time.Millisecond).Reason, msg)
+	}
+}
