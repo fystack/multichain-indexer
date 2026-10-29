@@ -128,9 +128,7 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 			if err := s.limiter.Acquire(egCtx); err != nil {
 				return err
 			}
-			fetchStart := time.Now()
 			b, err := s.fetchRawBlock(egCtx, slot)
-			s.limiter.Observe(time.Since(fetchStart), err == nil)
 			// Parsing is CPU-only; free the RPC slot before it.
 			s.limiter.Release()
 
@@ -147,7 +145,10 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 func (s *SolanaIndexer) fetchRawBlock(ctx context.Context, slot uint64) (*solana.GetBlockResult, error) {
 	var b *solana.GetBlockResult
 	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
+		attemptStart := time.Now()
 		blk, err := c.GetBlock(ctx, slot)
+		// Per attempt, so retry back-off sleeps are not mistaken for congestion.
+		s.limiter.Observe(time.Since(attemptStart), err == nil)
 		b = blk
 		return err
 	})
