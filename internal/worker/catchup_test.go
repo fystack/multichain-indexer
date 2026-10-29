@@ -2,17 +2,102 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/alicebob/miniredis/v2"
 	"github.com/fystack/multichain-indexer/internal/indexer"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
 	"github.com/fystack/multichain-indexer/pkg/common/types"
+	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/stretchr/testify/require"
 )
+
+// fakeCatchupStore is an in-memory catchupstore.Store for a single chain, with
+// deletion tracking so tests can assert a range was completed.
+type fakeCatchupStore struct {
+	mu      sync.Mutex
+	current map[string]uint64 // "start-end" -> current
+	deleted map[string]bool
+}
+
+func newFakeCatchupStore() *fakeCatchupStore {
+	return &fakeCatchupStore{current: map[string]uint64{}, deleted: map[string]bool{}}
+}
+
+func fakeCatchupField(start, end uint64) string {
+	return fmt.Sprintf("%d-%d", start, end)
+}
+
+func (f *fakeCatchupStore) SaveRanges(
+	_ context.Context,
+	_ string,
+	ranges []blockstore.CatchupRange,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range ranges {
+		if r.Start == 0 || r.End < r.Start {
+			continue
+		}
+		f.current[fakeCatchupField(r.Start, r.End)] = r.Current
+	}
+	return nil
+}
+
+func (f *fakeCatchupStore) SaveProgress(
+	_ context.Context,
+	_ string,
+	start, end, current uint64,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.current[fakeCatchupField(start, end)] = current
+	return nil
+}
+
+func (f *fakeCatchupStore) GetProgress(
+	_ context.Context,
+	_ string,
+) ([]blockstore.CatchupRange, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ranges := make([]blockstore.CatchupRange, 0, len(f.current))
+	for field, current := range f.current {
+		var start, end uint64
+		if _, err := fmt.Sscanf(field, "%d-%d", &start, &end); err != nil {
+			continue
+		}
+		ranges = append(ranges, blockstore.CatchupRange{Start: start, End: end, Current: current})
+	}
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Start < ranges[j].Start })
+	return ranges, nil
+}
+
+func (f *fakeCatchupStore) DeleteRange(
+	_ context.Context,
+	_ string,
+	start, end uint64,
+) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.current, fakeCatchupField(start, end))
+	f.deleted[fakeCatchupField(start, end)] = true
+	return nil
+}
+
+func (f *fakeCatchupStore) hasDeleted(start, end uint64) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deleted[fakeCatchupField(start, end)]
+}
 
 // newTestCatchupWorker builds a CatchupWorker wired to the given stubs with a
 // short idle interval so the keep-alive loop can be exercised quickly.
@@ -20,18 +105,20 @@ func newTestCatchupWorker(
 	ctx context.Context,
 	chain *stubIndexer,
 	store *stubBlockStore,
+	catchupStore catchupstore.Store,
 ) *CatchupWorker {
 	cfg := testChainConfig()
 	return &CatchupWorker{
 		BaseWorker: &BaseWorker{
-			ctx:        ctx,
-			cancel:     func() {},
-			logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-			config:     cfg,
-			chain:      chain,
-			blockStore: store,
-			emitter:    &captureEmitter{},
-			failedChan: make(chan FailedBlockEvent, 8),
+			ctx:          ctx,
+			cancel:       func() {},
+			logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+			config:       cfg,
+			chain:        chain,
+			blockStore:   store,
+			catchupStore: catchupStore,
+			emitter:      &captureEmitter{},
+			failedChan:   make(chan FailedBlockEvent, 8),
 		},
 		workerPool:   make(chan struct{}, CATCHUP_WORKERS),
 		idleInterval: 5 * time.Millisecond,
@@ -66,11 +153,12 @@ func TestCatchupWorkerPicksUpRangesQueuedAfterDrain(t *testing.T) {
 	}
 	// Start with no ranges: the loop immediately drains and goes idle.
 	store := &stubBlockStore{latestBlock: 1000}
+	catchupStore := newFakeCatchupStore()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cw := newTestCatchupWorker(ctx, chain, store)
+	cw := newTestCatchupWorker(ctx, chain, store, catchupStore)
 
 	done := make(chan struct{})
 	go func() {
@@ -81,11 +169,11 @@ func TestCatchupWorkerPicksUpRangesQueuedAfterDrain(t *testing.T) {
 	// Simulate the regular worker queuing a catchup range at runtime, after the
 	// catchup loop has already drained and gone idle.
 	time.Sleep(20 * time.Millisecond)
-	require.NoError(t, store.SaveCatchupProgress("BSC_MAINNET", 100, 105, 99))
+	require.NoError(t, catchupStore.SaveProgress(ctx, "BSC_MAINNET", 100, 105, 99))
 
 	// The idle loop should pick it up and complete (delete) it.
 	require.Eventually(t, func() bool {
-		return store.hasDeleted(100, 105)
+		return catchupStore.hasDeleted(100, 105)
 	}, time.Second, 5*time.Millisecond, "queued range was not processed by the keep-alive loop")
 
 	// The loop must still be running (did not exit on drain).
@@ -113,10 +201,71 @@ func TestCatchupWorkerLoadProgressStopsAtConfirmedHead(t *testing.T) {
 		latest:       100,
 	}
 	store := &stubBlockStore{latestBlock: 80}
-	cw := newTestCatchupWorker(context.Background(), chain, store)
+	catchupStore := newFakeCatchupStore()
+	cw := newTestCatchupWorker(context.Background(), chain, store, catchupStore)
 	cw.config.Confirmations = 10
 
 	ranges := cw.loadCatchupProgress()
 	require.Equal(t, []blockstore.CatchupRange{{Start: 81, End: 90, Current: 80}}, ranges)
-	require.Equal(t, ranges, store.savedCatchupRanges)
+	require.Equal(t, map[string]uint64{"81-90": 80}, catchupStore.current)
+}
+
+// Regression: the Redis store used to merge adjacent split chunks into one
+// field the workers never address, so after the chunks drained the merged
+// range was reloaded and the whole gap was indexed a second time.
+func TestCatchupWorkerIndexesSplitGapOnceWithRedisStore(t *testing.T) {
+	t.Parallel()
+	initTestLogger() // NewRedisClient logs via the global logger
+
+	mr := miniredis.RunT(t)
+	rc, err := infra.NewRedisClient(mr.Addr(), "", "test", false)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = rc.Close() })
+	catchupStore := catchupstore.New(rc, nil)
+
+	var mu sync.Mutex
+	fetched := map[uint64]int{}
+	chain := &stubIndexer{
+		name:         "bsc",
+		internalCode: "BSC_MAINNET",
+		networkType:  enum.NetworkTypeEVM,
+		latest:       1100,
+		getBlocksFunc: func(ctx context.Context, from, to uint64, p bool) ([]indexer.BlockResult, error) {
+			mu.Lock()
+			for n := from; n <= to; n++ {
+				fetched[n]++
+			}
+			mu.Unlock()
+			return allBlocksOK(ctx, from, to, p)
+		},
+	}
+	store := &stubBlockStore{latestBlock: 1000}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cw := newTestCatchupWorker(ctx, chain, store, catchupStore)
+	cw.blockRanges = cw.loadCatchupProgress()
+	require.Len(t, cw.blockRanges, 5)
+
+	done := make(chan struct{})
+	go func() {
+		cw.runCatchup()
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		left, err := catchupStore.GetProgress(ctx, "BSC_MAINNET")
+		return err == nil && len(left) == 0
+	}, 2*time.Second, 5*time.Millisecond, "catchup ranges were not drained")
+
+	// Give the idle loop a few reloads to pick up anything left behind.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	for n := uint64(1001); n <= 1100; n++ {
+		require.Equalf(t, 1, fetched[n], "block %d fetched %d times", n, fetched[n])
+	}
 }

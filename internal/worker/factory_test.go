@@ -118,8 +118,8 @@ func TestRescannerFailedChannelIsolationByChain(t *testing.T) {
 	chA := make(chan FailedBlockEvent, 1)
 	chB := make(chan FailedBlockEvent, 1)
 
-	rwA := NewRescannerWorker(ctx, chainA, testChainConfig(), noopKVStore{}, &stubBlockStore{}, events.Emitter(nil), nil, chA, nil)
-	rwB := NewRescannerWorker(ctx, chainB, testChainConfig(), noopKVStore{}, &stubBlockStore{}, events.Emitter(nil), nil, chB, nil)
+	rwA := NewRescannerWorker(ctx, chainA, testChainConfig(), noopKVStore{}, &stubBlockStore{}, nil, events.Emitter(nil), nil, chA, nil)
+	rwB := NewRescannerWorker(ctx, chainB, testChainConfig(), noopKVStore{}, &stubBlockStore{}, nil, events.Emitter(nil), nil, chB, nil)
 
 	doneA := make(chan struct{})
 	doneB := make(chan struct{})
@@ -172,12 +172,17 @@ func TestCreateManagerWithWorkersBootstrapsCatchupRangesIntoStatusRegistry(t *te
 		},
 	}
 
+	// Legacy one-key-per-range catchup state in the KV store; the manager should
+	// lazily migrate it into the Redis hash and bootstrap the status registry.
 	kv := &listKVStore{
 		pairs: []*infra.KVPair{{
 			Key:   fmt.Sprintf("%s/%s/%s/%d-%d", blockstore.BlockStates, "a", constant.KVPrefixProgressCatchup, 1, 20),
 			Value: []byte("10"),
 		}},
 	}
+
+	redisClient := dialTestRedis(t)
+	flushCatchupKeys(t, redisClient, "a")
 
 	manager := CreateManagerWithWorkers(
 		context.Background(),
@@ -186,7 +191,7 @@ func TestCreateManagerWithWorkersBootstrapsCatchupRangesIntoStatusRegistry(t *te
 		nil,
 		nil,
 		events.Emitter(nil),
-		nil,
+		redisClient,
 		ManagerConfig{
 			Chains: []string{"chain-a"},
 		},
@@ -196,6 +201,30 @@ func TestCreateManagerWithWorkersBootstrapsCatchupRangesIntoStatusRegistry(t *te
 	require.Len(t, resp.Networks, 1)
 	require.Equal(t, 1, resp.Networks[0].CatchupRanges)
 	require.Equal(t, uint64(10), resp.Networks[0].CatchupPendingBlocks)
+}
+
+// dialTestRedis connects to a local Redis, skipping the test when unavailable.
+func dialTestRedis(t *testing.T) infra.RedisClient {
+	t.Helper()
+	rc, err := infra.NewRedisClient("localhost:6379", "", "test", false)
+	if err != nil {
+		t.Skip("Redis not available, skipping test")
+	}
+	if err := rc.GetClient().Ping(context.Background()).Err(); err != nil {
+		t.Skip("Redis not available, skipping test")
+	}
+	t.Cleanup(func() { _ = rc.Close() })
+	return rc
+}
+
+func flushCatchupKeys(t *testing.T, rc infra.RedisClient, chain string) {
+	t.Helper()
+	ctx := context.Background()
+	keys := []string{"catchup_progress:" + chain, "catchup_migrated:" + chain}
+	if err := rc.GetClient().Del(ctx, keys...).Err(); err != nil {
+		t.Fatalf("flush catchup keys: %v", err)
+	}
+	t.Cleanup(func() { _ = rc.GetClient().Del(ctx, keys...).Err() })
 }
 
 type noopKVStore struct{}
