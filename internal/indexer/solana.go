@@ -431,7 +431,7 @@ func solanaApplyTransferFees(transfers []solanaTransfer, tokenAccounts map[strin
 		net := t.amount
 		switch dst := tokenAccounts[t.dstTokenAcc]; {
 		case t.feeKnown:
-			if t.fee < t.amount {
+			if t.fee <= t.amount {
 				net = t.amount - t.fee
 			}
 		case touches[t.dstTokenAcc] != 1 || !dst.hasPost || dst.badBalance || dst.post <= dst.pre:

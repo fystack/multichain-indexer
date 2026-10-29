@@ -338,6 +338,36 @@ func TestSolanaToken2022TransferFees(t *testing.T) {
 			ixs:     []solana.Instruction{solTransferChecked(1, 100), solTransferChecked(5, 100)},
 			amounts: []string{"98", "97"}, sourceAmount: []string{"100", "100"},
 		},
+		{
+			name:    "a fee equal to the amount nets to zero",
+			program: solanaToken2022ProgramID,
+			pre:     bal{srcPre},
+			post:    bal{solBalance(0, "ownerX", "900"), solBalance(1, "ownerY", "0")},
+			ixs: []solana.Instruction{{
+				ProgramIdIndex: 3, Accounts: []int{0, 2, 1, 4},
+				Data: solTokenData([]byte{26, 1}, 100, append([]byte{6}, le64(100)...)...),
+			}},
+			amounts: []string{"0"}, sourceAmount: []string{"100"},
+		},
+		{
+			name:    "destination closed in the tx keeps the gross amount",
+			program: solanaToken2022ProgramID,
+			pre:     bal{srcPre, solBalance(1, "ownerY", "0")},
+			post:    bal{solBalance(0, "ownerX", "900")},
+			ixs:     []solana.Instruction{solTransferChecked(1, 100)},
+			amounts: []string{"100"}, sourceAmount: []string{""},
+		},
+		{
+			name:    "a recipient that is also a source keeps the gross amount",
+			program: solanaToken2022ProgramID,
+			pre:     bal{srcPre, solBalance(1, "ownerY", "0")},
+			post:    bal{solBalance(0, "ownerX", "900"), solBalance(1, "ownerY", "50"), solBalance(5, "ownerY", "48")},
+			ixs: []solana.Instruction{
+				solTransferChecked(1, 100),
+				{ProgramIdIndex: 3, Accounts: []int{1, 2, 5, 4}, Data: solTokenData([]byte{12}, 50, 6)},
+			},
+			amounts: []string{"100", "48"}, sourceAmount: []string{"", "50"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -382,4 +412,19 @@ func TestSolanaFeeTransferAmountByDirection(t *testing.T) {
 
 func le64(v uint64) []byte {
 	return binary.LittleEndian.AppendUint64(nil, v)
+}
+
+func TestSolanaInnerInstructionIndexOutOfRange(t *testing.T) {
+	pre := []solana.TokenBalance{solBalance(0, "ownerX", "1000")}
+	post := []solana.TokenBalance{solBalance(0, "ownerX", "900"), solBalance(1, "ownerY", "100")}
+	block := solFeeBlock(solanaTokenProgramID, pre, post, solTransferChecked(1, 100))
+	block.Transactions[0].Meta.InnerInstructions = []solana.InnerInstruction{{
+		Index:        99,
+		Instructions: []solana.Instruction{solTransferChecked(5, 1)},
+	}}
+
+	got := newSolanaParseIndexer(nil, false).extractSolanaTransfers("solana-mainnet", 1, 0, block)
+	require.Len(t, got, 1)
+	assert.Equal(t, "0", got[0].TransferIndex)
+	assert.Equal(t, "100", got[0].Amount)
 }
