@@ -2,6 +2,7 @@ package kvstore
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -153,7 +154,7 @@ func (b *BadgerStore) List(prefix string) ([]*infra.KVPair, error) {
 				return err
 			}
 			result = append(result, &infra.KVPair{
-				Key:   string(k),
+				Key:   strings.TrimPrefix(string(k), b.prefix+"/"),
 				Value: v,
 			})
 		}

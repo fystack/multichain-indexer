@@ -144,7 +144,9 @@ func (bs *blockStore) SaveFailedBlock(chainName string, blockNumber uint64) erro
 
 	key := failedBlocksKey(chainName)
 	var blocks []uint64
-	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
+	if _, err := bs.store.GetAny(key, &blocks); err != nil && !errors.Is(err, kvstore.ErrKeyNotFound) {
+		return err
+	}
 
 	// dedup
 	found := slices.Contains(blocks, blockNumber)
@@ -169,7 +171,9 @@ func (bs *blockStore) SaveFailedBlocks(chainName string, blocksToAdd []uint64) e
 
 	key := failedBlocksKey(chainName)
 	var blocks []uint64
-	_, _ = bs.store.GetAny(key, &blocks) // ignore not found
+	if _, err := bs.store.GetAny(key, &blocks); err != nil && !errors.Is(err, kvstore.ErrKeyNotFound) {
+		return err
+	}
 
 	// merge + dedup
 	for _, b := range blocksToAdd {
