@@ -121,6 +121,10 @@ func (t *TronIndexer) processBlock(
 		Transactions: make([]types.Transaction, 0, len(tronBlock.Transactions)),
 	}
 
+	if err := verifyReceiptsBelongToBlock(tronBlock, txns); err != nil {
+		return nil, err
+	}
+
 	// Index TxnInfo by ID
 	infoByID := make(map[string]*tron.TxnInfo, len(txns))
 	for _, ti := range txns {
@@ -138,12 +142,14 @@ func (t *TronIndexer) processBlock(
 			continue
 		}
 		transfers := make([]types.Transaction, 0, len(ti.Log))
-		for _, log := range ti.Log {
+		for logIndex, log := range ti.Log {
 			parsed, err := log.ParseTRC20Transfers(
 				ti.ID,
 				networkId,
+				tronBlock.BlockID,
 				uint64(ti.BlockNumber),
 				tron.ConvertTronTimestamp(ti.BlockTimestamp),
+				logIndex,
 			)
 			if err == nil && len(parsed) > 0 {
 				for _, p := range parsed {
@@ -179,7 +185,7 @@ func (t *TronIndexer) processBlock(
 			fee = ti.TotalFeeTRX()
 		}
 
-		for _, contract := range rawTx.RawData.Contract {
+		for contractIndex, contract := range rawTx.RawData.Contract {
 			var tr *types.Transaction
 			var err error
 
@@ -188,30 +194,34 @@ func (t *TronIndexer) processBlock(
 				var transfer tron.TransferContract
 				if err = json.Unmarshal(contract.Parameter.Value, &transfer); err == nil {
 					tr = &types.Transaction{
-						TxHash:       rawTx.TxID,
-						NetworkId:    networkId,
-						BlockNumber:  blkNum,
-						FromAddress:  tron.HexToTronAddress(transfer.OwnerAddress),
-						ToAddress:    tron.HexToTronAddress(transfer.ToAddress),
-						AssetAddress: "",
-						Amount:       decimal.NewFromInt(transfer.Amount).String(),
-						Type:         constant.TxTypeNativeTransfer,
-						Timestamp:    ts,
+						TxHash:        rawTx.TxID,
+						NetworkId:     networkId,
+						BlockNumber:   blkNum,
+						BlockHash:     tronBlock.BlockID,
+						TransferIndex: tron.ContractTransferIndex(contractIndex),
+						FromAddress:   tron.HexToTronAddress(transfer.OwnerAddress),
+						ToAddress:     tron.HexToTronAddress(transfer.ToAddress),
+						AssetAddress:  "",
+						Amount:        decimal.NewFromInt(transfer.Amount).String(),
+						Type:          constant.TxTypeNativeTransfer,
+						Timestamp:     ts,
 					}
 				}
 			case tron.ContractTypeTransferAsset:
 				var asset tron.TransferAssetContract
 				if err = json.Unmarshal(contract.Parameter.Value, &asset); err == nil {
 					tr = &types.Transaction{
-						TxHash:       rawTx.TxID,
-						NetworkId:    networkId,
-						BlockNumber:  blkNum,
-						FromAddress:  tron.HexToTronAddress(asset.OwnerAddress),
-						ToAddress:    tron.HexToTronAddress(asset.ToAddress),
-						AssetAddress: asset.AssetName,
-						Amount:       decimal.NewFromInt(asset.Amount).String(),
-						Type:         constant.TxTypeTokenTransfer,
-						Timestamp:    ts,
+						TxHash:        rawTx.TxID,
+						NetworkId:     networkId,
+						BlockNumber:   blkNum,
+						BlockHash:     tronBlock.BlockID,
+						TransferIndex: tron.ContractTransferIndex(contractIndex),
+						FromAddress:   tron.HexToTronAddress(asset.OwnerAddress),
+						ToAddress:     tron.HexToTronAddress(asset.ToAddress),
+						AssetAddress:  asset.AssetName,
+						Amount:        decimal.NewFromInt(asset.Amount).String(),
+						Type:          constant.TxTypeTokenTransfer,
+						Timestamp:     ts,
 					}
 				}
 			}
@@ -232,6 +242,27 @@ func (t *TronIndexer) processBlock(
 	}
 
 	return block, nil
+}
+
+// getblock and the receipts call can be served by different nodes or straddle a reorg.
+func verifyReceiptsBelongToBlock(tronBlock *tron.Block, txns []*tron.TxnInfo) error {
+	blockNum := tronBlock.BlockHeader.RawData.Number
+	blockTxIDs := make(map[string]struct{}, len(tronBlock.Transactions))
+	for _, tx := range tronBlock.Transactions {
+		blockTxIDs[tx.TxID] = struct{}{}
+	}
+	for _, ti := range txns {
+		if ti == nil {
+			continue
+		}
+		if ti.BlockNumber != blockNum {
+			return fmt.Errorf("tron block %d (%s): receipt %s is for block %d", blockNum, tronBlock.BlockID, ti.ID, ti.BlockNumber)
+		}
+		if _, ok := blockTxIDs[ti.ID]; !ok {
+			return fmt.Errorf("tron block %d (%s): receipt %s not in block", blockNum, tronBlock.BlockID, ti.ID)
+		}
+	}
+	return nil
 }
 
 func (t *TronIndexer) GetBlocks(

@@ -32,14 +32,14 @@ func (tx *Txn) IsSuccessful() bool {
 }
 
 // ExtractTransfers collects transfers from txn + receipt info
-func (tx *Txn) ExtractTransfers(network string, info *TxnInfo, ts uint64) []types.Transaction {
+func (tx *Txn) ExtractTransfers(network, blockHash string, info *TxnInfo, ts uint64) []types.Transaction {
 	var out []types.Transaction
 	if info == nil {
 		return out
 	}
 	// fees handled at indexer level
-	for _, log := range info.Log {
-		if transfers, _ := log.ParseTRC20Transfers(tx.TxID, network, uint64(info.BlockNumber), ts); transfers != nil {
+	for logIndex, log := range info.Log {
+		if transfers, _ := log.ParseTRC20Transfers(tx.TxID, network, blockHash, uint64(info.BlockNumber), ts, logIndex); transfers != nil {
 			out = append(out, transfers...)
 		}
 	}
