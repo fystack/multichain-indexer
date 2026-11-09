@@ -17,6 +17,7 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/retry"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
+	"github.com/fystack/multichain-indexer/pkg/store/catchupstore"
 	"github.com/fystack/multichain-indexer/pkg/store/pubkeystore"
 )
 
@@ -44,6 +45,7 @@ type BaseWorker struct {
 	chain          indexer.Indexer
 	kvstore        infra.KVStore
 	blockStore     blockstore.Store
+	catchupStore   catchupstore.Store
 	pubkeyStore    pubkeystore.Store
 	emitter        events.Emitter
 	failedChan     chan FailedBlockEvent
@@ -74,6 +76,7 @@ func newWorkerWithMode(
 	cfg config.ChainConfig,
 	kv infra.KVStore,
 	blockStore blockstore.Store,
+	catchupStore catchupstore.Store,
 	emitter events.Emitter,
 	pubkeyStore pubkeystore.Store,
 	mode WorkerMode,
@@ -95,6 +98,7 @@ func newWorkerWithMode(
 		chain:          chain,
 		kvstore:        kv,
 		blockStore:     blockStore,
+		catchupStore:   catchupStore,
 		pubkeyStore:    pubkeyStore,
 		emitter:        emitter,
 		failedChan:     failedChan,
