@@ -3,6 +3,7 @@ package indexer
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -61,20 +62,6 @@ func (s *SolanaIndexer) GetName() string                  { return strings.ToUpp
 func (s *SolanaIndexer) GetNetworkType() enum.NetworkType { return enum.NetworkTypeSol }
 func (s *SolanaIndexer) GetNetworkInternalCode() string   { return s.config.InternalCode }
 
-func (s *SolanaIndexer) isMonitoredTransfer(from, to string) bool {
-	if s.pubkeyStore == nil {
-		return true
-	}
-
-	if to != "" && s.pubkeyStore.Exist(enum.NetworkTypeSol, to) {
-		return true
-	}
-
-	return s.config.TwoWayIndexing &&
-		from != "" &&
-		s.pubkeyStore.Exist(enum.NetworkTypeSol, from)
-}
-
 func (s *SolanaIndexer) GetLatestBlockNumber(ctx context.Context) (uint64, error) {
 	var slot uint64
 	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
@@ -123,45 +110,8 @@ func (s *SolanaIndexer) GetBlocks(ctx context.Context, from, to uint64, isParall
 func (s *SolanaIndexer) getBlocksByNumbersSequential(ctx context.Context, blockNumbers []uint64) ([]BlockResult, error) {
 	results := make([]BlockResult, 0, len(blockNumbers))
 	for _, slot := range blockNumbers {
-		slot := slot
-		var b *solana.GetBlockResult
-		err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
-			blk, err := c.GetBlock(ctx, slot)
-			b = blk
-			return err
-		})
-		if err != nil {
-			results = append(results, BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()}})
-			continue
-		}
-		if b == nil {
-			results = append(results, BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeBlockNotFound, Message: "block not found (skipped slot?)"}})
-			continue
-		}
-
-		timestamp := uint64(0)
-		if b.BlockTime != nil {
-			timestamp = uint64(*b.BlockTime)
-		} else {
-			timestamp = uint64(time.Now().UTC().Unix())
-		}
-		logger.Debug("[SOLANA] fetched block",
-			"chain", s.chainName,
-			"slot", slot,
-			"txs", len(b.Transactions),
-			"blockhash", b.Blockhash,
-			"parent", b.PreviousBlockhash,
-		)
-
-		txs := s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b)
-		block := &types.Block{
-			Number:       slot,
-			Hash:         b.Blockhash,
-			ParentHash:   b.PreviousBlockhash,
-			Timestamp:    timestamp,
-			Transactions: txs,
-		}
-		results = append(results, BlockResult{Number: slot, Block: block})
+		b, err := s.fetchRawBlock(ctx, slot)
+		results = append(results, s.toBlockResult(slot, b, err))
 	}
 	return results, nil
 }
@@ -172,74 +122,65 @@ func (s *SolanaIndexer) GetBlocksByNumbers(ctx context.Context, blockNumbers []u
 	}
 
 	results := make([]BlockResult, len(blockNumbers))
-
 	eg, egCtx := errgroup.WithContext(ctx)
-
 	for i, slot := range blockNumbers {
-		i := i
-		slot := slot
 		eg.Go(func() error {
 			if err := s.limiter.Acquire(egCtx); err != nil {
 				return err
 			}
-			defer s.limiter.Release()
-
-			var (
-				b    *solana.GetBlockResult
-				berr error
-			)
 			fetchStart := time.Now()
-			berr = s.failover.ExecuteWithRetry(egCtx, func(c solana.SolanaAPI) error {
-				blk, err := c.GetBlock(egCtx, slot)
-				b = blk
-				return err
-			})
-			s.limiter.Observe(time.Since(fetchStart), berr == nil)
+			b, err := s.fetchRawBlock(egCtx, slot)
+			s.limiter.Observe(time.Since(fetchStart), err == nil)
+			// Parsing is CPU-only; free the RPC slot before it.
+			s.limiter.Release()
 
-			if berr != nil {
-				results[i] = BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: berr.Error()}}
-				return nil
-			}
-			if b == nil {
-				results[i] = BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeBlockNotFound, Message: "block not found (skipped slot?)"}}
-				return nil
-			}
-
-			timestamp := uint64(0)
-			if b.BlockTime != nil {
-				timestamp = uint64(*b.BlockTime)
-			} else {
-				timestamp = uint64(time.Now().UTC().Unix())
-			}
-			logger.Debug("[SOLANA] fetched block",
-				"chain", s.chainName,
-				"slot", slot,
-				"txs", len(b.Transactions),
-				"blockhash", b.Blockhash,
-				"parent", b.PreviousBlockhash,
-			)
-
-			txs := s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b)
-			block := &types.Block{
-				Number:       slot,
-				Hash:         b.Blockhash,
-				ParentHash:   b.PreviousBlockhash,
-				Timestamp:    timestamp,
-				Transactions: txs,
-			}
-			results[i] = BlockResult{Number: slot, Block: block}
+			results[i] = s.toBlockResult(slot, b, err)
 			return nil
 		})
 	}
-
 	if err := eg.Wait(); err != nil {
-		if err == context.Canceled || err == context.DeadlineExceeded {
-			return nil, err
-		}
 		return nil, err
 	}
-
 	return results, nil
+}
+
+func (s *SolanaIndexer) fetchRawBlock(ctx context.Context, slot uint64) (*solana.GetBlockResult, error) {
+	var b *solana.GetBlockResult
+	err := s.failover.ExecuteWithRetry(ctx, func(c solana.SolanaAPI) error {
+		blk, err := c.GetBlock(ctx, slot)
+		b = blk
+		return err
+	})
+	return b, err
+}
+
+func (s *SolanaIndexer) toBlockResult(slot uint64, b *solana.GetBlockResult, err error) BlockResult {
+	if err != nil {
+		return BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()}}
+	}
+	if b == nil {
+		return BlockResult{Number: slot, Error: &Error{ErrorType: ErrorTypeBlockNotFound, Message: "block not found (skipped slot?)"}}
+	}
+
+	timestamp := uint64(time.Now().UTC().Unix())
+	if b.BlockTime != nil {
+		timestamp = uint64(*b.BlockTime)
+	}
+	logger.Debug("[SOLANA] fetched block",
+		"chain", s.chainName,
+		"slot", slot,
+		"txs", len(b.Transactions),
+		"blockhash", b.Blockhash,
+		"parent", b.PreviousBlockhash,
+	)
+
+	return BlockResult{Number: slot, Block: &types.Block{
+		Number:       slot,
+		Hash:         b.Blockhash,
+		ParentHash:   b.PreviousBlockhash,
+		Timestamp:    timestamp,
+		Transactions: s.extractSolanaTransfers(s.config.NetworkId, slot, timestamp, b),
+	}}
 }
 
 func (s *SolanaIndexer) IsHealthy() bool {
@@ -249,234 +190,157 @@ func (s *SolanaIndexer) IsHealthy() bool {
 	return err == nil
 }
 
-const solanaSystemProgramID = "11111111111111111111111111111111"
-const solanaTokenProgramID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-const solanaToken2022ProgramID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+const (
+	solanaSystemProgramID    = "11111111111111111111111111111111"
+	solanaTokenProgramID     = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+	solanaToken2022ProgramID = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+)
 
-func solanaInstructionAccountsToIndices(a any, accountKeys []solana.AccountKey) []int {
-	switch v := a.(type) {
-	case []any:
-		out := make([]int, 0, len(v))
-		for _, it := range v {
-			switch n := it.(type) {
-			case float64:
-				out = append(out, int(n))
-			case int:
-				out = append(out, n)
-			case uint64:
-				out = append(out, int(n))
-			}
-		}
-		return out
-	case []uint64:
-		out := make([]int, 0, len(v))
-		for _, n := range v {
-			out = append(out, int(n))
-		}
-		return out
-	case []int:
-		return v
-	case []string:
-		idxByPubkey := make(map[string]int, len(accountKeys))
-		for i := range accountKeys {
-			idxByPubkey[accountKeys[i].Pubkey] = i
-		}
-		out := make([]int, 0, len(v))
-		for _, pk := range v {
-			if i, ok := idxByPubkey[pk]; ok {
-				out = append(out, i)
-			} else {
-				return nil
-			}
-		}
-		return out
+const (
+	solanaSystemTransfer             = 2
+	solanaSystemWithdrawNonceAccount = 5
+	solanaSystemTransferWithSeed     = 11
+
+	solanaTokenTransfer             = 3
+	solanaTokenTransferChecked      = 12
+	solanaTokenTransferFeeExtension = 26
+	// Sub-instruction (data[1]) of the Token-2022 TransferFee extension.
+	solanaTransferCheckedWithFee = 1
+)
+
+// System instructions that pay lamports to another account, mapped to the recipient's position
+// in the instruction's account list (the payer is always position 0). CreateAccount and friends
+// also move lamports but fund a brand-new account, not a wallet.
+var solanaSystemTransferRecipient = map[uint32]int{
+	solanaSystemTransfer:             1,
+	solanaSystemWithdrawNonceAccount: 1,
+	solanaSystemTransferWithSeed:     2,
+}
+
+var errSolanaNotTransfer = errors.New("not a transfer")
+
+// solanaInstructionTransfer is one transfer as the instruction states it: wallets for native
+// transfers, token accounts for SPL transfers. mint is set only when the instruction names it.
+type solanaInstructionTransfer struct {
+	native    bool
+	token2022 bool
+	from, to  string
+	mint      string
+	amount    uint64
+	// fee is the withheld fee TransferCheckedWithFee states; feeKnown is false for every other instruction.
+	fee      uint64
+	feeKnown bool
+}
+
+// solanaParseInstruction returns errSolanaNotTransfer for anything that is not a native or token
+// transfer, and another error for a System/Token instruction too malformed to read.
+func solanaParseInstruction(ix solana.Instruction, keys []solana.AccountKey) (solanaInstructionTransfer, error) {
+	if ix.ProgramIdIndex < 0 || ix.ProgramIdIndex >= len(keys) {
+		return solanaInstructionTransfer{}, fmt.Errorf("program index %d out of range (%d keys)", ix.ProgramIdIndex, len(keys))
+	}
+	switch keys[ix.ProgramIdIndex].Pubkey {
+	case solanaSystemProgramID:
+		return solanaParseSystemTransfer(ix, keys)
+	case solanaTokenProgramID:
+		return solanaParseTokenTransfer(ix, keys)
+	case solanaToken2022ProgramID:
+		t, err := solanaParseTokenTransfer(ix, keys)
+		t.token2022 = true
+		return t, err
 	default:
-		return nil
+		return solanaInstructionTransfer{}, errSolanaNotTransfer
 	}
 }
 
-func solanaDecodeIxDataBase58(s string) ([]byte, error) {
-	if s == "" {
-		return nil, nil
-	}
-	return base58.Decode(s)
-}
-
-func solanaParseSystemTransfer(ix solana.Instruction, accountKeys []solana.AccountKey) (from string, to string, lamports uint64, ok bool) {
-	// Prefer jsonParsed format
-	// Example:
-	// { program:"system", programId:"111...", parsed:{ type:"transfer", info:{ source:"..", destination:"..", lamports:123 } } }
-	if ix.ProgramId == solanaSystemProgramID || ix.Program == "system" {
-		if p, _ := ix.Parsed.(map[string]any); p != nil {
-			if t, _ := p["type"].(string); t == "transfer" {
-				if info, _ := p["info"].(map[string]any); info != nil {
-					src, _ := info["source"].(string)
-					dst, _ := info["destination"].(string)
-					var amt uint64
-					switch v := info["lamports"].(type) {
-					case float64:
-						amt = uint64(v)
-					case int:
-						amt = uint64(v)
-					case uint64:
-						amt = v
-					case string:
-						if vv, err := decimal.NewFromString(v); err == nil {
-							amt = vv.BigInt().Uint64()
-						}
-					}
-					if src != "" && dst != "" && amt > 0 {
-						return src, dst, amt, true
-					}
-				}
-			}
-		}
-	}
-
-	// Fallback for encoding=json where ix.Data is base58
-	progIdx := int(ix.ProgramIdIndex)
-	if progIdx < 0 || progIdx >= len(accountKeys) {
-		return "", "", 0, false
-	}
-	if accountKeys[progIdx].Pubkey != solanaSystemProgramID {
-		return "", "", 0, false
-	}
-
-	accIdx := solanaInstructionAccountsToIndices(ix.Accounts, accountKeys)
-	if len(accIdx) < 2 {
-		return "", "", 0, false
-	}
-	srcIdx := accIdx[0]
-	dstIdx := accIdx[1]
-	if srcIdx < 0 || srcIdx >= len(accountKeys) || dstIdx < 0 || dstIdx >= len(accountKeys) {
-		return "", "", 0, false
-	}
-
-	data, err := solanaDecodeIxDataBase58(ix.Data)
+func solanaParseSystemTransfer(ix solana.Instruction, keys []solana.AccountKey) (solanaInstructionTransfer, error) {
+	data, err := base58.Decode(ix.Data)
 	if err != nil {
-		return "", "", 0, false
+		return solanaInstructionTransfer{}, fmt.Errorf("decode system data: %w", err)
 	}
-	if len(data) != 12 {
-		return "", "", 0, false
+	if len(data) < 4 {
+		return solanaInstructionTransfer{}, fmt.Errorf("system data too short: %d bytes", len(data))
 	}
-	if binary.LittleEndian.Uint32(data[0:4]) != 2 {
-		return "", "", 0, false
+	recipient, isTransfer := solanaSystemTransferRecipient[binary.LittleEndian.Uint32(data[:4])]
+	if !isTransfer {
+		return solanaInstructionTransfer{}, errSolanaNotTransfer
 	}
-	amt := binary.LittleEndian.Uint64(data[4:12])
-	if amt == 0 {
-		return "", "", 0, false
+	if len(data) < 12 {
+		return solanaInstructionTransfer{}, fmt.Errorf("system transfer data too short: %d bytes", len(data))
 	}
-	return accountKeys[srcIdx].Pubkey, accountKeys[dstIdx].Pubkey, amt, true
+	accounts, err := solanaResolveAccounts(ix.Accounts, keys, 0, recipient)
+	if err != nil {
+		return solanaInstructionTransfer{}, err
+	}
+	amount := binary.LittleEndian.Uint64(data[4:12])
+	if amount == 0 {
+		return solanaInstructionTransfer{}, errSolanaNotTransfer
+	}
+	return solanaInstructionTransfer{native: true, from: accounts[0], to: accounts[1], amount: amount}, nil
 }
 
-func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.AccountKey) (srcTokenAcc string, dstTokenAcc string, mint string, amount uint64, ok bool) {
-	// Prefer jsonParsed format
-	// Typical:
-	// { program:"spl-token", programId:"Tokenkeg...", parsed:{ type:"transfer", info:{ source:"..", destination:"..", amount:"123", authority:".." } } }
-	// TransferChecked:
-	// { type:"transferChecked", info:{ source:"..", destination:"..", mint:"..", tokenAmount:{ amount:"..", decimals:n } } }
-	if ix.Program == "spl-token" || ix.ProgramId == solanaTokenProgramID || ix.ProgramId == solanaToken2022ProgramID {
-		if p, _ := ix.Parsed.(map[string]any); p != nil {
-			t, _ := p["type"].(string)
-			if info, _ := p["info"].(map[string]any); info != nil {
-				var src, dst, mintOut string
-				src, _ = info["source"].(string)
-				dst, _ = info["destination"].(string)
-				mintOut, _ = info["mint"].(string)
-
-				var amt uint64
-				switch t {
-				case "transfer":
-					// amount can be string or number
-					switch v := info["amount"].(type) {
-					case string:
-						if vv, err := decimal.NewFromString(v); err == nil {
-							amt = vv.BigInt().Uint64()
-						}
-					case float64:
-						amt = uint64(v)
-					case int:
-						amt = uint64(v)
-					case uint64:
-						amt = v
-					}
-				case "transferChecked", "transferCheckedWithFee":
-					// tokenAmount: { amount:"..", decimals:n, uiAmountString:".." }
-					if ta, _ := info["tokenAmount"].(map[string]any); ta != nil {
-						switch v := ta["amount"].(type) {
-						case string:
-							if vv, err := decimal.NewFromString(v); err == nil {
-								amt = vv.BigInt().Uint64()
-							}
-						case float64:
-							amt = uint64(v)
-						case int:
-							amt = uint64(v)
-						case uint64:
-							amt = v
-						}
-					}
-				}
-
-				if src != "" && dst != "" && amt > 0 {
-					return src, dst, mintOut, amt, true
-				}
-			}
-		}
-	}
-
-	// Fallback for encoding=json where ix.Data is base58
-	progIdx := int(ix.ProgramIdIndex)
-	if progIdx < 0 || progIdx >= len(accountKeys) {
-		return "", "", "", 0, false
-	}
-	prog := accountKeys[progIdx].Pubkey
-	if prog != solanaTokenProgramID && prog != solanaToken2022ProgramID {
-		return "", "", "", 0, false
-	}
-
-	accIdx := solanaInstructionAccountsToIndices(ix.Accounts, accountKeys)
-	data, err := solanaDecodeIxDataBase58(ix.Data)
+func solanaParseTokenTransfer(ix solana.Instruction, keys []solana.AccountKey) (solanaInstructionTransfer, error) {
+	data, err := base58.Decode(ix.Data)
 	if err != nil {
-		return "", "", "", 0, false
+		return solanaInstructionTransfer{}, fmt.Errorf("decode token data: %w", err)
 	}
-	if len(data) < 1 {
-		return "", "", "", 0, false
+	if len(data) == 0 {
+		return solanaInstructionTransfer{}, errors.New("empty token instruction data")
 	}
 
+	var (
+		minLen       int
+		amountOffset = 1
+		positions    []int // source, destination[, mint]
+	)
 	switch data[0] {
-	case 3:
-		if len(accIdx) < 2 || len(data) < 9 {
-			return "", "", "", 0, false
+	case solanaTokenTransfer:
+		minLen, positions = 9, []int{0, 1}
+	case solanaTokenTransferChecked:
+		minLen, positions = 10, []int{0, 2, 1}
+	case solanaTokenTransferFeeExtension:
+		if len(data) < 2 || data[1] != solanaTransferCheckedWithFee {
+			return solanaInstructionTransfer{}, errSolanaNotTransfer
 		}
-		srcIdx := accIdx[0]
-		dstIdx := accIdx[1]
-		if srcIdx < 0 || srcIdx >= len(accountKeys) || dstIdx < 0 || dstIdx >= len(accountKeys) {
-			return "", "", "", 0, false
-		}
-		amt := binary.LittleEndian.Uint64(data[1:9])
-		if amt == 0 {
-			return "", "", "", 0, false
-		}
-		return accountKeys[srcIdx].Pubkey, accountKeys[dstIdx].Pubkey, "", amt, true
-	case 12, 26: // 12 = transferChecked, 26 = transferCheckedWithFee (same account layout)
-		if len(accIdx) < 3 || len(data) < 9 {
-			return "", "", "", 0, false
-		}
-		srcIdx := accIdx[0]
-		mintIdx := accIdx[1]
-		dstIdx := accIdx[2]
-		if srcIdx < 0 || srcIdx >= len(accountKeys) || dstIdx < 0 || dstIdx >= len(accountKeys) || mintIdx < 0 || mintIdx >= len(accountKeys) {
-			return "", "", "", 0, false
-		}
-		amt := binary.LittleEndian.Uint64(data[1:9])
-		if amt == 0 {
-			return "", "", "", 0, false
-		}
-		return accountKeys[srcIdx].Pubkey, accountKeys[dstIdx].Pubkey, accountKeys[mintIdx].Pubkey, amt, true
+		// [26, 1, amount u64, decimals u8, fee u64]
+		minLen, amountOffset, positions = 19, 2, []int{0, 2, 1}
 	default:
-		return "", "", "", 0, false
+		return solanaInstructionTransfer{}, errSolanaNotTransfer
 	}
+	if len(data) < minLen {
+		return solanaInstructionTransfer{}, fmt.Errorf("token instruction %d data too short: %d bytes", data[0], len(data))
+	}
+	accounts, err := solanaResolveAccounts(ix.Accounts, keys, positions...)
+	if err != nil {
+		return solanaInstructionTransfer{}, err
+	}
+	amount := binary.LittleEndian.Uint64(data[amountOffset : amountOffset+8])
+	if amount == 0 {
+		return solanaInstructionTransfer{}, errSolanaNotTransfer
+	}
+	t := solanaInstructionTransfer{from: accounts[0], to: accounts[1], amount: amount}
+	if len(accounts) > 2 {
+		t.mint = accounts[2]
+	}
+	if data[0] == solanaTokenTransferFeeExtension {
+		t.fee, t.feeKnown = binary.LittleEndian.Uint64(data[11:19]), true
+	}
+	return t, nil
+}
+
+// solanaResolveAccounts returns the pubkeys at the given positions of an instruction's account list.
+func solanaResolveAccounts(ixAccounts []int, keys []solana.AccountKey, positions ...int) ([]string, error) {
+	out := make([]string, len(positions))
+	for i, pos := range positions {
+		if pos >= len(ixAccounts) {
+			return nil, fmt.Errorf("instruction has %d accounts, need position %d", len(ixAccounts), pos)
+		}
+		idx := ixAccounts[pos]
+		if idx < 0 || idx >= len(keys) {
+			return nil, fmt.Errorf("account index %d out of range (%d keys)", idx, len(keys))
+		}
+		out[i] = keys[idx].Pubkey
+	}
+	return out, nil
 }
 
 // solanaEffectiveAccountKeys appends v0 ALT accounts (static + writable + readonly)
@@ -496,129 +360,256 @@ func solanaEffectiveAccountKeys(static []solana.AccountKey, loaded *solana.Loade
 	return out
 }
 
+type solanaTokenAccount struct {
+	owner, mint string
+	// Spendable balance before/after the tx; excludes any withheld transfer fee.
+	pre, post  uint64
+	hasPost    bool
+	badBalance bool
+}
+
+func solanaTokenAccounts(meta *solana.TxnMeta, keys []solana.AccountKey) map[string]solanaTokenAccount {
+	out := make(map[string]solanaTokenAccount, len(meta.PostTokenBalances))
+	for i, balances := range [][]solana.TokenBalance{meta.PreTokenBalances, meta.PostTokenBalances} {
+		isPost := i == 1
+		for _, tb := range balances {
+			if tb.AccountIndex >= uint64(len(keys)) {
+				continue
+			}
+			pubkey := keys[tb.AccountIndex].Pubkey
+			acc := out[pubkey]
+			if tb.Owner != "" {
+				acc.owner = tb.Owner
+			}
+			if tb.Mint != "" {
+				acc.mint = tb.Mint
+			}
+			amount, err := strconv.ParseUint(tb.UiTokenAmount.Amount, 10, 64)
+			acc.badBalance = acc.badBalance || err != nil
+			if isPost {
+				acc.post, acc.hasPost = amount, true
+			} else {
+				acc.pre = amount
+			}
+			out[pubkey] = acc
+		}
+	}
+	return out
+}
+
+// solanaTransfer is a transfer between wallets, before the watched-address filter.
+type solanaTransfer struct {
+	txIdx int
+	// Position of the instruction: top-level "<i>", the j-th instruction it invokes "<i>.<j>".
+	// Matches apex's legacy scanner so its (txHash, direction, transferIndex) dedup carries over.
+	transferIndex string
+	native        bool
+	from, to      string
+	asset         string
+	// amount is what reached the recipient; sourceAmount, when non-zero, is the larger amount
+	// the sender spent because a Token-2022 transfer fee was withheld.
+	amount       uint64
+	sourceAmount uint64
+
+	token2022    bool
+	dstTokenAcc  string
+	fee          uint64
+	feeKnown     bool
+	feeUncertain bool
+}
+
+// solanaApplyTransferFees nets Token-2022 transfer fees out of amount. TransferCheckedWithFee states
+// the fee. Plain TransferChecked on a fee mint does not, so the recipient's balance change is used
+// instead, but only when no other transfer in the tx touches that account; otherwise the gross
+// amount stays and the transfer is flagged.
+func solanaApplyTransferFees(transfers []solanaTransfer, tokenAccounts map[string]solanaTokenAccount, touches map[string]int) {
+	for i := range transfers {
+		t := &transfers[i]
+		if !t.token2022 {
+			continue
+		}
+		net := t.amount
+		switch dst := tokenAccounts[t.dstTokenAcc]; {
+		case t.feeKnown:
+			if t.fee <= t.amount {
+				net = t.amount - t.fee
+			}
+		case touches[t.dstTokenAcc] != 1 || !dst.hasPost || dst.badBalance || dst.post <= dst.pre:
+			t.feeUncertain = true
+		case dst.post-dst.pre < t.amount:
+			net = dst.post - dst.pre
+		}
+		if net != t.amount {
+			t.sourceAmount, t.amount = t.amount, net
+		}
+	}
+}
+
 func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
-	out := make([]types.Transaction, 0)
+	transfers := s.filterMonitored(s.parseSolanaTransfers(slot, b))
+	out := make([]types.Transaction, 0, len(transfers))
+	for _, t := range transfers {
+		tx := b.Transactions[t.txIdx]
+		txType := constant.TxTypeTokenTransfer
+		if t.native {
+			txType = constant.TxTypeNativeTransfer
+		}
+		transfer := types.Transaction{
+			TxHash:        tx.Transaction.Signatures[0],
+			NetworkId:     networkID,
+			BlockNumber:   slot,
+			BlockHash:     b.Blockhash,
+			TransferIndex: t.transferIndex,
+			FromAddress:   t.from,
+			ToAddress:     t.to,
+			AssetAddress:  t.asset,
+			Amount:        strconv.FormatUint(t.amount, 10),
+			Type:          txType,
+			TxFee:         decimal.NewFromInt(int64(tx.Meta.Fee)),
+			Timestamp:     ts,
+		}
+		if t.sourceAmount != 0 {
+			transfer.SetMetadata(metadataKeySourceAmount, strconv.FormatUint(t.sourceAmount, 10))
+		}
+		if t.feeUncertain {
+			logger.Warn("[SOLANA] Token-2022 amount may include a withheld transfer fee",
+				"chain", s.chainName, "slot", slot, "tx", transfer.TxHash,
+				"transfer_index", t.transferIndex, "mint", t.asset, "amount", transfer.Amount)
+		}
+		out = append(out, transfer)
+	}
+	return out
+}
+
+// NormalizeForDirection gives an outgoing event the amount the sender spent, fee included.
+func (s *SolanaIndexer) NormalizeForDirection(tx types.Transaction, direction string) types.Transaction {
+	return normalizeDirectionalMetadata(tx, direction)
+}
+
+func (s *SolanaIndexer) parseSolanaTransfers(slot uint64, b *solana.GetBlockResult) []solanaTransfer {
+	var out []solanaTransfer
 	for txIdx, tx := range b.Transactions {
-		if tx.Meta == nil {
+		if tx.Meta == nil || tx.Meta.Err != nil || len(tx.Transaction.Signatures) == 0 {
 			continue
 		}
-		if tx.Meta.Err != nil {
-			continue
-		}
-		if len(tx.Transaction.Signatures) == 0 {
-			continue
-		}
-		txHash := tx.Transaction.Signatures[0]
-		fee := decimal.NewFromInt(int64(tx.Meta.Fee))
-		accountKeys := solanaEffectiveAccountKeys(tx.Transaction.Message.AccountKeys, tx.Meta.LoadedAddresses)
+		keys := solanaEffectiveAccountKeys(tx.Transaction.Message.AccountKeys, tx.Meta.LoadedAddresses)
+		instructions := tx.Transaction.Message.Instructions
 
-		// Build token-account -> (owner, mint) lookup from token balance metadata.
-		// This isn't used to infer transfers; only to map SPL token accounts to owners/mints.
-		tokenOwnerByAcc := map[string]string{}
-		tokenMintByAcc := map[string]string{}
-		for _, tb := range tx.Meta.PreTokenBalances {
-			idx := int(tb.AccountIndex)
-			if idx >= 0 && idx < len(accountKeys) {
-				acc := accountKeys[idx].Pubkey
-				if tb.Owner != "" {
-					tokenOwnerByAcc[acc] = tb.Owner
-				}
-				if tb.Mint != "" {
-					tokenMintByAcc[acc] = tb.Mint
-				}
+		var innerByOuter [][]solana.Instruction
+		if len(tx.Meta.InnerInstructions) > 0 {
+			innerByOuter = make([][]solana.Instruction, len(instructions))
+		}
+		for _, group := range tx.Meta.InnerInstructions {
+			if group.Index >= uint64(len(instructions)) {
+				logger.Warn("[SOLANA] inner instructions point past the last instruction",
+					"chain", s.chainName, "slot", slot, "tx", tx.Transaction.Signatures[0],
+					"index", group.Index, "instructions", len(instructions))
+				continue
 			}
-		}
-		for _, tb := range tx.Meta.PostTokenBalances {
-			idx := int(tb.AccountIndex)
-			if idx >= 0 && idx < len(accountKeys) {
-				acc := accountKeys[idx].Pubkey
-				if tb.Owner != "" {
-					tokenOwnerByAcc[acc] = tb.Owner
-				}
-				if tb.Mint != "" {
-					tokenMintByAcc[acc] = tb.Mint
-				}
-			}
+			innerByOuter[group.Index] = group.Instructions
 		}
 
-		transferIdx := 0
-
-		appendNative := func(from, to string, lamports uint64) {
-			if !s.isMonitoredTransfer(from, to) {
+		txStart := len(out)
+		var (
+			tokenAccounts map[string]solanaTokenAccount
+			touches       map[string]int
+		)
+		collect := func(ix solana.Instruction, transferIndex string) {
+			parsed, err := solanaParseInstruction(ix, keys)
+			if errors.Is(err, errSolanaNotTransfer) {
 				return
 			}
-			out = append(out, types.Transaction{
-				TxHash:        txHash,
-				NetworkId:     networkID,
-				BlockNumber:   slot,
-				BlockHash:     b.Blockhash,
-				TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
-				FromAddress:   from,
-				ToAddress:     to,
-				AssetAddress:  "",
-				Amount:        strconv.FormatUint(lamports, 10),
-				Type:          constant.TxTypeNativeTransfer,
-				TxFee:         fee,
-				Timestamp:     ts,
-			})
-			transferIdx++
-		}
-
-		appendSPL := func(srcTokenAcc, dstTokenAcc, mint string, amount uint64) {
-			fromOwner := tokenOwnerByAcc[srcTokenAcc]
-			toOwner := tokenOwnerByAcc[dstTokenAcc]
-
-			if !s.isMonitoredTransfer(fromOwner, toOwner) {
+			if err != nil {
+				// Skip rather than fail the block: a rescan would hit the same bytes again.
+				logger.Warn("[SOLANA] skipping malformed instruction",
+					"chain", s.chainName, "slot", slot, "tx", tx.Transaction.Signatures[0],
+					"transfer_index", transferIndex, "error", err)
 				return
 			}
 
-			if mint == "" {
-				mint = tokenMintByAcc[srcTokenAcc]
-				if mint == "" {
-					mint = tokenMintByAcc[dstTokenAcc]
-				}
-			}
-			if mint == "" {
+			t := solanaTransfer{txIdx: txIdx, transferIndex: transferIndex, native: parsed.native, amount: parsed.amount}
+			if parsed.native {
+				t.from, t.to = parsed.from, parsed.to
+				out = append(out, t)
 				return
 			}
 
-			out = append(out, types.Transaction{
-				TxHash:        txHash,
-				NetworkId:     networkID,
-				BlockNumber:   slot,
-				BlockHash:     b.Blockhash,
-				TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
-				FromAddress:   fromOwner,
-				ToAddress:     toOwner,
-				AssetAddress:  mint,
-				Amount:        strconv.FormatUint(amount, 10),
-				Type:          constant.TxTypeTokenTransfer,
-				TxFee:         fee,
-				Timestamp:     ts,
-			})
-			transferIdx++
-		}
+			if tokenAccounts == nil {
+				tokenAccounts = solanaTokenAccounts(tx.Meta, keys)
+				touches = make(map[string]int)
+			}
+			touches[parsed.from]++
+			touches[parsed.to]++
+			t.token2022, t.dstTokenAcc = parsed.token2022, parsed.to
+			t.fee, t.feeKnown = parsed.fee, parsed.feeKnown
 
-		processIx := func(ix solana.Instruction) {
-			if from, to, lamports, ok := solanaParseSystemTransfer(ix, accountKeys); ok {
-				appendNative(from, to, lamports)
+			src, dst := tokenAccounts[parsed.from], tokenAccounts[parsed.to]
+			t.from, t.to = src.owner, dst.owner
+			t.asset = parsed.mint
+			if t.asset == "" {
+				t.asset = src.mint
+			}
+			if t.asset == "" {
+				t.asset = dst.mint
+			}
+			if t.asset == "" || (t.from == "" && t.to == "") {
 				return
 			}
-			if srcTok, dstTok, mint, amt, ok := solanaParseTokenTransfer(ix, accountKeys); ok {
-				appendSPL(srcTok, dstTok, mint, amt)
-				return
-			}
+			out = append(out, t)
 		}
 
-		for _, ix := range tx.Transaction.Message.Instructions {
-			processIx(ix)
-		}
-		for _, ii := range tx.Meta.InnerInstructions {
-			for _, ix := range ii.Instructions {
-				processIx(ix)
+		for i, ix := range instructions {
+			outer := strconv.Itoa(i)
+			collect(ix, outer)
+			if innerByOuter == nil {
+				continue
 			}
+			for j, inner := range innerByOuter[i] {
+				collect(inner, outer+"."+strconv.Itoa(j))
+			}
+		}
+		if tokenAccounts != nil {
+			solanaApplyTransferFees(out[txStart:], tokenAccounts, touches)
+		}
+	}
+	return out
+}
+
+// filterMonitored keeps transfers touching a watched address, resolving every address in the
+// block with one ExistBatch (BF.MEXISTS) call instead of a Redis round trip per transfer.
+func (s *SolanaIndexer) filterMonitored(transfers []solanaTransfer) []solanaTransfer {
+	if s.pubkeyStore == nil || len(transfers) == 0 {
+		return transfers
+	}
+
+	monitored := make(map[string]bool)
+	var addresses []string
+	collect := func(addr string) {
+		if addr == "" {
+			return
+		}
+		if _, seen := monitored[addr]; seen {
+			return
+		}
+		monitored[addr] = false
+		addresses = append(addresses, addr)
+	}
+	for _, t := range transfers {
+		collect(t.to)
+		if s.config.TwoWayIndexing {
+			collect(t.from)
 		}
 	}
 
+	for i, exists := range s.pubkeyStore.ExistBatch(enum.NetworkTypeSol, addresses) {
+		monitored[addresses[i]] = exists
+	}
+
+	out := transfers[:0]
+	for _, t := range transfers {
+		if monitored[t.to] || (s.config.TwoWayIndexing && monitored[t.from]) {
+			out = append(out, t)
+		}
+	}
 	return out
 }

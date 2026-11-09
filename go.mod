@@ -1,6 +1,6 @@
 module github.com/fystack/multichain-indexer
 
-go 1.25.0
+go 1.27.0
 
 require (
 	dario.cat/mergo v1.0.2
