@@ -51,5 +51,5 @@ const (
 
 const (
 	KVStoreTypeBadger KVStoreType = "badger"
-	KVStoreTypeConsul KVStoreType = "consul"
+	KVStoreTypeRedis  KVStoreType = "redis"
 )

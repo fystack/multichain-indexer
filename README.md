@@ -247,9 +247,8 @@ go build -o indexer cmd/indexer/main.go
 Start required services before running the indexer (docker-compose provided):
 
 - NATS server (events)
-- Consul (KV) or Badger (embedded)
+- Redis (KV store, Bloom filter, ManualWorker) — or Badger for the embedded KV backend
 - PostgreSQL (wallet address repo)
-- Redis (for Bloom filter or ManualWorker)
 
 ```bash
 docker-compose up -d
@@ -260,7 +259,7 @@ docker-compose up -d
 ## 🔧 Configuration
 
 - **Chains**: configurable (`start_block`, `batch_size`, `poll_interval`)
-- **KVStore**: BadgerDB / in-memory / Consul
+- **KVStore**: Redis / BadgerDB (embedded)
 - **Bloom Filter**: Redis or in-memory
 - **Event Emitter**: NATS streaming
 - **RPC Providers**: failover + rate-limiting
@@ -305,7 +304,7 @@ nats consumer sub transfer transaction-consumer
 # Initialize bloom filter and kvstore
 ./wallet-kv-load run --config configs/config.yaml --batch 10000 --debug
 
-# Migrate from Badger to Consul (edit migrate.yaml first)
+# Migrate KV between Badger and Redis (edit migrate.yaml first)
 ./kv-migrate run --config configs/config.yaml --dry-run
 ```
 

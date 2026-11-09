@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"encoding/gob"
 	"encoding/json"
-
-	"github.com/hashicorp/consul/api"
 )
 
 // KVStore is an interface for key-value stores.
-// There are multiple implementations available like Consul, Postgres, Redis, BoltDB, BadgerDB, etcd, etc.
+// There are multiple implementations available like Redis, BadgerDB, Postgres, etcd, etc.
 
 type KVPair struct {
 	Key   string
@@ -20,7 +18,6 @@ type KVStore interface {
 	GetName() string
 	Set(k string, v string) error
 	Get(k string) (v string, err error)
-	GetWithOptions(k string, queryOptions *api.QueryOptions) (v string, err error)
 	// This method if you want to set v as struct or map
 	SetAny(k string, v any) error
 	GetAny(k string, v any) (found bool, err error)

@@ -15,11 +15,12 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/kvstore"
 	"github.com/fystack/multichain-indexer/pkg/model"
 	"github.com/fystack/multichain-indexer/pkg/repository"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
 type CLI struct {
-	Run RunCmd `cmd:"" help:"Load wallet addresses from DB into Consul KV."`
+	Run RunCmd `cmd:"" help:"Load wallet addresses from DB into the KV store."`
 }
 
 type RunCmd struct {
@@ -48,11 +49,21 @@ func (c *RunCmd) Run() error {
 		logger.Fatal("Create db connection failed", "err", err)
 	}
 
-	// Build KV store from config; must be consul
-	if cfg.Services.KVS.Type != enum.KVStoreTypeConsul {
-		logger.Fatal("KVStore type must be consul for this command", "type", cfg.Services.KVS.Type)
+	// Build KV store from config. Redis needs a client; badger does not.
+	var redisClient *redis.Client
+	if cfg.Services.KVS.Type == enum.KVStoreTypeRedis {
+		rc, err := infra.NewRedisClient(
+			cfg.Services.Redis.URL,
+			cfg.Services.Redis.Password,
+			string(cfg.Environment),
+			cfg.Services.Redis.MTLS,
+		)
+		if err != nil {
+			logger.Fatal("Create redis client failed", "err", err)
+		}
+		redisClient = rc.GetClient()
 	}
-	store, err := kvstore.NewFromConfig(cfg.Services.KVS)
+	store, err := kvstore.NewFromConfig(cfg.Services.KVS, redisClient)
 	if err != nil {
 		logger.Fatal("Create KV store failed", "err", err)
 	}

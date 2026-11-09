@@ -15,7 +15,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/events"
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/store/blockstore"
-	"github.com/hashicorp/consul/api"
 	"github.com/stretchr/testify/require"
 )
 
@@ -211,12 +210,9 @@ func initTestLogger() {
 	})
 }
 
-func (noopKVStore) GetName() string            { return "noop" }
-func (noopKVStore) Set(string, string) error   { return nil }
-func (noopKVStore) Get(string) (string, error) { return "", errors.New("not found") }
-func (noopKVStore) GetWithOptions(string, *api.QueryOptions) (string, error) {
-	return "", errors.New("not found")
-}
+func (noopKVStore) GetName() string                      { return "noop" }
+func (noopKVStore) Set(string, string) error             { return nil }
+func (noopKVStore) Get(string) (string, error)           { return "", errors.New("not found") }
 func (noopKVStore) SetAny(string, any) error             { return nil }
 func (noopKVStore) GetAny(string, any) (bool, error)     { return false, nil }
 func (noopKVStore) List(string) ([]*infra.KVPair, error) { return nil, nil }
@@ -224,12 +220,9 @@ func (noopKVStore) Delete(string) error                  { return nil }
 func (noopKVStore) BatchSet([]infra.KVPair) error        { return nil }
 func (noopKVStore) Close() error                         { return nil }
 
-func (s *listKVStore) GetName() string            { return "list" }
-func (s *listKVStore) Set(string, string) error   { return nil }
-func (s *listKVStore) Get(string) (string, error) { return "", errors.New("not found") }
-func (s *listKVStore) GetWithOptions(string, *api.QueryOptions) (string, error) {
-	return "", errors.New("not found")
-}
+func (s *listKVStore) GetName() string                  { return "list" }
+func (s *listKVStore) Set(string, string) error         { return nil }
+func (s *listKVStore) Get(string) (string, error)       { return "", errors.New("not found") }
 func (s *listKVStore) SetAny(string, any) error         { return nil }
 func (s *listKVStore) GetAny(string, any) (bool, error) { return false, nil }
 func (s *listKVStore) Delete(string) error              { return nil }

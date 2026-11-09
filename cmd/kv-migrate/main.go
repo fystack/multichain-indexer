@@ -12,7 +12,6 @@ import (
 	"github.com/fystack/multichain-indexer/pkg/infra"
 	"github.com/fystack/multichain-indexer/pkg/kvstore"
 	"github.com/goccy/go-yaml"
-	"github.com/hashicorp/consul/api"
 )
 
 // ANSI color codes
@@ -44,7 +43,7 @@ type EndpointType string
 
 const (
 	EndpointTypeBadger EndpointType = "badger"
-	EndpointTypeConsul EndpointType = "consul"
+	EndpointTypeRedis  EndpointType = "redis"
 )
 
 type CLI struct {
@@ -62,14 +61,21 @@ type MigrationConfig struct {
 type EndpointConfig struct {
 	Type   enum.KVStoreType    `yaml:"type"`
 	Badger config.BadgerConfig `yaml:"badger,omitempty"`
-	Consul config.ConsulConfig `yaml:"consul,omitempty"`
+	Redis  RedisEndpointConfig `yaml:"redis,omitempty"`
+}
+
+type RedisEndpointConfig struct {
+	URL      string `yaml:"url"`
+	Password string `yaml:"password"`
+	MTLS     bool   `yaml:"mtls"`
+	Prefix   string `yaml:"prefix"`
 }
 
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
 		kong.Name("kv-migrate"),
-		kong.Description("Migrate keys between Badger and Consul KV stores"))
+		kong.Description("Migrate keys between Badger and Redis KV stores"))
 
 	printBanner()
 
@@ -194,25 +200,15 @@ func buildStore(config EndpointConfig) (infra.KVStore, error) {
 			config.Badger.Prefix,
 			infra.JSON,
 		)
-	case enum.KVStoreTypeConsul:
-		if config.Consul.Address == "" {
-			return nil, fmt.Errorf("consul address is required")
+	case enum.KVStoreTypeRedis:
+		if config.Redis.URL == "" {
+			return nil, fmt.Errorf("redis url is required")
 		}
-		var httpAuth *api.HttpBasicAuth
-		if config.Consul.HttpAuth.Username != "" || config.Consul.HttpAuth.Password != "" {
-			httpAuth = &api.HttpBasicAuth{
-				Username: config.Consul.HttpAuth.Username,
-				Password: config.Consul.HttpAuth.Password,
-			}
+		rc, err := infra.NewRedisClient(config.Redis.URL, config.Redis.Password, "", config.Redis.MTLS)
+		if err != nil {
+			return nil, err
 		}
-		return kvstore.NewConsulClient(kvstore.Options{
-			Scheme:   config.Consul.Scheme,
-			Address:  config.Consul.Address,
-			Folder:   config.Consul.Folder,
-			Codec:    infra.JSON,
-			Token:    config.Consul.Token,
-			HttpAuth: httpAuth,
-		})
+		return kvstore.NewRedisStore(rc.GetClient(), config.Redis.Prefix, infra.JSON)
 	default:
 		return nil, fmt.Errorf("unsupported store type: %s", config.Type)
 	}
