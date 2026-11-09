@@ -121,6 +121,10 @@ func (t *TronIndexer) processBlock(
 		Transactions: make([]types.Transaction, 0, len(tronBlock.Transactions)),
 	}
 
+	if err := verifyReceiptsBelongToBlock(tronBlock, txns); err != nil {
+		return nil, err
+	}
+
 	// Index TxnInfo by ID
 	infoByID := make(map[string]*tron.TxnInfo, len(txns))
 	for _, ti := range txns {
@@ -238,6 +242,27 @@ func (t *TronIndexer) processBlock(
 	}
 
 	return block, nil
+}
+
+// getblock and the receipts call can be served by different nodes or straddle a reorg.
+func verifyReceiptsBelongToBlock(tronBlock *tron.Block, txns []*tron.TxnInfo) error {
+	blockNum := tronBlock.BlockHeader.RawData.Number
+	blockTxIDs := make(map[string]struct{}, len(tronBlock.Transactions))
+	for _, tx := range tronBlock.Transactions {
+		blockTxIDs[tx.TxID] = struct{}{}
+	}
+	for _, ti := range txns {
+		if ti == nil {
+			continue
+		}
+		if ti.BlockNumber != blockNum {
+			return fmt.Errorf("tron block %d (%s): receipt %s is for block %d", blockNum, tronBlock.BlockID, ti.ID, ti.BlockNumber)
+		}
+		if _, ok := blockTxIDs[ti.ID]; !ok {
+			return fmt.Errorf("tron block %d (%s): receipt %s not in block", blockNum, tronBlock.BlockID, ti.ID)
+		}
+	}
+	return nil
 }
 
 func (t *TronIndexer) GetBlocks(

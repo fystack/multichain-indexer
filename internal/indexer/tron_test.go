@@ -192,3 +192,19 @@ func TestTronProcessBlock_NativeTRXTransferHasBlockHashAndTransferIndex(t *testi
 	assert.Equal(t, "1000000", tx.Amount)
 	assert.Equal(t, constant.TxTypeNativeTransfer, tx.Type)
 }
+
+func TestTronProcessBlock_RejectsReceiptNotInBlock(t *testing.T) {
+	block, info := loadTronMainnetFixture(t)
+	info.ID = "2222222222222222222222222222222222222222222222222222222222222222"
+
+	_, err := newTestTronIndexer(tronMainnetTo).processBlock(block, []*tron.TxnInfo{info})
+	require.ErrorContains(t, err, "not in block")
+}
+
+func TestTronProcessBlock_RejectsReceiptFromOtherBlockNumber(t *testing.T) {
+	block, info := loadTronMainnetFixture(t)
+	info.BlockNumber++
+
+	_, err := newTestTronIndexer(tronMainnetTo).processBlock(block, []*tron.TxnInfo{info})
+	require.ErrorContains(t, err, "is for block 87831637")
+}
