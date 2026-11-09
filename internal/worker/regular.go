@@ -38,6 +38,11 @@ type RegularWorker struct {
 	persistTicker  *time.Ticker
 	// Zero uses the startBlockRetryDelay default; overridable in tests.
 	startBlockRetryDelay time.Duration
+	// While the worker is being built, a cold start doesn't wait for the chain head: the manager builds every
+	// chain's workers in turn before starting any (and before the status server), so one unreachable node would
+	// hold up all chains. awaitingHead then makes Start wait for it instead, in the worker's own goroutine.
+	deferHeadWait bool
+	awaitingHead  bool
 }
 
 func NewRegularWorker(
@@ -63,20 +68,29 @@ func NewRegularWorker(
 		failedChan,
 		statusRegistry,
 	)
-	rw := &RegularWorker{BaseWorker: worker}
+	rw := &RegularWorker{BaseWorker: worker, deferHeadWait: true}
 	rw.currentBlock = rw.determineStartingBlock()
+	rw.deferHeadWait = false
 	rw.loadBlockHashes()
 	return rw
 }
 
 func (rw *RegularWorker) Start() {
-	rw.logger.Info("Starting regular worker",
-		"chain", rw.chain.GetName(),
-		"start_block", rw.currentBlock,
-	)
 	rw.persistTicker = time.NewTicker(blockHashPersistInterval)
-	go rw.runBlockHashPersist()
-	go rw.run(rw.processRegularBlocks)
+	go func() {
+		if rw.awaitingHead {
+			rw.currentBlock = rw.waitForChainHead()
+			if rw.currentBlock == 0 {
+				return // stopped while waiting
+			}
+		}
+		rw.logger.Info("Starting regular worker",
+			"chain", rw.chain.GetName(),
+			"start_block", rw.currentBlock,
+		)
+		go rw.runBlockHashPersist()
+		rw.run(rw.processRegularBlocks)
+	}()
 }
 
 // Stop stops the worker and cleans up resources
@@ -277,6 +291,10 @@ func (rw *RegularWorker) getLatestBlockWithRetry() (uint64, error) {
 // backoff. It is the cold-start anchor when no prior block exists in the store.
 // Returns 0 if the context is cancelled while waiting.
 func (rw *RegularWorker) waitForChainHead() uint64 {
+	if rw.deferHeadWait {
+		rw.awaitingHead = true
+		return 0
+	}
 	for {
 		latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
 		if err == nil {

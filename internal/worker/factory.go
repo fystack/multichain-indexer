@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,8 +20,8 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
-	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/internal/rpc/xrp"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -242,6 +243,15 @@ func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerM
 	if chainCfg.DebugTrace && traceFailover == nil {
 		logger.Warn("debug_trace enabled but no nodes have debug_trace: true", "chain", chainName)
 	}
+	if mode == ModeRegular {
+		registerNodeController(chainName, func(nodes []config.NodeConfig) error {
+			providers := make([]*rpc.Provider, 0, len(nodes))
+			for i, node := range nodes {
+				providers = append(providers, newEVMProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+			}
+			return failover.ReplaceProviders(providers)
+		})
+	}
 
 	return indexer.NewEVMIndexer(chainName, chainCfg, failover, traceFailover, pubkeyStore)
 }
@@ -256,24 +266,15 @@ func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode Worker
 	)
 
 	for i, node := range chainCfg.Nodes {
-		client := tron.NewTronClient(
-			node.URL,
-			&rpc.AuthConfig{
-				Type:  rpc.AuthType(node.Auth.Type),
-				Key:   node.Auth.Key,
-				Value: node.Auth.Value,
-			},
-			chainCfg.Client.Timeout,
-			rl,
-		)
-
-		failover.AddProvider(&rpc.Provider{
-			Name:       chainName + "-" + strconv.Itoa(i+1),
-			URL:        node.URL,
-			Network:    chainName,
-			ClientType: "rpc",
-			Client:     client,
-			State:      rpc.StateHealthy, // Initialize as healthy
+		failover.AddProvider(newTronProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+	}
+	if mode == ModeRegular {
+		registerNodeController(chainName, func(nodes []config.NodeConfig) error {
+			providers := make([]*rpc.Provider, 0, len(nodes))
+			for i, node := range nodes {
+				providers = append(providers, newTronProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+			}
+			return failover.ReplaceProviders(providers)
 		})
 	}
 
@@ -295,24 +296,15 @@ func buildBitcoinIndexer(
 	)
 
 	for i, node := range chainCfg.Nodes {
-		client := bitcoin.NewBitcoinClient(
-			node.URL,
-			&rpc.AuthConfig{
-				Type:  rpc.AuthType(node.Auth.Type),
-				Key:   node.Auth.Key,
-				Value: node.Auth.Value,
-			},
-			chainCfg.Client.Timeout,
-			rl,
-		)
-
-		failover.AddProvider(&rpc.Provider{
-			Name:       chainName + "-" + strconv.Itoa(i+1),
-			URL:        node.URL,
-			Network:    chainName,
-			ClientType: "rpc",
-			Client:     client,
-			State:      rpc.StateHealthy, // Initialize as healthy
+		failover.AddProvider(newBitcoinProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+	}
+	if mode == ModeRegular {
+		registerNodeController(chainName, func(nodes []config.NodeConfig) error {
+			providers := make([]*rpc.Provider, 0, len(nodes))
+			for i, node := range nodes {
+				providers = append(providers, newBitcoinProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+			}
+			return failover.ReplaceProviders(providers)
 		})
 	}
 
@@ -328,24 +320,15 @@ func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode Work
 	)
 
 	for i, node := range chainCfg.Nodes {
-		client := solana.NewSolanaClient(
-			node.URL,
-			&rpc.AuthConfig{
-				Type:  rpc.AuthType(node.Auth.Type),
-				Key:   node.Auth.Key,
-				Value: node.Auth.Value,
-			},
-			chainCfg.Client.Timeout,
-			rl,
-		)
-
-		failover.AddProvider(&rpc.Provider{
-			Name:       chainName + "-" + strconv.Itoa(i+1),
-			URL:        node.URL,
-			Network:    chainName,
-			ClientType: "rpc",
-			Client:     client,
-			State:      rpc.StateHealthy,
+		failover.AddProvider(newSolanaProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+	}
+	if mode == ModeRegular {
+		registerNodeController(chainName, func(nodes []config.NodeConfig) error {
+			providers := make([]*rpc.Provider, 0, len(nodes))
+			for i, node := range nodes {
+				providers = append(providers, newSolanaProvider(chainName, i+1, node, chainCfg.Client.Timeout, rl))
+			}
+			return failover.ReplaceProviders(providers)
 		})
 	}
 
@@ -868,6 +851,7 @@ func CreateManagerWithWorkers(
 
 	manager := NewManager(ctx, kvstore, blockStore, emitter, pubkeyStore)
 	manager.registry = statusRegistry
+	manager.missingBlocks = newMissingBlocksStore(redisClient)
 
 	// Loop each chain
 	for _, chainName := range managerCfg.Chains {
@@ -875,6 +859,14 @@ func CreateManagerWithWorkers(
 		if err != nil {
 			logger.Error("Chain not found in config", "chain", chainName, "err", err)
 			continue
+		}
+
+		// Nodes an operator set at runtime win over config, until reset.
+		setConfiguredNodes(chainName, chainCfg.Nodes)
+		applyNodeOverride(kvstore, chainName, &chainCfg)
+		manager.internalCodes[chainName] = chainCfg.InternalCode
+		if chainCfg.NetworkId != "" {
+			manager.networkChains[chainCfg.NetworkId] = chainName
 		}
 
 		// Build indexer once - shared across all worker modes with global rate limiter
@@ -904,6 +896,11 @@ func CreateManagerWithWorkers(
 			logger.Fatal("Unsupported network type", "chain", chainName, "type", chainCfg.Type)
 		}
 		statusRegistry.RegisterChain(idxr.GetName(), chainName, chainCfg)
+		if source, ok := idxr.(interface{ ProviderSnapshot() []rpc.ProviderSnapshot }); ok {
+			statusRegistry.SetProviderSource(idxr.GetName(), func() []status.ProviderStatus {
+				return providerStatuses(source.ProviderSnapshot())
+			})
+		}
 		if existingFailed, err := blockStore.GetFailedBlocks(idxr.GetNetworkInternalCode()); err == nil {
 			statusRegistry.SetFailedBlocks(idxr.GetName(), existingFailed)
 		}
@@ -968,4 +965,88 @@ func CreateManagerWithWorkers(
 	}
 
 	return manager
+}
+
+// providerStatuses turns provider snapshots into status entries, keeping only the host of each URL.
+func providerStatuses(snapshots []rpc.ProviderSnapshot) []status.ProviderStatus {
+	out := make([]status.ProviderStatus, 0, len(snapshots))
+	for _, s := range snapshots {
+		item := status.ProviderStatus{
+			Name:              s.Name,
+			Host:              hostOf(s.URL),
+			State:             s.State,
+			AvgLatencyMs:      s.AverageResponseTime.Milliseconds(),
+			ConsecutiveErrors: s.ConsecutiveErrors,
+		}
+		if s.BlacklistedUntil.After(time.Now()) {
+			t := s.BlacklistedUntil.UTC()
+			item.BlacklistedUntil = &t
+		}
+		if !s.LastHealthCheck.IsZero() {
+			t := s.LastHealthCheck.UTC()
+			item.LastCheckedAt = &t
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+// hostOf drops scheme, path and query from a node URL; API keys often live there.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "unknown"
+	}
+	return u.Host
+}
+
+func newTronProvider(chainName string, idx int, node config.NodeConfig, timeout time.Duration, rl *ratelimiter.PooledRateLimiter) *rpc.Provider {
+	client := tron.NewTronClient(
+		node.URL,
+		&rpc.AuthConfig{Type: rpc.AuthType(node.Auth.Type), Key: node.Auth.Key, Value: node.Auth.Value},
+		timeout,
+		rl,
+	)
+	return &rpc.Provider{
+		Name:       chainName + "-" + strconv.Itoa(idx),
+		URL:        node.URL,
+		Network:    chainName,
+		ClientType: "rpc",
+		Client:     client,
+		State:      rpc.StateHealthy,
+	}
+}
+
+func newBitcoinProvider(chainName string, idx int, node config.NodeConfig, timeout time.Duration, rl *ratelimiter.PooledRateLimiter) *rpc.Provider {
+	client := bitcoin.NewBitcoinClient(
+		node.URL,
+		&rpc.AuthConfig{Type: rpc.AuthType(node.Auth.Type), Key: node.Auth.Key, Value: node.Auth.Value},
+		timeout,
+		rl,
+	)
+	return &rpc.Provider{
+		Name:       chainName + "-" + strconv.Itoa(idx),
+		URL:        node.URL,
+		Network:    chainName,
+		ClientType: "rpc",
+		Client:     client,
+		State:      rpc.StateHealthy,
+	}
+}
+
+func newSolanaProvider(chainName string, idx int, node config.NodeConfig, timeout time.Duration, rl *ratelimiter.PooledRateLimiter) *rpc.Provider {
+	client := solana.NewSolanaClient(
+		node.URL,
+		&rpc.AuthConfig{Type: rpc.AuthType(node.Auth.Type), Key: node.Auth.Key, Value: node.Auth.Value},
+		timeout,
+		rl,
+	)
+	return &rpc.Provider{
+		Name:       chainName + "-" + strconv.Itoa(idx),
+		URL:        node.URL,
+		Network:    chainName,
+		ClientType: "rpc",
+		Client:     client,
+		State:      rpc.StateHealthy,
+	}
 }

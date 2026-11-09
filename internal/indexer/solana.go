@@ -590,3 +590,8 @@ func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts
 
 	return out
 }
+
+// ProviderSnapshot reports the health of this chain's RPC providers for the status endpoint.
+func (s *SolanaIndexer) ProviderSnapshot() []rpc.ProviderSnapshot {
+	return s.failover.Snapshot()
+}

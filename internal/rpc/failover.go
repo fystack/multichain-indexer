@@ -232,6 +232,26 @@ func (f *Failover[T]) AddProvider(p *Provider) error {
 	return nil
 }
 
+// ReplaceProviders swaps the whole provider list at runtime (an operator changed the chain's nodes). Calls in
+// flight finish on the provider they hold; new calls start from the first of the new list.
+func (f *Failover[T]) ReplaceProviders(providers []*Provider) error {
+	if len(providers) == 0 {
+		return fmt.Errorf("a chain needs at least one provider")
+	}
+	for _, p := range providers {
+		if _, ok := p.Client.(T); !ok {
+			return fmt.Errorf("invalid provider client type: expected %T, got %T", *new(T), p.Client)
+		}
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.providers = append([]*Provider(nil), providers...)
+	f.currentIndex = 0
+	logger.Info("Replaced providers", "count", len(providers))
+	return nil
+}
+
 // GetBestProvider returns the current best provider
 func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 	f.mu.RLock()
@@ -290,6 +310,39 @@ func (f *Failover[T]) recoverExpiredBlacklists(providers []*Provider) {
 }
 
 // GetAvailableProviders returns all currently available providers
+// ProviderSnapshot is a copy of one provider's health, safe to hand out (status endpoint).
+type ProviderSnapshot struct {
+	Name                string
+	URL                 string
+	State               string
+	AverageResponseTime time.Duration
+	ConsecutiveErrors   int
+	BlacklistedUntil    time.Time
+	LastHealthCheck     time.Time
+}
+
+// Snapshot copies every provider's health, in configured order.
+func (f *Failover[T]) Snapshot() []ProviderSnapshot {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+
+	out := make([]ProviderSnapshot, 0, len(f.providers))
+	for _, p := range f.providers {
+		p.mu.RLock()
+		out = append(out, ProviderSnapshot{
+			Name:                p.Name,
+			URL:                 p.URL,
+			State:               p.State,
+			AverageResponseTime: p.AverageResponseTime,
+			ConsecutiveErrors:   p.ConsecutiveErrors,
+			BlacklistedUntil:    p.BlacklistedUntil,
+			LastHealthCheck:     p.LastHealthCheck,
+		})
+		p.mu.RUnlock()
+	}
+	return out
+}
+
 func (f *Failover[T]) GetAvailableProviders() []*Provider {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
