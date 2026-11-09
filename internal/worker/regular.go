@@ -71,7 +71,6 @@ func NewRegularWorker(
 
 func (rw *RegularWorker) Start() {
 	rw.logger.Info("Starting regular worker",
-		"chain", rw.chain.GetName(),
 		"start_block", rw.currentBlock,
 	)
 	rw.persistTicker = time.NewTicker(blockHashPersistInterval)
@@ -132,7 +131,6 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	end := min(start+uint64(rw.config.Throttle.BatchSize)-1, processingHead)
 	startTime := time.Now()
 	rw.logger.Info("Processing range",
-		"chain", rw.chain.GetName(),
 		"start", start, "end", end, "size", end-start+1,
 	)
 
@@ -150,7 +148,6 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	rw.updateHeadStatus(latest, indexedAt)
 
 	rw.logger.Info("Processed latest blocks",
-		"chain", rw.chain.GetName(),
 		"start", start, "end", end,
 		"elapsed", time.Since(startTime),
 		"last_success", lastSuccess,
@@ -175,12 +172,27 @@ func (rw *RegularWorker) processBatch(
 	}
 
 	for _, res := range results {
+		// Skipped slots are normal on Solana: advance past them, don't fail them.
+		if rw.isSolanaSkippedSlot(res) {
+			rw.notifyObserver(res.Number, BlockStatusNotFound)
+			if res.Number > lastSuccess {
+				lastSuccess = res.Number
+				lastSuccessHash = ""
+			}
+			continue
+		}
 		if rw.handleBlockResult(res) {
 			lastSuccess = res.Number
 			lastSuccessHash = res.Block.Hash
 		}
 	}
 	return lastSuccess, lastSuccessHash, false, nil
+}
+
+func (rw *RegularWorker) isSolanaSkippedSlot(res indexer.BlockResult) bool {
+	return res.Error != nil &&
+		res.Error.ErrorType == indexer.ErrorTypeBlockNotFound &&
+		rw.chain.GetNetworkType() == enum.NetworkTypeSol
 }
 
 // commitProgress advances currentBlock past the last indexed block, persisting
@@ -210,14 +222,13 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 		chainLatest, chainErr := rw.getLatestBlockWithRetry()
 		if chainErr != nil {
 			rw.logger.Warn("Chain RPC failed, resuming from KV latest",
-				"chain", rw.chain.GetName(), "kvLatest", kvLatest)
+				"kvLatest", kvLatest)
 			return kvLatest
 		}
 		processingHead := rw.processingHead(chainLatest)
 		if processingHead > kvLatest {
 			ranges := rw.queueCatchupRanges(kvLatest+1, processingHead)
 			rw.logger.Info("Queued catchup ranges",
-				"chain", rw.chain.GetName(),
 				"gap", fmt.Sprintf("%d-%d", kvLatest+1, processingHead),
 				"ranges_created", len(ranges),
 			)
@@ -230,12 +241,12 @@ func (rw *RegularWorker) determineStartingBlock() uint64 {
 
 	if kvErr != nil {
 		rw.logger.Error("Block store unavailable, starting from chain head",
-			"chain", rw.chain.GetName(), "error", kvErr)
+			"error", kvErr)
 		return rw.waitForChainHead()
 	}
 	if !rw.config.IsFromLatest() && rw.config.StartBlock > 0 {
 		rw.logger.Info("Cold start from configured start_block",
-			"chain", rw.chain.GetName(), "start_block", rw.config.StartBlock)
+			"start_block", rw.config.StartBlock)
 		return uint64(rw.config.StartBlock)
 	}
 	return rw.waitForChainHead()
@@ -250,7 +261,6 @@ func (rw *RegularWorker) queueCatchupRanges(start, end uint64) []blockstore.Catc
 
 	if err := rw.blockStore.SaveCatchupRanges(rw.chain.GetNetworkInternalCode(), ranges); err != nil {
 		rw.logger.Error("Failed to save catchup ranges",
-			"chain", rw.chain.GetName(),
 			"count", len(ranges),
 			"error", err,
 		)
@@ -283,7 +293,7 @@ func (rw *RegularWorker) waitForChainHead() uint64 {
 			return rw.processingHead(latest)
 		}
 		rw.logger.Warn("Waiting for chain head before starting",
-			"chain", rw.chain.GetName(), "error", err)
+			"error", err)
 		select {
 		case <-rw.ctx.Done():
 			return 0
@@ -312,7 +322,6 @@ func (rw *RegularWorker) detectAndHandleReorg(res *indexer.BlockResult) (bool, e
 			reorgStart = prevNum - rollbackWindow
 		}
 		rw.logger.Warn("Reorg detected; rolling back",
-			"chain", rw.chain.GetName(),
 			"at_block", prevNum,
 			"expected_parent", storedHash,
 			"actual_parent", res.Block.ParentHash,
@@ -379,7 +388,6 @@ func (rw *RegularWorker) loadBlockHashes() {
 	}
 	rw.blockHashes = hashes
 	rw.logger.Info("Loaded persisted block hashes",
-		"chain", rw.chain.GetName(),
 		"count", len(hashes),
 	)
 }
@@ -403,7 +411,6 @@ func (rw *RegularWorker) flushBlockHashes() {
 	}
 	if err := rw.blockStore.SaveBlockHashes(rw.chain.GetNetworkInternalCode(), rw.blockHashes); err != nil {
 		rw.logger.Error("Failed to persist block hashes",
-			"chain", rw.chain.GetName(),
 			"error", err,
 		)
 		return
@@ -427,7 +434,6 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 	skipEnd := latest - 1
 
 	rw.logger.Warn("Lag threshold exceeded, skipping ahead to chain head",
-		"chain", rw.chain.GetName(),
 		"current_block", rw.currentBlock,
 		"chain_head", latest,
 		"lag", latest-rw.currentBlock,
@@ -442,7 +448,6 @@ func (rw *RegularWorker) skipAheadIfLagging(latest uint64) bool {
 	rw.clearBlockHashes()
 
 	rw.logger.Info("Skip-ahead complete, queued catchup ranges",
-		"chain", rw.chain.GetName(),
 		"new_current", rw.currentBlock,
 		"catchup_ranges", len(ranges),
 	)

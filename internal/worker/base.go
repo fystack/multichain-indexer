@@ -64,7 +64,7 @@ func (bw *BaseWorker) processingHead(latest uint64) uint64 {
 // Stop stops the worker and cleans up internal resources
 func (bw *BaseWorker) Stop() {
 	bw.cancel()
-	bw.logger.Info("Worker stopped", "chain", bw.chain.GetName())
+	bw.logger.Info("Worker stopped")
 }
 
 // newWorkerWithMode constructs a BaseWorker with the given mode and logger.
@@ -171,7 +171,6 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 		}
 
 		bw.logger.Error("Failed to process block",
-			"chain", bw.chain.GetName(),
 			"block", result.Number,
 			"err", result.Error.Message,
 		)
@@ -186,7 +185,6 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 
 	if result.Block == nil {
 		bw.logger.Error("Nil block result",
-			"chain", bw.chain.GetName(),
 			"block", result.Number,
 		)
 		bw.notifyObserver(result.Number, BlockStatusFailed)
@@ -197,7 +195,6 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 	bw.emitBlock(result.Block)
 
 	bw.logger.Info("Processed block successfully",
-		"chain", bw.chain.GetName(),
 		"block", result.Block.Number,
 	)
 	registry.ClearFailedBlocks(bw.chain.GetName(), []uint64{result.Number})
@@ -234,7 +231,6 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"direction", types.DirectionIn,
 				"from", inTx.FromAddress,
 				"to", inTx.ToAddress,
-				"chain", bw.chain.GetName(),
 				"type", inTx.Type,
 				"txhash", inTx.TxHash,
 				"status", inTx.Status,
@@ -251,7 +247,6 @@ func (bw *BaseWorker) emitBlock(block *types.Block) {
 				"direction", types.DirectionOut,
 				"from", outTx.FromAddress,
 				"to", outTx.ToAddress,
-				"chain", bw.chain.GetName(),
 				"type", outTx.Type,
 				"txhash", outTx.TxHash,
 				"status", outTx.Status,
@@ -334,7 +329,6 @@ func (bw *BaseWorker) emitUTXOs(block *types.Block) {
 		event.Spent = filteredSpent
 
 		bw.logger.Info("Emitting UTXO event",
-			"chain", bw.chain.GetName(),
 			"txhash", event.TxHash,
 			"created", len(event.Created),
 			"spent", len(event.Spent),

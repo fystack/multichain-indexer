@@ -72,7 +72,6 @@ func NewMempoolWorker(
 // Start begins the mempool polling loop
 func (mw *MempoolWorker) Start() {
 	mw.logger.Info("Starting mempool worker",
-		"chain", mw.chain.GetName(),
 		"poll_interval", mw.pollInterval,
 	)
 	go mw.run(mw.processMempool)
@@ -80,13 +79,13 @@ func (mw *MempoolWorker) Start() {
 
 // Stop stops the mempool worker
 func (mw *MempoolWorker) Stop() {
-	mw.logger.Info("Stopping mempool worker", "chain", mw.chain.GetName())
+	mw.logger.Info("Stopping mempool worker")
 	mw.BaseWorker.Stop()
 }
 
 // processMempool polls the mempool for new transactions
 func (mw *MempoolWorker) processMempool() error {
-	mw.logger.Debug("Polling mempool", "chain", mw.chain.GetName())
+	mw.logger.Debug("Polling mempool")
 
 	transactions, utxoEvents, err := mw.btcIndexer.GetMempoolTransactions(mw.ctx)
 	if err != nil {
