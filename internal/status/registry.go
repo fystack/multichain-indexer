@@ -50,6 +50,18 @@ func (r *Registry) RegisterChain(chainKey, chainName string, chainCfg config.Cha
 	state.thresholds = chainCfg.Status.Normalize()
 }
 
+// SetProviderSource registers how to read the chain's RPC provider health; it is called on every snapshot.
+func (r *Registry) SetProviderSource(chainKey string, source func() []ProviderStatus) {
+	key := config.CanonicalChainKey(chainKey)
+	if key == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ensureStateLocked(key).providers = source
+}
+
 func (r *Registry) UpdateHead(chainKey string, latestBlock, indexedBlock uint64, indexedAt time.Time) {
 	key := config.CanonicalChainKey(chainKey)
 	if key == "" {
@@ -187,6 +199,7 @@ func (r *Registry) Snapshot(version string) StatusResponse {
 			failedBlocksCount:    len(state.failedBlocks),
 			catchupRangesCount:   len(state.catchupRanges),
 			catchupPendingBlocks: state.catchupPendingBlocks,
+			providers:            state.providers,
 		})
 	}
 	r.mu.RUnlock()
@@ -216,6 +229,9 @@ func (r *Registry) Snapshot(version string) StatusResponse {
 		if !state.lastIndexedAt.IsZero() {
 			t := state.lastIndexedAt
 			item.LastIndexedAt = &t
+		}
+		if state.providers != nil {
+			item.Providers = state.providers()
 		}
 		networks = append(networks, item)
 	}

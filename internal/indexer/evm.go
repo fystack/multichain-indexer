@@ -24,9 +24,9 @@ type EVMIndexer struct {
 	config              config.ChainConfig
 	failover            *rpc.Failover[evm.EthereumAPI]
 	traceFailover       *rpc.Failover[evm.EthereumAPI] // nil if no debug-capable nodes
-	maxBatchSize        int                             // Maximum batch size to prevent RPC timeouts
-	maxReceiptBatchSize int                             // Specific limit for receipt batches (usually smaller)
-	pubkeyStore         PubkeyStore                     // For selective receipt fetching
+	maxBatchSize        int                            // Maximum batch size to prevent RPC timeouts
+	maxReceiptBatchSize int                            // Specific limit for receipt batches (usually smaller)
+	pubkeyStore         PubkeyStore                    // For selective receipt fetching
 }
 
 // traceModeActive returns true when tracing can actually run right now.
@@ -1147,4 +1147,9 @@ func (e *EVMIndexer) findMissingBlocks(blockNums []uint64, blocks map[uint64]*ev
 		}
 	}
 	return missing
+}
+
+// ProviderSnapshot reports the health of this chain's RPC providers for the status endpoint.
+func (e *EVMIndexer) ProviderSnapshot() []rpc.ProviderSnapshot {
+	return e.failover.Snapshot()
 }

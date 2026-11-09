@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/fystack/multichain-indexer/internal/adminapi"
 	"net/http"
 	"os"
 	"os/signal"
@@ -258,6 +259,10 @@ func startHealthServer(port int, cfg *config.Config, manager *worker.Manager) *h
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(response)
 	})
+
+	if token := os.Getenv("INDEXER_ADMIN_TOKEN"); token != "" && manager != nil {
+		adminapi.Register(mux, manager, token)
+	}
 
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
