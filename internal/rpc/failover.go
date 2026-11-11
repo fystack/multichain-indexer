@@ -197,7 +197,8 @@ type Failover[T NetworkClient] struct {
 	probeMaxLag uint64
 }
 
-// ProbeFunc checks a provider is serving and returns its chain head.
+// ProbeFunc checks a provider is serving and returns a monotonic head position
+// (e.g. block height or latest-block timestamp) compared in the same unit as maxLag.
 type ProbeFunc[T NetworkClient] func(ctx context.Context, client T) (uint64, error)
 
 // SetProbe gates blacklist recovery on probe passing; call before the failover is used.
@@ -374,35 +375,46 @@ func (f *Failover[T]) checkProvider(ctx context.Context, p *Provider) error {
 	if !ok {
 		return fmt.Errorf("provider client type mismatch: expected %T, got %T", *new(T), p.Client)
 	}
+	var refClient T
+	var ref *Provider
+	if f.probeMaxLag > 0 {
+		f.mu.RLock()
+		if f.currentIndex >= 0 && f.currentIndex < len(f.providers) {
+			ref = f.providers[f.currentIndex]
+		}
+		f.mu.RUnlock()
+		if ref == p || (ref != nil && !ref.IsAvailable()) {
+			ref = nil
+		}
+		if ref != nil {
+			if refClient, ok = ref.Client.(T); !ok {
+				ref = nil
+			}
+		}
+	}
+
+	// Fetch both heads concurrently so the gap between calls doesn't read as lag on fast chains.
+	var refHead uint64
+	var refErr error
+	var wg sync.WaitGroup
+	if ref != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			refHead, refErr = f.probe(ctx, refClient)
+		}()
+	}
 	head, err := f.probe(ctx, client)
+	wg.Wait()
 	if err != nil {
 		return err
 	}
-	if f.probeMaxLag == 0 {
-		return nil
-	}
-
-	f.mu.RLock()
-	var ref *Provider
-	if f.currentIndex >= 0 && f.currentIndex < len(f.providers) {
-		ref = f.providers[f.currentIndex]
-	}
-	f.mu.RUnlock()
-	if ref == nil || ref == p || !ref.IsAvailable() {
-		return nil
-	}
-
-	refClient, ok := ref.Client.(T)
-	if !ok {
-		return nil
-	}
 	// A failing reference says nothing about p, so don't hold p back for it.
-	refHead, err := f.probe(ctx, refClient)
-	if err != nil {
+	if ref == nil || refErr != nil {
 		return nil
 	}
 	if refHead > head && refHead-head > f.probeMaxLag {
-		return fmt.Errorf("head %d lags %s by %d blocks", head, ref.Name, refHead-head)
+		return fmt.Errorf("head %d lags %s by %d (max %d)", head, ref.Name, refHead-head, f.probeMaxLag)
 	}
 	return nil
 }

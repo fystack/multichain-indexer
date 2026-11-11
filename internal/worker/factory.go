@@ -198,16 +198,16 @@ func newEVMProvider(chainName string, idx int, node config.NodeConfig, timeout t
 	}
 }
 
-// evmProbeMaxLag is how far behind the active provider a recovering node may be
-// before it is kept blacklisted.
-const evmProbeMaxLag = 20
+// evmProbeMaxLagSeconds is how far (by latest-block timestamp) a recovering node may trail
+// the active provider before it stays blacklisted; time-based so it fits any block time.
+const evmProbeMaxLagSeconds = 60
 
 // buildEVMIndexer constructs an EVM indexer with failover and providers.
 func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
 	failover := rpc.NewFailover[evm.EthereumAPI](nil)
 	failover.SetProbe(func(ctx context.Context, c evm.EthereumAPI) (uint64, error) {
-		return c.GetBlockNumber(ctx)
-	}, evmProbeMaxLag)
+		return c.GetLatestBlockTimestamp(ctx)
+	}, evmProbeMaxLagSeconds)
 	var traceFailover *rpc.Failover[evm.EthereumAPI]
 
 	// Main pool rate limiter

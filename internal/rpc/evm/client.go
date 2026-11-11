@@ -56,6 +56,31 @@ func (c *Client) GetBlockNumber(ctx context.Context) (uint64, error) {
 	return blockNum, nil
 }
 
+// GetLatestBlockTimestamp returns the unix timestamp of the latest block.
+// It decodes only the timestamp, since hash-only transactions don't fit Block.Transactions.
+func (c *Client) GetLatestBlockTimestamp(ctx context.Context) (uint64, error) {
+	resp, err := c.CallRPC(ctx, "eth_getBlockByNumber", []any{"latest", false})
+	if err != nil {
+		return 0, fmt.Errorf("eth_getBlockByNumber failed: %w", err)
+	}
+
+	var header *struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if err := json.Unmarshal(resp.Result, &header); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal latest block: %w", err)
+	}
+	if header == nil {
+		return 0, fmt.Errorf("latest block not found")
+	}
+
+	ts, err := strconv.ParseUint(strings.TrimPrefix(header.Timestamp, "0x"), 16, 64)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse block timestamp %q: %w", header.Timestamp, err)
+	}
+	return ts, nil
+}
+
 // GetBlockByNumber returns a block with full transaction data
 func (c *Client) GetBlockByNumber(
 	ctx context.Context,
