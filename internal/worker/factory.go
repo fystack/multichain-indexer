@@ -19,8 +19,8 @@ import (
 	"github.com/fystack/multichain-indexer/internal/rpc/sui"
 	tonrpc "github.com/fystack/multichain-indexer/internal/rpc/ton"
 	"github.com/fystack/multichain-indexer/internal/rpc/tron"
-	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/internal/rpc/xrp"
+	"github.com/fystack/multichain-indexer/internal/status"
 	"github.com/fystack/multichain-indexer/pkg/addressbloomfilter"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/enum"
@@ -190,6 +190,7 @@ func newEVMProvider(chainName string, idx int, node config.NodeConfig, timeout t
 	return &rpc.Provider{
 		Name:       chainName + "-" + strconv.Itoa(idx),
 		URL:        node.URL,
+		Backup:     node.Backup,
 		Network:    chainName,
 		ClientType: "rpc",
 		Client:     client,
@@ -197,9 +198,16 @@ func newEVMProvider(chainName string, idx int, node config.NodeConfig, timeout t
 	}
 }
 
+// evmProbeMaxLag is how far behind the active provider a recovering node may be
+// before it is kept blacklisted.
+const evmProbeMaxLag = 20
+
 // buildEVMIndexer constructs an EVM indexer with failover and providers.
 func buildEVMIndexer(chainName string, chainCfg config.ChainConfig, mode WorkerMode, pubkeyStore pubkeystore.Store) indexer.Indexer {
 	failover := rpc.NewFailover[evm.EthereumAPI](nil)
+	failover.SetProbe(func(ctx context.Context, c evm.EthereumAPI) (uint64, error) {
+		return c.GetBlockNumber(ctx)
+	}, evmProbeMaxLag)
 	var traceFailover *rpc.Failover[evm.EthereumAPI]
 
 	// Main pool rate limiter
@@ -270,6 +278,7 @@ func buildTronIndexer(chainName string, chainCfg config.ChainConfig, mode Worker
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: "rpc",
 			Client:     client,
@@ -309,6 +318,7 @@ func buildBitcoinIndexer(
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: "rpc",
 			Client:     client,
@@ -342,6 +352,7 @@ func buildSolanaIndexer(chainName string, chainCfg config.ChainConfig, mode Work
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: "rpc",
 			Client:     client,
@@ -367,6 +378,7 @@ func buildSuiIndexer(
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: "grpc",
 			Client:     client,
@@ -405,6 +417,7 @@ func buildCosmosIndexer(
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: rpc.ClientTypeREST,
 			Client:     client,
@@ -443,6 +456,7 @@ func buildAptosIndexer(
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: rpc.ClientTypeREST,
 			Client:     client,
@@ -521,6 +535,7 @@ func buildXRPIndexer(
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: rpc.ClientTypeRPC,
 			Client:     client,
@@ -563,6 +578,7 @@ func buildStellarIndexer(
 		failover.AddProvider(&rpc.Provider{
 			Name:       chainName + "-" + strconv.Itoa(i+1),
 			URL:        node.URL,
+			Backup:     node.Backup,
 			Network:    chainName,
 			ClientType: rpc.ClientTypeREST,
 			Client:     client,

@@ -83,6 +83,9 @@ chains:
       - url: "https://rpc.mevblocker.io"
       # - url: "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}"
       #   debug_trace: true  # this node supports debug_* namespace
+      # - url: "https://primary-rpc.example.com"
+      # - url: "https://backup-rpc.example.com"
+      #   backup: true  # only used while every non-backup node is blacklisted
 
   bnb_mainnet:
     network_id: "bnb_mainnet"

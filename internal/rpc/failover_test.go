@@ -266,3 +266,185 @@ func TestExecuteCore_TransientGenericErrorsDoNotForceRotate(t *testing.T) {
 	metrics := f.GetMetrics()
 	assert.Equal(t, int64(0), metrics["provider_switches"])
 }
+
+func newBackupFailover(t *testing.T) (*Failover[NetworkClient], *Provider, *Provider) {
+	t.Helper()
+	f := NewFailover[NetworkClient](nil)
+	primary := newTestProvider("primary")
+	backup := newTestProvider("backup")
+	backup.Backup = true
+	require.NoError(t, f.AddProvider(backup))
+	require.NoError(t, f.AddProvider(primary))
+	return f, primary, backup
+}
+
+func TestGetBestProvider_PrefersPrimaryOverBackup(t *testing.T) {
+	f, primary, _ := newBackupFailover(t)
+
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, primary.Name, p.Name)
+}
+
+func TestGetBestProvider_ReturnsToPrimaryAfterBlacklistExpires(t *testing.T) {
+	f, primary, backup := newBackupFailover(t)
+
+	primary.Blacklist(time.Hour)
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, backup.Name, p.Name)
+
+	primary.Blacklist(-time.Second)
+	p, err = f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, primary.Name, p.Name)
+
+	p, err = f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, primary.Name, p.Name)
+}
+
+func TestGetAvailableProviders_ExcludesBackupWhilePrimaryAvailable(t *testing.T) {
+	f, primary, backup := newBackupFailover(t)
+
+	got := f.GetAvailableProviders()
+	require.Len(t, got, 1)
+	assert.Equal(t, primary.Name, got[0].Name)
+
+	primary.Blacklist(time.Hour)
+	got = f.GetAvailableProviders()
+	require.Len(t, got, 1)
+	assert.Equal(t, backup.Name, got[0].Name)
+}
+
+func TestExecuteWithRetryProvider_FallsBackToBackup(t *testing.T) {
+	f, primary, backup := newBackupFailover(t)
+
+	var used []string
+	err := f.ExecuteWithRetryProvider(context.Background(), primary, func(c NetworkClient) error {
+		if len(used) == 0 {
+			used = append(used, "primary")
+			return fmt.Errorf("context deadline exceeded")
+		}
+		used = append(used, "backup")
+		return nil
+	}, true)
+	require.NoError(t, err)
+	assert.Equal(t, StateBlacklisted, primary.State)
+	assert.Equal(t, []string{"primary", "backup"}, used)
+	assert.Equal(t, StateHealthy, backup.State)
+}
+
+type namedClient struct {
+	mockNetworkClient
+	name string
+}
+
+func expireBlacklist(p *Provider) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.BlacklistedUntil = time.Now().Add(-time.Second)
+}
+
+func newProbedFailover(t *testing.T, heads map[string]uint64, failing map[string]bool) (*Failover[NetworkClient], *Provider, *Provider) {
+	t.Helper()
+	f, primary, backup := newBackupFailover(t)
+	primary.Client = &namedClient{name: "primary"}
+	backup.Client = &namedClient{name: "backup"}
+	f.SetProbe(func(_ context.Context, c NetworkClient) (uint64, error) {
+		name := c.(*namedClient).name
+		if failing[name] {
+			return 0, fmt.Errorf("context deadline exceeded")
+		}
+		return heads[name], nil
+	}, 20)
+	return f, primary, backup
+}
+
+func TestBlacklistEscalating(t *testing.T) {
+	p := newTestProvider("p")
+	maxD := 30 * time.Minute
+
+	assert.Equal(t, 3*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+	assert.Equal(t, 6*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+	assert.Equal(t, 12*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+	assert.Equal(t, 24*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+	assert.Equal(t, 30*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+
+	p.Success(time.Millisecond)
+	assert.Equal(t, 3*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+
+	q := newTestProvider("q")
+	assert.Equal(t, 24*time.Hour, q.BlacklistEscalating(24*time.Hour, maxD, false))
+	assert.Equal(t, 24*time.Hour, q.BlacklistEscalating(24*time.Hour, maxD, false))
+}
+
+func TestProbe_FailingPrimaryStaysBlacklistedWithLongerCooldown(t *testing.T) {
+	failing := map[string]bool{"primary": true}
+	f, primary, backup := newProbedFailover(t, map[string]uint64{"primary": 100, "backup": 100}, failing)
+
+	f.AnalyzeAndHandleError(primary, fmt.Errorf("context deadline exceeded"), time.Second)
+	expireBlacklist(primary)
+
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, backup.Name, p.Name)
+
+	assert.Eventually(t, func() bool {
+		primary.mu.RLock()
+		defer primary.mu.RUnlock()
+		return !primary.probing && primary.BlacklistStrikes == 2
+	}, time.Second, 5*time.Millisecond)
+	assert.True(t, primary.RequiresProbe())
+	assert.True(t, time.Now().Add(5*time.Minute).Before(primary.BlacklistedUntil))
+
+	p, err = f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, backup.Name, p.Name)
+}
+
+func TestProbe_PassingPrimaryRecoversAndTakesTrafficBack(t *testing.T) {
+	f, primary, backup := newProbedFailover(t, map[string]uint64{"primary": 100, "backup": 105}, nil)
+
+	f.AnalyzeAndHandleError(primary, fmt.Errorf("context deadline exceeded"), time.Second)
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, backup.Name, p.Name)
+
+	expireBlacklist(primary)
+	assert.Eventually(t, func() bool {
+		p, err := f.GetBestProvider()
+		return err == nil && p.Name == primary.Name
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestProbe_LaggingPrimaryStaysBlacklisted(t *testing.T) {
+	f, primary, backup := newProbedFailover(t, map[string]uint64{"primary": 100, "backup": 200}, nil)
+
+	f.AnalyzeAndHandleError(primary, fmt.Errorf("context deadline exceeded"), time.Second)
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, backup.Name, p.Name)
+
+	expireBlacklist(primary)
+	_, err = f.GetBestProvider()
+	require.NoError(t, err)
+
+	assert.Eventually(t, func() bool {
+		primary.mu.RLock()
+		defer primary.mu.RUnlock()
+		return !primary.probing && primary.BlacklistStrikes == 2
+	}, time.Second, 5*time.Millisecond)
+	assert.False(t, primary.IsAvailable())
+}
+
+func TestProbe_PlainBlacklistRecoversOnTimer(t *testing.T) {
+	f, primary, _ := newProbedFailover(t, nil, map[string]bool{"primary": true})
+
+	f.HandleCapabilityError(primary, time.Millisecond, time.Hour)
+	expireBlacklist(primary)
+
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, primary.Name, p.Name)
+}
