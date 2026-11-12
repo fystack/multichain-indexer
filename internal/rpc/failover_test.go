@@ -320,19 +320,62 @@ func TestGetAvailableProviders_ExcludesBackupWhilePrimaryAvailable(t *testing.T)
 func TestExecuteWithRetryProvider_FallsBackToBackup(t *testing.T) {
 	f, primary, backup := newBackupFailover(t)
 
-	var used []string
-	err := f.ExecuteWithRetryProvider(context.Background(), primary, func(c NetworkClient) error {
-		if len(used) == 0 {
-			used = append(used, "primary")
-			return fmt.Errorf("context deadline exceeded")
-		}
-		used = append(used, "backup")
+	f.AnalyzeAndHandleError(primary, fmt.Errorf("context deadline exceeded"), time.Second)
+	require.Equal(t, StateBlacklisted, primary.State)
+
+	calls := 0
+	err := f.ExecuteWithRetryProvider(context.Background(), primary, func(NetworkClient) error {
+		calls++
 		return nil
 	}, true)
 	require.NoError(t, err)
+	assert.Equal(t, 1, calls)
 	assert.Equal(t, StateBlacklisted, primary.State)
-	assert.Equal(t, []string{"primary", "backup"}, used)
 	assert.Equal(t, StateHealthy, backup.State)
+	assert.Equal(t, int64(1), f.GetMetrics()["provider_request_counts"].(map[string]int64)[backup.Name])
+}
+
+func TestGetBestProvider_ForceRotateReachesBackup(t *testing.T) {
+	f, primary, backup := newBackupFailover(t)
+
+	for i := 0; i < f.config.ForceRotateThreshold; i++ {
+		p, err := f.GetBestProvider()
+		require.NoError(t, err)
+		require.Equal(t, primary.Name, p.Name)
+		require.Error(t, f.executeCore(context.Background(), p, func(NetworkClient) error {
+			return fmt.Errorf("unclassified backend failure")
+		}))
+	}
+
+	for i := 0; i < 2; i++ {
+		p, err := f.GetBestProvider()
+		require.NoError(t, err)
+		assert.Equal(t, backup.Name, p.Name)
+	}
+	assert.False(t, primary.IsAvailable())
+	assert.Equal(t, int64(2), f.GetMetrics()["provider_switches"])
+
+	expireBlacklist(primary)
+	p, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, primary.Name, p.Name)
+	assert.Equal(t, 0, primary.ConsecutiveErrors)
+}
+
+func TestEmergencyRecovery_TotalOutageDoesNotEscalate(t *testing.T) {
+	f, primary, backup := newBackupFailover(t)
+	timeout := fmt.Errorf("context deadline exceeded")
+
+	for i := 0; i < 10; i++ {
+		p, err := f.GetBestProvider()
+		require.NoError(t, err)
+		f.AnalyzeAndHandleError(p, timeout, time.Second)
+	}
+
+	for _, p := range []*Provider{primary, backup} {
+		assert.Equal(t, 1, p.BlacklistStrikes, p.Name)
+		assert.True(t, p.BlacklistedUntil.Before(time.Now().Add(4*time.Minute)), p.Name)
+	}
 }
 
 type namedClient struct {
@@ -344,6 +387,12 @@ func expireBlacklist(p *Provider) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.BlacklistedUntil = time.Now().Add(-time.Second)
+}
+
+func probeRequired(p *Provider) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.probeRequired
 }
 
 func newProbedFailover(t *testing.T, heads map[string]uint64, failing map[string]bool) (*Failover[NetworkClient], *Provider, *Provider) {
@@ -365,18 +414,63 @@ func TestBlacklistEscalating(t *testing.T) {
 	p := newTestProvider("p")
 	maxD := 30 * time.Minute
 
-	assert.Equal(t, 3*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
-	assert.Equal(t, 6*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
-	assert.Equal(t, 12*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
-	assert.Equal(t, 24*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
-	assert.Equal(t, 30*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+	for _, want := range []time.Duration{3, 6, 12, 24, 30} {
+		assert.Equal(t, want*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
+		expireBlacklist(p)
+	}
 
 	p.Success(time.Millisecond)
 	assert.Equal(t, 3*time.Minute, p.BlacklistEscalating(3*time.Minute, maxD, false))
 
 	q := newTestProvider("q")
 	assert.Equal(t, 24*time.Hour, q.BlacklistEscalating(24*time.Hour, maxD, false))
+	expireBlacklist(q)
 	assert.Equal(t, 24*time.Hour, q.BlacklistEscalating(24*time.Hour, maxD, false))
+}
+
+func TestBlacklistEscalating_ConcurrentFailuresAreOneStrike(t *testing.T) {
+	p := newTestProvider("p")
+	maxD := 30 * time.Minute
+
+	for i := 0; i < 5; i++ {
+		p.BlacklistEscalating(3*time.Minute, maxD, false)
+	}
+	assert.Equal(t, 1, p.BlacklistStrikes)
+	assert.True(t, p.BlacklistedUntil.Before(time.Now().Add(4*time.Minute)))
+
+	p.BlacklistEscalating(24*time.Hour, maxD, false)
+	assert.Equal(t, 1, p.BlacklistStrikes)
+	assert.True(t, p.BlacklistedUntil.After(time.Now().Add(23*time.Hour)))
+}
+
+func TestFinishProbe_DropsResultWhenStateChanged(t *testing.T) {
+	maxD := 30 * time.Minute
+
+	recovered := newTestProvider("recovered")
+	recovered.BlacklistEscalating(3*time.Minute, maxD, true)
+	expireBlacklist(recovered)
+	action, gen := recovered.settleExpiredBlacklist(true)
+	require.Equal(t, expiredBlacklistNeedsProbe, action)
+	recovered.emergencyRecover()
+
+	applied, _ := recovered.finishProbe(gen, false, maxD)
+	assert.False(t, applied)
+	assert.True(t, recovered.IsAvailable())
+
+	reblacklisted := newTestProvider("reblacklisted")
+	reblacklisted.BlacklistEscalating(3*time.Minute, maxD, true)
+	expireBlacklist(reblacklisted)
+	action, gen = reblacklisted.settleExpiredBlacklist(true)
+	require.Equal(t, expiredBlacklistNeedsProbe, action)
+	reblacklisted.emergencyRecover()
+	reblacklisted.BlacklistEscalating(3*time.Minute, maxD, true)
+
+	applied, _ = reblacklisted.finishProbe(gen, true, maxD)
+	assert.False(t, applied)
+	assert.False(t, reblacklisted.IsAvailable())
+
+	action, _ = reblacklisted.settleExpiredBlacklist(true)
+	assert.Equal(t, expiredBlacklistUnchanged, action)
 }
 
 func TestProbe_FailingPrimaryStaysBlacklistedWithLongerCooldown(t *testing.T) {
@@ -395,7 +489,7 @@ func TestProbe_FailingPrimaryStaysBlacklistedWithLongerCooldown(t *testing.T) {
 		defer primary.mu.RUnlock()
 		return !primary.probing && primary.BlacklistStrikes == 2
 	}, time.Second, 5*time.Millisecond)
-	assert.True(t, primary.RequiresProbe())
+	assert.True(t, probeRequired(primary))
 	assert.True(t, time.Now().Add(5*time.Minute).Before(primary.BlacklistedUntil))
 
 	p, err = f.GetBestProvider()

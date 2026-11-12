@@ -25,6 +25,8 @@ type FailoverConfig struct {
 	ProbeTimeout         time.Duration
 }
 
+const forceRotateCooldown = time.Minute
+
 func DefaultFailoverConfig() FailoverConfig {
 	return FailoverConfig{
 		HealthCheckInterval:  30 * time.Second,
@@ -197,13 +199,10 @@ type Failover[T NetworkClient] struct {
 	probeMaxLag uint64
 }
 
-// ProbeFunc checks a provider is serving and returns a monotonic head position
-// (e.g. block height or latest-block timestamp) compared in the same unit as maxLag.
+// ProbeFunc returns a provider's head position (block height or timestamp), in the unit of maxLag.
 type ProbeFunc[T NetworkClient] func(ctx context.Context, client T) (uint64, error)
 
-// SetProbe gates blacklist recovery on probe passing; call before the failover is used.
-// With maxLag > 0, a probed provider whose head trails the current provider by more
-// than maxLag stays blacklisted.
+// SetProbe gates blacklist recovery on a probe and maxLag (0 disables the lag check); call before use.
 func (f *Failover[T]) SetProbe(probe ProbeFunc[T], maxLag uint64) {
 	f.probe = probe
 	f.probeMaxLag = maxLag
@@ -274,7 +273,7 @@ func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 
 	if curIdx >= 0 && curIdx < len(providers) {
 		cur := providers[curIdx]
-		if cur.Backup {
+		if cur.Backup && hasAvailablePrimary(providers) {
 			if p, ok := f.switchToPrimary(curIdx); ok {
 				return p, nil
 			}
@@ -285,6 +284,9 @@ func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 			cur.mu.RUnlock()
 			if consecutiveErrors < f.config.ForceRotateThreshold {
 				return cur, nil
+			}
+			if hasBackup(providers) {
+				f.blacklistForceRotated(cur)
 			}
 		}
 
@@ -309,6 +311,37 @@ func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 	return f.findNextAvailableProvider()
 }
 
+func hasBackup(providers []*Provider) bool {
+	for _, p := range providers {
+		if p.Backup {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAvailablePrimary(providers []*Provider) bool {
+	for _, p := range providers {
+		if !p.Backup && p.IsAvailable() {
+			return true
+		}
+	}
+	return false
+}
+
+// blacklistForceRotated gives a force-rotated provider a timed way back, else primaries-first re-picks it.
+func (f *Failover[T]) blacklistForceRotated(p *Provider) {
+	cooldown := p.BlacklistEscalating(forceRotateCooldown, f.config.MaxBlacklistDuration, f.probe != nil)
+	f.metrics.IncrementBlacklist()
+
+	if f.logThrottler.ShouldLog(fmt.Sprintf("force_rotate_%s", p.Name)) {
+		logger.Warn("Blacklisting force-rotated provider",
+			"provider", p.Name,
+			"force_rotate_threshold", f.config.ForceRotateThreshold,
+			"blacklist_duration", cooldown)
+	}
+}
+
 // switchToPrimary moves off a backup provider as soon as any primary is available again.
 func (f *Failover[T]) switchToPrimary(fromIdx int) (*Provider, bool) {
 	f.mu.Lock()
@@ -330,44 +363,41 @@ func (f *Failover[T]) switchToPrimary(fromIdx int) (*Provider, bool) {
 	return nil, false
 }
 
-// recoverExpiredBlacklists recovers expired blacklists, or starts a background
-// probe for providers that must pass one first.
+// recoverExpiredBlacklists recovers expired blacklists, probing first where a probe is required.
 func (f *Failover[T]) recoverExpiredBlacklists(providers []*Provider) {
 	for _, p := range providers {
 		if !p.IsExpiredBlacklist() {
 			continue
 		}
-		if f.probe != nil && p.RequiresProbe() {
-			if p.tryStartProbe() {
-				go f.runProbe(p)
-			}
-			continue
+		switch action, gen := p.settleExpiredBlacklist(f.probe != nil); action {
+		case expiredBlacklistNeedsProbe:
+			go f.runProbe(p, gen)
+		case expiredBlacklistRecovered:
+			logger.Info("Recovering expired blacklisted provider", "provider", p.Name)
+			f.metrics.IncrementRecovery()
 		}
-		logger.Info("Recovering expired blacklisted provider", "provider", p.Name)
-		p.Recover()
-		f.metrics.IncrementRecovery()
 	}
 }
 
-func (f *Failover[T]) runProbe(p *Provider) {
-	defer p.endProbe()
-
+func (f *Failover[T]) runProbe(p *Provider, gen uint64) {
 	ctx, cancel := context.WithTimeout(context.Background(), f.config.ProbeTimeout)
 	defer cancel()
 
-	if err := f.checkProvider(ctx, p); err != nil {
-		d := p.ReblacklistEscalating(f.config.MaxBlacklistDuration)
+	err := f.checkProvider(ctx, p)
+	applied, cooldown := p.finishProbe(gen, err == nil, f.config.MaxBlacklistDuration)
+	switch {
+	case !applied:
+		logger.Debug("Discarding stale recovery probe result", "provider", p.Name)
+	case err != nil:
 		f.metrics.IncrementBlacklist()
 		logger.Warn("Recovery probe failed, keeping provider blacklisted",
 			"provider", p.Name,
 			"error", err.Error(),
-			"blacklist_duration", d)
-		return
+			"blacklist_duration", cooldown)
+	default:
+		logger.Info("Recovery probe passed, recovering provider", "provider", p.Name)
+		f.metrics.IncrementRecovery()
 	}
-
-	logger.Info("Recovery probe passed, recovering provider", "provider", p.Name)
-	p.Recover()
-	f.metrics.IncrementRecovery()
 }
 
 func (f *Failover[T]) checkProvider(ctx context.Context, p *Provider) error {
@@ -419,8 +449,7 @@ func (f *Failover[T]) checkProvider(ctx context.Context, p *Provider) error {
 	return nil
 }
 
-// GetAvailableProviders returns all currently available primary providers,
-// or the available backups when no primary is available.
+// GetAvailableProviders returns the available primaries, or the available backups when there are none.
 func (f *Failover[T]) GetAvailableProviders() []*Provider {
 	f.mu.RLock()
 	providers := append([]*Provider(nil), f.providers...)
@@ -516,7 +545,7 @@ func (f *Failover[T]) performEmergencyRecoveryLocked() (*Provider, error) {
 	})
 
 	first := blacklisted[0]
-	first.Recover()
+	first.emergencyRecover()
 	for idx, p := range f.providers {
 		if p == first {
 			f.currentIndex = idx

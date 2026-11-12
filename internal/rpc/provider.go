@@ -30,6 +30,9 @@ type Provider struct {
 	// probeRequired keeps the provider unavailable after its blacklist expires until a probe passes.
 	probeRequired bool
 	probing       bool
+	// blacklistGen changes on every blacklist or recovery so a stale probe result can be dropped.
+	blacklistGen       uint64
+	emergencyRecovered bool
 }
 
 // IsAvailable returns true if the provider is not blacklisted or blacklist expired.
@@ -40,13 +43,6 @@ func (p *Provider) IsAvailable() bool {
 		return true
 	}
 	return !p.probeRequired && time.Now().After(p.BlacklistedUntil)
-}
-
-// RequiresProbe reports whether the provider must pass a probe before leaving the blacklist.
-func (p *Provider) RequiresProbe() bool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.State == StateBlacklisted && p.probeRequired
 }
 
 // IsExpiredBlacklist checks if provider's blacklist duration has expired.
@@ -78,62 +74,110 @@ func (p *Provider) Blacklist(d time.Duration) {
 	p.State = StateBlacklisted
 	p.BlacklistedUntil = time.Now().Add(d)
 	p.probeRequired = false
+	p.blacklistGen++
 }
 
-// BlacklistEscalating blacklists for base doubled per prior strike, capped at
-// max(base, maxD), and returns the applied duration.
+// BlacklistEscalating blacklists for base doubled per prior strike, capped at max(base, maxD).
 func (p *Provider) BlacklistEscalating(base, maxD time.Duration, requireProbe bool) time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.blacklistEscalatingLocked(base, maxD, requireProbe)
+}
+
+func (p *Provider) blacklistEscalatingLocked(base, maxD time.Duration, requireProbe bool) time.Duration {
+	now := time.Now()
+
+	// Failures during an active blacklist are the same incident: no new strike.
+	if p.State == StateBlacklisted && now.Before(p.BlacklistedUntil) {
+		if until := now.Add(base); until.After(p.BlacklistedUntil) {
+			p.BlacklistedUntil = until
+		}
+		return p.BlacklistedUntil.Sub(now)
+	}
+
+	// Failing right after emergency recovery is the same outage, so the strike is reused.
+	if !p.emergencyRecovered || p.BlacklistStrikes == 0 {
+		p.BlacklistStrikes++
+	}
+	p.emergencyRecovered = false
 
 	d := base
-	for i := 0; i < p.BlacklistStrikes && d < maxD; i++ {
+	for i := 1; i < p.BlacklistStrikes && d < maxD; i++ {
 		d *= 2
 	}
 	d = min(d, max(base, maxD))
 
-	p.BlacklistStrikes++
 	p.blacklistBase = base
 	p.State = StateBlacklisted
-	p.BlacklistedUntil = time.Now().Add(d)
+	p.BlacklistedUntil = now.Add(d)
 	p.probeRequired = requireProbe
+	p.blacklistGen++
 	return d
 }
 
-// ReblacklistEscalating re-blacklists with the base cooldown of the last escalating blacklist.
-func (p *Provider) ReblacklistEscalating(maxD time.Duration) time.Duration {
-	p.mu.RLock()
-	base := p.blacklistBase
-	p.mu.RUnlock()
-	return p.BlacklistEscalating(base, maxD, true)
-}
+type expiredBlacklistAction int
 
-// tryStartProbe claims the probe slot for an expired, probe-gated blacklist.
-func (p *Provider) tryStartProbe() bool {
+const (
+	expiredBlacklistUnchanged expiredBlacklistAction = iota
+	expiredBlacklistRecovered
+	expiredBlacklistNeedsProbe
+)
+
+// settleExpiredBlacklist recovers an expired blacklist, or claims the probe slot when it is probe-gated.
+func (p *Provider) settleExpiredBlacklist(canProbe bool) (expiredBlacklistAction, uint64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.probing || !p.probeRequired || p.State != StateBlacklisted || time.Now().Before(p.BlacklistedUntil) {
-		return false
+
+	if p.State != StateBlacklisted || time.Now().Before(p.BlacklistedUntil) {
+		return expiredBlacklistUnchanged, 0
 	}
-	p.probing = true
-	return true
+	if canProbe && p.probeRequired {
+		if p.probing {
+			return expiredBlacklistUnchanged, 0
+		}
+		p.probing = true
+		return expiredBlacklistNeedsProbe, p.blacklistGen
+	}
+	p.recoverLocked()
+	return expiredBlacklistRecovered, 0
 }
 
-func (p *Provider) endProbe() {
+// finishProbe applies a probe result unless the provider was blacklisted or recovered while it ran.
+func (p *Provider) finishProbe(gen uint64, passed bool, maxD time.Duration) (applied bool, cooldown time.Duration) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	p.probing = false
+	if p.blacklistGen != gen {
+		return false, 0
+	}
+	if passed {
+		p.recoverLocked()
+		return true, 0
+	}
+	return true, p.blacklistEscalatingLocked(p.blacklistBase, maxD, true)
 }
 
 // Recover reactivates a previously blacklisted provider.
 func (p *Provider) Recover() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.recoverLocked()
+}
 
+func (p *Provider) emergencyRecover() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.recoverLocked()
+	p.emergencyRecovered = true
+}
+
+func (p *Provider) recoverLocked() {
 	p.State = StateDegraded
 	p.BlacklistedUntil = time.Time{}
 	p.ConsecutiveErrors = 0
 	p.probeRequired = false
+	p.blacklistGen++
 }
 
 // Success resets errors and updates health metrics.
@@ -142,6 +186,7 @@ func (p *Provider) Success(elapsed time.Duration) {
 	defer p.mu.Unlock()
 
 	p.ConsecutiveErrors = 0
+	p.emergencyRecovered = false
 	p.BlacklistStrikes = 0
 	p.State = StateHealthy
 	if p.AverageResponseTime == 0 {
