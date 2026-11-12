@@ -12,6 +12,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetLatestBlockTimestamp_HashOnlyTransactions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"jsonrpc":"2.0","result":{"number":"0x10","timestamp":"0x6553f100","transactions":["0xabc","0xdef"]},"id":1}`)
+	}))
+	defer server.Close()
+
+	c := NewEthereumClient(server.URL, nil, 5*time.Second, nil)
+	ts, err := c.GetLatestBlockTimestamp(context.Background())
+
+	require.NoError(t, err)
+	assert.Equal(t, uint64(0x6553f100), ts)
+}
+
+func TestGetLatestBlockTimestamp_NullBlock(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"jsonrpc":"2.0","result":null,"id":1}`)
+	}))
+	defer server.Close()
+
+	c := NewEthereumClient(server.URL, nil, 5*time.Second, nil)
+	_, err := c.GetLatestBlockTimestamp(context.Background())
+
+	require.Error(t, err)
+}
+
 func TestDebugTraceTransaction_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

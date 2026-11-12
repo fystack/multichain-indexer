@@ -16,6 +16,7 @@ type FilterQuery struct {
 type EthereumAPI interface {
 	rpc.NetworkClient
 	GetBlockNumber(ctx context.Context) (uint64, error)
+	GetLatestBlockTimestamp(ctx context.Context) (uint64, error)
 	GetBlockByNumber(ctx context.Context, blockNumber string, detail bool) (*Block, error)
 	FilterLogs(ctx context.Context, query FilterQuery) ([]Log, error)
 	BatchGetBlocksByNumber(

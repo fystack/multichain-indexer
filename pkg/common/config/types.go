@@ -131,6 +131,8 @@ type NodeConfig struct {
 	Auth       AuthConfig        `yaml:"auth"`
 	Headers    map[string]string `yaml:"headers"`
 	DebugTrace bool              `yaml:"debug_trace"` // node supports debug_* namespace
+	// Backup nodes are only used while every non-backup node is unavailable.
+	Backup bool `yaml:"backup"`
 }
 
 // TraceThrottle configures rate limiting and concurrency for debug_traceTransaction calls.

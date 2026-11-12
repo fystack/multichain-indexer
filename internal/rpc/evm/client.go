@@ -10,6 +10,7 @@ import (
 
 	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/pkg/common/logger"
+	"github.com/fystack/multichain-indexer/pkg/common/utils"
 	"github.com/fystack/multichain-indexer/pkg/ratelimiter"
 )
 
@@ -54,6 +55,30 @@ func (c *Client) GetBlockNumber(ctx context.Context) (uint64, error) {
 	}
 
 	return blockNum, nil
+}
+
+// GetLatestBlockTimestamp decodes only the timestamp: hash-only transactions don't fit Block.Transactions.
+func (c *Client) GetLatestBlockTimestamp(ctx context.Context) (uint64, error) {
+	resp, err := c.CallRPC(ctx, "eth_getBlockByNumber", []any{"latest", false})
+	if err != nil {
+		return 0, fmt.Errorf("eth_getBlockByNumber failed: %w", err)
+	}
+
+	var header *struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if err := json.Unmarshal(resp.Result, &header); err != nil {
+		return 0, fmt.Errorf("failed to unmarshal latest block: %w", err)
+	}
+	if header == nil {
+		return 0, fmt.Errorf("latest block not found")
+	}
+
+	ts, err := utils.ParseHexUint64(header.Timestamp)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse block timestamp %q: %w", header.Timestamp, err)
+	}
+	return ts, nil
 }
 
 // GetBlockByNumber returns a block with full transaction data
