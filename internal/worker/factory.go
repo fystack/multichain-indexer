@@ -198,8 +198,7 @@ func newEVMProvider(chainName string, idx int, node config.NodeConfig, timeout t
 	}
 }
 
-// evmProbeMaxLagSeconds is how far (by latest-block timestamp) a recovering node may trail
-// the active provider before it stays blacklisted; time-based so it fits any block time.
+// evmProbeMaxLagSeconds is time-based so one limit fits any block time.
 const evmProbeMaxLagSeconds = 60
 
 // buildEVMIndexer constructs an EVM indexer with failover and providers.
