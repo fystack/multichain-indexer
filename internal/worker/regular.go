@@ -109,7 +109,7 @@ func (rw *RegularWorker) Stop() {
 }
 
 func (rw *RegularWorker) processRegularBlocks() error {
-	rw.logger.Info("Starting tick", "currentBlock", rw.currentBlock)
+	rw.logger.Debug("Starting tick", "currentBlock", rw.currentBlock)
 
 	latest, err := rw.chain.GetLatestBlockNumber(rw.ctx)
 	if err != nil {
@@ -118,7 +118,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	processingHead := rw.processingHead(latest)
 	rw.updateHeadStatus(latest, time.Time{})
 
-	rw.logger.Info("Got latest block",
+	rw.logger.Debug("Got latest block",
 		"latest", latest,
 		"processing_head", processingHead,
 		"confirmations", rw.config.Confirmations,
@@ -145,7 +145,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	start := rw.currentBlock
 	end := min(start+uint64(rw.config.Throttle.BatchSize)-1, processingHead)
 	startTime := time.Now()
-	rw.logger.Info("Processing range",
+	rw.logger.Debug("Processing range",
 		"chain", rw.chain.GetName(),
 		"start", start, "end", end, "size", end-start+1,
 	)
@@ -163,7 +163,7 @@ func (rw *RegularWorker) processRegularBlocks() error {
 	indexedAt := rw.commitProgress(lastSuccess, lastSuccessHash)
 	rw.updateHeadStatus(latest, indexedAt)
 
-	rw.logger.Info("Processed latest blocks",
+	rw.logger.Debug("Processed latest blocks",
 		"chain", rw.chain.GetName(),
 		"start", start, "end", end,
 		"elapsed", time.Since(startTime),

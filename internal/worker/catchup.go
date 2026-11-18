@@ -236,7 +236,7 @@ func (cw *CatchupWorker) splitLargeRange(r blockstore.CatchupRange) []blockstore
 
 func (cw *CatchupWorker) processCatchupBlocksParallel() error {
 	if len(cw.blockRanges) == 0 {
-		cw.logger.Info("No catchup ranges to process")
+		cw.logger.Debug("No catchup ranges to process")
 		return nil
 	}
 

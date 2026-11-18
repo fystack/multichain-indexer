@@ -693,3 +693,26 @@ func TestConvertBlock_TracesNil_NoNilPanic(t *testing.T) {
 	assert.Len(t, result.Transactions, 1)
 	assert.Equal(t, constant.TxTypeNativeTransfer, result.Transactions[0].Type)
 }
+
+// A transaction picked for a receipt (it may pay a monitored address) whose receipt didn't come back must fail its
+// block, so the block is retried; skipping it would count the block as indexed and lose the transfer for good.
+func TestBuildBlockResults_MissingReceipt_FailsTheBlock(t *testing.T) {
+	idx := &EVMIndexer{
+		chainName: "ethereum",
+		config:    config.ChainConfig{NetworkId: "eth"},
+	}
+
+	blocks := map[uint64]*evm.Block{
+		1: {Number: "0x1", Timestamp: "0x60000000", Transactions: []evm.Txn{{Hash: "0xpaid", From: "0xaaaa", To: "0xbbbb", Value: "0x1"}}},
+		2: {Number: "0x2", Timestamp: "0x60000001", Transactions: []evm.Txn{}},
+	}
+	txHashMap := map[uint64][]string{1: {"0xpaid"}}
+
+	results := idx.buildBlockResults([]uint64{1, 2}, blocks, txHashMap, map[string]*evm.TxnReceipt{}, nil)
+
+	require.Len(t, results, 2)
+	require.NotNil(t, results[0].Error, "block 1 lost a receipt and must be retried")
+	assert.Contains(t, results[0].Error.Message, "0xpaid")
+	assert.Nil(t, results[0].Block)
+	assert.Nil(t, results[1].Error, "block 2 needed no receipt")
+}

@@ -104,7 +104,7 @@ func (mw *ManualWorker) loop() {
 			emptyAttempts++
 			count, _ := mw.mbs.CountRanges(ctx, mw.chain.GetNetworkInternalCode())
 			if emptyAttempts >= mw.config.MaxEmptyAttempts {
-				mw.logger.Info("No ranges to process, sleeping",
+				mw.logger.Debug("No ranges to process, sleeping",
 					"chain", mw.chain.GetName(),
 					"sleep", mw.config.EmptySleep,
 					"queued_ranges", count,
