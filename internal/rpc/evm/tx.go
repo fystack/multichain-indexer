@@ -114,6 +114,9 @@ func (tx Txn) parseERC20Logs(
 	txIdx := hexIndexToDecimal(tx.TransactionIndex)
 	var transfers []types.Transaction
 	for _, log := range logs {
+		if strings.EqualFold(log.Address, EIP7708_NATIVE_TRANSFER_EMITTER) {
+			continue
+		}
 		parsed, err := log.parseERC20Transfers(fee, txHash, network, blockNumber, ts, txIdx)
 		if err != nil {
 			continue
