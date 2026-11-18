@@ -309,7 +309,7 @@ func (bs *blockStore) GetCatchupProgress(chain string) ([]CatchupRange, error) {
 			"current", cur,
 		)
 	}
-	logger.Info("Loaded catchup progress from store",
+	logger.Debug("Loaded catchup progress from store",
 		"chain", chain,
 		"ranges_count", len(ranges),
 	)

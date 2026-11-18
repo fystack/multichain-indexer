@@ -196,7 +196,7 @@ func (bw *BaseWorker) handleBlockResult(result indexer.BlockResult) bool {
 	// Emit transactions if relevant
 	bw.emitBlock(result.Block)
 
-	bw.logger.Info("Processed block successfully",
+	bw.logger.Debug("Processed block successfully",
 		"chain", bw.chain.GetName(),
 		"block", result.Block.Number,
 	)

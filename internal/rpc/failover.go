@@ -370,7 +370,7 @@ func (f *Failover[T]) findNextAvailableProvider() (*Provider, error) {
 	}
 
 	start := f.currentIndex
-	logger.Info("Searching for available provider",
+	logger.Debug("Searching for available provider",
 		"start_index", start,
 		"total_providers", len(f.providers))
 

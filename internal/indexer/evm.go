@@ -298,6 +298,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 
 	var (
 		erc20TxHashes map[string]bool
+		erc20Err      error
 		missingBlocks map[uint64]*evm.Block
 	)
 
@@ -325,12 +326,14 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 			erc20Start := time.Now()
 			matchedTxHashes, err := e.queryERC20TransfersToMonitoredAddresses(gctx, fromBlock, toBlock)
 			if err != nil {
+				// Without this query token transfers to monitored addresses can't be found; the blocks are failed
+				// below and retried rather than counted as indexed without them.
 				logger.Warn("failed to query ERC20 transfers", "error", err)
-				// Don't fail the entire operation, just log
+				erc20Err = err
 				return nil
 			}
 			erc20TxHashes = matchedTxHashes
-			logger.Info("[ERC20 QUERY COMPLETE]",
+			logger.Debug("[ERC20 QUERY COMPLETE]",
 				"elapsed_ms", time.Since(erc20Start).Milliseconds(),
 				"matched_txs", len(erc20TxHashes),
 			)
@@ -345,6 +348,17 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	if missingBlocks != nil && len(missingBlocks) > 0 {
 		maps.Copy(blocks, missingBlocks)
 		logger.Info("[MISSING BLOCKS FETCHED]", "count", len(missingBlocks))
+	}
+
+	if erc20Err != nil {
+		results := make([]BlockResult, 0, len(blockNums))
+		for _, num := range blockNums {
+			results = append(results, BlockResult{
+				Number: num,
+				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: "ERC20 transfer query failed: " + erc20Err.Error()},
+			})
+		}
+		return results, nil
 	}
 
 	// Extract transaction hashes for native transfers to monitored addresses
@@ -983,12 +997,29 @@ func (e *EVMIndexer) buildBlockResults(
 			continue
 		}
 
-		// Build receipts map for this block
+		// Build receipts map for this block. Every hash in txHashMap is a transaction that may move funds to or
+		// from a monitored address; without its receipt convertBlock would skip it and the block would still count
+		// as indexed, losing the transfer for good. So a missing receipt fails the block, which is retried.
 		txReceipts := make(map[string]*evm.TxnReceipt)
+		var missingReceipts []string
 		for _, txHash := range txHashMap[num] {
 			if receipt := allReceipts[txHash]; receipt != nil {
 				txReceipts[txHash] = receipt
+			} else {
+				missingReceipts = append(missingReceipts, txHash)
 			}
+		}
+		if len(missingReceipts) > 0 {
+			logger.Warn("receipts missing, block will be retried",
+				"chain", e.GetName(), "block", num, "missing", len(missingReceipts), "first", missingReceipts[0])
+			results = append(results, BlockResult{
+				Number: num,
+				Error: &Error{
+					ErrorType: ErrorTypeUnknown,
+					Message:   fmt.Sprintf("%d receipt(s) missing, e.g. %s", len(missingReceipts), missingReceipts[0]),
+				},
+			})
+			continue
 		}
 
 		typesBlock, err := e.convertBlock(block, txReceipts, traces)
@@ -1095,7 +1126,7 @@ func (e *EVMIndexer) convertBlock(
 			logger.Debug("[RECEIPTS] skipping failed tx", "tx", tx.Hash, "status", receipt.Status, "block", num)
 			continue
 		}
-		logger.Info("[RECEIPTS]", "tx", tx.Hash, "receipt", receipt)
+		logger.Debug("[RECEIPTS]", "tx", tx.Hash, "receipt", receipt)
 		var transfers []types.Transaction
 		fee := tx.CalcFee(receipt)
 		traced := false
