@@ -1359,3 +1359,33 @@ func TestStellarMainnetBatchPaymentProducesMultipleTransactions(t *testing.T) {
 		assert.Equal(t, types.MemoTypeText, tx.MemoType)
 	}
 }
+
+func TestStellarMemo_HashAndReturnAsHex(t *testing.T) {
+	t.Parallel()
+
+	const hashHex = "000000000000000000000000000000000000000000000000000001a1f2a52986"
+	const hashBase64 = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABofKlKYY="
+
+	tests := []struct {
+		name         string
+		detail       stellar.Transaction
+		wantMemo     string
+		wantMemoType types.MemoType
+	}{
+		{name: "hash base64 becomes hex", detail: stellar.Transaction{Memo: hashBase64, MemoType: "hash"}, wantMemo: hashHex, wantMemoType: types.MemoTypeHash},
+		{name: "return base64 becomes hex", detail: stellar.Transaction{Memo: hashBase64, MemoType: "return"}, wantMemo: hashHex, wantMemoType: types.MemoTypeReturn},
+		{name: "text is kept as is", detail: stellar.Transaction{Memo: " pspb:4441859 ", MemoType: "text"}, wantMemo: "pspb:4441859", wantMemoType: types.MemoTypeText},
+		{name: "id is kept as is", detail: stellar.Transaction{Memo: "1795072257352", MemoType: "id"}, wantMemo: "1795072257352", wantMemoType: types.MemoTypeID},
+		{name: "none stays empty", detail: stellar.Transaction{MemoType: "none"}, wantMemo: "", wantMemoType: types.MemoTypeNone},
+		{name: "undecodable hash is kept", detail: stellar.Transaction{Memo: "not-base64!", MemoType: "hash"}, wantMemo: "not-base64!", wantMemoType: types.MemoTypeHash},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			memo, memoType := stellarMemo(&tt.detail)
+			assert.Equal(t, tt.wantMemo, memo)
+			assert.Equal(t, tt.wantMemoType, memoType)
+		})
+	}
+}
