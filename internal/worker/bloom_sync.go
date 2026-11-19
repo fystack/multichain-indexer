@@ -32,8 +32,9 @@ type LoadedAddress struct {
 
 // BloomSyncConfig holds configuration for the bloom filter sync worker.
 type BloomSyncConfig struct {
-	Interval  time.Duration // How often to check for new addresses
-	BatchSize int           // Max addresses to fetch per sync cycle
+	Interval     time.Duration // How often to check for new addresses
+	BatchSize    int           // Max addresses to fetch per sync cycle
+	NetworkTypes []enum.NetworkType
 }
 
 // NewBloomSyncConfig creates a BloomSyncConfig from the parsed config,
@@ -123,14 +124,14 @@ func (w *BloomSyncWorker) initLastSyncedTimes() {
 	defer w.mu.Unlock()
 
 	now := time.Now()
-	for _, nt := range enum.AllNetworkTypes {
+	for _, nt := range w.config.NetworkTypes {
 		w.lastSyncedTimes[nt] = now
 		w.totalSynced[nt] = 0
 	}
 }
 
 func (w *BloomSyncWorker) syncAllNetworks() {
-	for _, nt := range enum.AllNetworkTypes {
+	for _, nt := range w.config.NetworkTypes {
 		if err := w.syncNetwork(nt); err != nil {
 			logger.Error("Bloom sync failed for network",
 				"networkType", nt,

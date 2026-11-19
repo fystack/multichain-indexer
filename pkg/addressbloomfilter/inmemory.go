@@ -41,8 +41,8 @@ func NewAddressBloomFilter(cfg Config) WalletAddressBloomFilter {
 	}
 }
 
-func (abf *addressBloomFilter) Initialize(ctx context.Context) error {
-	for _, addrType := range enum.AllNetworkTypes {
+func (abf *addressBloomFilter) Initialize(ctx context.Context, addressTypes []enum.NetworkType) error {
+	for _, addrType := range addressTypes {
 		offset := 0
 		limit := abf.config.BatchSize
 		total := 0

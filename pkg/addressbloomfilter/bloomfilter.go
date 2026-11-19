@@ -13,8 +13,8 @@ import (
 
 // WalletAddressBloomFilter defines the interface for working with wallet address filters.
 type WalletAddressBloomFilter interface {
-	// Initialize fully resets the bloom filter from database state.
-	Initialize(ctx context.Context) error
+	// Initialize fully resets the bloom filters of the given address types from database state.
+	Initialize(ctx context.Context, addressTypes []enum.NetworkType) error
 
 	// Add inserts a single address into the bloom filter for a given address type.
 	Add(address string, addressType enum.NetworkType)

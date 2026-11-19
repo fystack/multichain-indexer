@@ -148,3 +148,19 @@ func TestApplyDefaults_FromLatest(t *testing.T) {
 		})
 	}
 }
+
+func TestNetworkTypes_DistinctTypesOfGivenChains(t *testing.T) {
+	t.Parallel()
+
+	chains := Chains{
+		"ethereum_mainnet": {Type: enum.NetworkTypeEVM},
+		"base_mainnet":     {Type: enum.NetworkTypeEVM},
+		"stellar_testnet":  {Type: enum.NetworkTypeStellar},
+		"aptos_mainnet":    {Type: enum.NetworkTypeApt},
+	}
+
+	require.Equal(t,
+		[]enum.NetworkType{enum.NetworkTypeStellar, enum.NetworkTypeEVM},
+		chains.NetworkTypes([]string{"stellar_testnet", "ethereum_mainnet", "base_mainnet", "unknown"}),
+	)
+}
