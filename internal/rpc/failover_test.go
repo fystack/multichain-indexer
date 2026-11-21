@@ -266,3 +266,59 @@ func TestExecuteCore_TransientGenericErrorsDoNotForceRotate(t *testing.T) {
 	metrics := f.GetMetrics()
 	assert.Equal(t, int64(0), metrics["provider_switches"])
 }
+
+func TestGetBestProvider_ReturnsToEarlierProviderOnceUsable(t *testing.T) {
+	f := NewFailover[NetworkClient](nil)
+	primary := newTestProvider("primary")
+	fallback := newTestProvider("fallback")
+	require.NoError(t, f.AddProvider(primary))
+	require.NoError(t, f.AddProvider(fallback))
+
+	// The primary ran out of quota: the failover moves to the fallback.
+	primary.Blacklist(time.Hour)
+	got, err := f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, fallback.Name, got.Name)
+
+	// Still blacklisted: stay on the fallback.
+	f.lastPreferCheck = time.Time{}
+	got, _ = f.GetBestProvider()
+	assert.Equal(t, fallback.Name, got.Name)
+
+	// Its blacklist expired: go back to it.
+	primary.mu.Lock()
+	primary.BlacklistedUntil = time.Now().Add(-time.Second)
+	primary.mu.Unlock()
+	f.lastPreferCheck = time.Time{}
+	got, err = f.GetBestProvider()
+	require.NoError(t, err)
+	assert.Equal(t, primary.Name, got.Name)
+}
+
+func TestGetBestProvider_ChecksEarlierProvidersAtMostEveryInterval(t *testing.T) {
+	f := NewFailover[NetworkClient](nil)
+	primary := newTestProvider("primary")
+	fallback := newTestProvider("fallback")
+	require.NoError(t, f.AddProvider(primary))
+	require.NoError(t, f.AddProvider(fallback))
+	f.currentIndex = 1
+	f.lastPreferCheck = time.Now()
+
+	got, err := f.GetBestProvider()
+
+	require.NoError(t, err)
+	assert.Equal(t, fallback.Name, got.Name)
+}
+
+func TestAnalyzeError_MonthlyQuotaBlacklistsForAnHour(t *testing.T) {
+	f := NewFailover[NetworkClient](nil)
+	for _, msg := range []string{
+		"RPC error -32005: You've reached your monthly quota limit",
+		"HTTP 429: max usage reached",
+	} {
+		issue := f.analyzeError(fmt.Errorf("%s", msg), time.Millisecond)
+		assert.Equal(t, "quota_exceeded", issue.Reason, msg)
+		assert.Equal(t, time.Hour, issue.Cooldown, msg)
+		assert.True(t, issue.MarkUnhealthy, msg)
+	}
+}
