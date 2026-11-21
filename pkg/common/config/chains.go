@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"dario.cat/mergo"
+	"github.com/fystack/multichain-indexer/pkg/common/enum"
 )
 
 // CanonicalChainKey is the normalized chain identifier used as registry keys, indexer GetName(),
@@ -50,6 +51,21 @@ func (c Chains) Validate(names []string) error {
 		}
 	}
 	return nil
+}
+
+// NetworkTypes returns the distinct network types of the given chains, in order.
+func (c Chains) NetworkTypes(names []string) []enum.NetworkType {
+	seen := make(map[enum.NetworkType]bool, len(names))
+	types := make([]enum.NetworkType, 0, len(names))
+	for _, name := range names {
+		chain, ok := c[name]
+		if !ok || seen[chain.Type] {
+			continue
+		}
+		seen[chain.Type] = true
+		types = append(types, chain.Type)
+	}
+	return types
 }
 
 // OverrideFromLatest sets FromLatest = true for given chains.

@@ -144,22 +144,6 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 	emitter := events.NewEmitter(eventQueue, utxoQueue, services.Nats.SubjectPrefix)
 	defer emitter.Close()
 
-	// start address bloom filter (Initialize is optional)
-	var addressBF addressbloomfilter.WalletAddressBloomFilter
-	if services.Bloomfilter != nil && db != nil {
-		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
-		if err := addressBF.Initialize(ctx); err != nil {
-			logger.Fatal("Address bloom filter init failed", "err", err)
-		}
-		logger.Info("Address bloom filter initialized")
-	} else if services.Bloomfilter != nil {
-		// Create bloom filter instance even without database, but skip initialization
-		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
-		logger.Info("Address bloom filter created (initialization skipped - no database)")
-	} else {
-		logger.Info("Address bloom filter skipped - not configured")
-	}
-
 	// If no chains specified, use all configured chains
 	if len(chains) == 0 {
 		chains = cfg.Chains.EnabledNames()
@@ -179,10 +163,29 @@ func runIndexer(chains []string, configPath string, debug, manual, catchup, from
 		logger.Info("Starting from latest block for all specified chains", "chains", chains)
 	}
 
+	networkTypes := cfg.Chains.NetworkTypes(chains)
+
+	// start address bloom filter (Initialize is optional)
+	var addressBF addressbloomfilter.WalletAddressBloomFilter
+	if services.Bloomfilter != nil && db != nil {
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		if err := addressBF.Initialize(ctx, networkTypes); err != nil {
+			logger.Fatal("Address bloom filter init failed", "err", err)
+		}
+		logger.Info("Address bloom filter initialized")
+	} else if services.Bloomfilter != nil {
+		// Create bloom filter instance even without database, but skip initialization
+		addressBF = addressbloomfilter.NewBloomFilter(*services.Bloomfilter, db, redisClient)
+		logger.Info("Address bloom filter created (initialization skipped - no database)")
+	} else {
+		logger.Info("Address bloom filter skipped - not configured")
+	}
+
 	// Build bloom sync config if enabled
 	var bloomSyncCfg *worker.BloomSyncConfig
 	if services.Bloomfilter != nil && services.Bloomfilter.Sync.Enabled && db != nil {
 		c := worker.NewBloomSyncConfig(services.Bloomfilter.Sync)
+		c.NetworkTypes = networkTypes
 		bloomSyncCfg = &c
 	}
 

@@ -63,11 +63,11 @@ func (rbf *redisBloomFilter) getKey(addressType enum.NetworkType) string {
 	return fmt.Sprintf("%s:%s", rbf.keyPrefix, addressType)
 }
 
-func (rbf *redisBloomFilter) Initialize(ctx context.Context) error {
+func (rbf *redisBloomFilter) Initialize(ctx context.Context, addressTypes []enum.NetworkType) error {
 	rbf.mu.Lock()
 	defer rbf.mu.Unlock()
 
-	for _, addrType := range enum.AllNetworkTypes {
+	for _, addrType := range addressTypes {
 		key := rbf.getKey(addrType)
 		client := rbf.redisClient.GetClient()
 
