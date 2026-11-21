@@ -14,5 +14,10 @@ type SolanaAPI interface {
 	GetSlot(ctx context.Context) (uint64, error)
 	GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, error)
 	GetTransaction(ctx context.Context, signature string) (*GetTransactionResult, error)
+
+	// Account watching (watch_mode: accounts).
+	GetMultipleAccounts(ctx context.Context, pubkeys []string) (*GetMultipleAccountsResult, error)
+	GetSignaturesForAddress(ctx context.Context, address string, opts SignaturesOptions) ([]SignatureInfo, error)
+	GetTokenAccountsByOwner(ctx context.Context, owner, programID string) ([]string, error)
 }
 

@@ -467,127 +467,133 @@ func solanaParseTokenTransfer(ix solana.Instruction, accountKeys []solana.Accoun
 func (s *SolanaIndexer) extractSolanaTransfers(networkID string, slot uint64, ts uint64, b *solana.GetBlockResult) []types.Transaction {
 	out := make([]types.Transaction, 0)
 	for txIdx, tx := range b.Transactions {
-		if tx.Meta == nil {
-			continue
-		}
-		if tx.Meta.Err != nil {
-			continue
-		}
-		if len(tx.Transaction.Signatures) == 0 {
-			continue
-		}
-		txHash := tx.Transaction.Signatures[0]
-		fee := decimal.NewFromInt(int64(tx.Meta.Fee))
-		accountKeys := tx.Transaction.Message.AccountKeys
+		out = append(out, s.extractTxTransfers(networkID, slot, ts, b.Blockhash, txIdx, tx)...)
+	}
+	return out
+}
 
-		// Build token-account -> (owner, mint) lookup from token balance metadata.
-		// This isn't used to infer transfers; only to map SPL token accounts to owners/mints.
-		tokenOwnerByAcc := map[string]string{}
-		tokenMintByAcc := map[string]string{}
-		for _, tb := range tx.Meta.PreTokenBalances {
-			idx := int(tb.AccountIndex)
-			if idx >= 0 && idx < len(accountKeys) {
-				acc := accountKeys[idx].Pubkey
-				if tb.Owner != "" {
-					tokenOwnerByAcc[acc] = tb.Owner
-				}
-				if tb.Mint != "" {
-					tokenMintByAcc[acc] = tb.Mint
-				}
+// extractTxTransfers returns the monitored SOL and SPL transfers of one transaction; txIdx is its position in the block.
+func (s *SolanaIndexer) extractTxTransfers(networkID string, slot uint64, ts uint64, blockhash string, txIdx int, tx solana.BlockTxn) []types.Transaction {
+	out := make([]types.Transaction, 0)
+	if tx.Meta == nil {
+		return out
+	}
+	if tx.Meta.Err != nil {
+		return out
+	}
+	if len(tx.Transaction.Signatures) == 0 {
+		return out
+	}
+	txHash := tx.Transaction.Signatures[0]
+	fee := decimal.NewFromInt(int64(tx.Meta.Fee))
+	accountKeys := tx.Transaction.Message.AccountKeys
+
+	// Build token-account -> (owner, mint) lookup from token balance metadata.
+	// This isn't used to infer transfers; only to map SPL token accounts to owners/mints.
+	tokenOwnerByAcc := map[string]string{}
+	tokenMintByAcc := map[string]string{}
+	for _, tb := range tx.Meta.PreTokenBalances {
+		idx := int(tb.AccountIndex)
+		if idx >= 0 && idx < len(accountKeys) {
+			acc := accountKeys[idx].Pubkey
+			if tb.Owner != "" {
+				tokenOwnerByAcc[acc] = tb.Owner
+			}
+			if tb.Mint != "" {
+				tokenMintByAcc[acc] = tb.Mint
 			}
 		}
-		for _, tb := range tx.Meta.PostTokenBalances {
-			idx := int(tb.AccountIndex)
-			if idx >= 0 && idx < len(accountKeys) {
-				acc := accountKeys[idx].Pubkey
-				if tb.Owner != "" {
-					tokenOwnerByAcc[acc] = tb.Owner
-				}
-				if tb.Mint != "" {
-					tokenMintByAcc[acc] = tb.Mint
-				}
+	}
+	for _, tb := range tx.Meta.PostTokenBalances {
+		idx := int(tb.AccountIndex)
+		if idx >= 0 && idx < len(accountKeys) {
+			acc := accountKeys[idx].Pubkey
+			if tb.Owner != "" {
+				tokenOwnerByAcc[acc] = tb.Owner
 			}
-		}
-
-		transferIdx := 0
-
-		appendNative := func(from, to string, lamports uint64) {
-			if !s.isMonitoredTransfer(from, to) {
-				return
-			}
-			out = append(out, types.Transaction{
-				TxHash:        txHash,
-				NetworkId:     networkID,
-				BlockNumber:   slot,
-				BlockHash:     b.Blockhash,
-				TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
-				FromAddress:   from,
-				ToAddress:     to,
-				AssetAddress:  "",
-				Amount:        strconv.FormatUint(lamports, 10),
-				Type:          constant.TxTypeNativeTransfer,
-				TxFee:         fee,
-				Timestamp:     ts,
-			})
-			transferIdx++
-		}
-
-		appendSPL := func(srcTokenAcc, dstTokenAcc, mint string, amount uint64) {
-			fromOwner := tokenOwnerByAcc[srcTokenAcc]
-			toOwner := tokenOwnerByAcc[dstTokenAcc]
-
-			if !s.isMonitoredTransfer(fromOwner, toOwner) {
-				return
-			}
-
-			if mint == "" {
-				mint = tokenMintByAcc[srcTokenAcc]
-				if mint == "" {
-					mint = tokenMintByAcc[dstTokenAcc]
-				}
-			}
-			if mint == "" {
-				return
-			}
-
-			out = append(out, types.Transaction{
-				TxHash:        txHash,
-				NetworkId:     networkID,
-				BlockNumber:   slot,
-				BlockHash:     b.Blockhash,
-				TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
-				FromAddress:   fromOwner,
-				ToAddress:     toOwner,
-				AssetAddress:  mint,
-				Amount:        strconv.FormatUint(amount, 10),
-				Type:          constant.TxTypeTokenTransfer,
-				TxFee:         fee,
-				Timestamp:     ts,
-			})
-			transferIdx++
-		}
-
-		processIx := func(ix solana.Instruction) {
-			if from, to, lamports, ok := solanaParseSystemTransfer(ix, accountKeys); ok {
-				appendNative(from, to, lamports)
-				return
-			}
-			if srcTok, dstTok, mint, amt, ok := solanaParseTokenTransfer(ix, accountKeys); ok {
-				appendSPL(srcTok, dstTok, mint, amt)
-				return
-			}
-		}
-
-		for _, ix := range tx.Transaction.Message.Instructions {
-			processIx(ix)
-		}
-		for _, ii := range tx.Meta.InnerInstructions {
-			for _, ix := range ii.Instructions {
-				processIx(ix)
+			if tb.Mint != "" {
+				tokenMintByAcc[acc] = tb.Mint
 			}
 		}
 	}
 
+	transferIdx := 0
+
+	appendNative := func(from, to string, lamports uint64) {
+		if !s.isMonitoredTransfer(from, to) {
+			return
+		}
+		out = append(out, types.Transaction{
+			TxHash:        txHash,
+			NetworkId:     networkID,
+			BlockNumber:   slot,
+			BlockHash:     blockhash,
+			TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
+			FromAddress:   from,
+			ToAddress:     to,
+			AssetAddress:  "",
+			Amount:        strconv.FormatUint(lamports, 10),
+			Type:          constant.TxTypeNativeTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
+		})
+		transferIdx++
+	}
+
+	appendSPL := func(srcTokenAcc, dstTokenAcc, mint string, amount uint64) {
+		fromOwner := tokenOwnerByAcc[srcTokenAcc]
+		toOwner := tokenOwnerByAcc[dstTokenAcc]
+
+		if !s.isMonitoredTransfer(fromOwner, toOwner) {
+			return
+		}
+
+		if mint == "" {
+			mint = tokenMintByAcc[srcTokenAcc]
+			if mint == "" {
+				mint = tokenMintByAcc[dstTokenAcc]
+			}
+		}
+		if mint == "" {
+			return
+		}
+
+		out = append(out, types.Transaction{
+			TxHash:        txHash,
+			NetworkId:     networkID,
+			BlockNumber:   slot,
+			BlockHash:     blockhash,
+			TransferIndex: fmt.Sprintf("%d:%d", txIdx, transferIdx),
+			FromAddress:   fromOwner,
+			ToAddress:     toOwner,
+			AssetAddress:  mint,
+			Amount:        strconv.FormatUint(amount, 10),
+			Type:          constant.TxTypeTokenTransfer,
+			TxFee:         fee,
+			Timestamp:     ts,
+		})
+		transferIdx++
+	}
+
+	processIx := func(ix solana.Instruction) {
+		if from, to, lamports, ok := solanaParseSystemTransfer(ix, accountKeys); ok {
+			appendNative(from, to, lamports)
+			return
+		}
+		if srcTok, dstTok, mint, amt, ok := solanaParseTokenTransfer(ix, accountKeys); ok {
+			appendSPL(srcTok, dstTok, mint, amt)
+			return
+		}
+	}
+
+	for _, ix := range tx.Transaction.Message.Instructions {
+		processIx(ix)
+	}
+	for _, ii := range tx.Meta.InnerInstructions {
+		for _, ix := range ii.Instructions {
+			processIx(ix)
+		}
+	}
 	return out
 }
 

@@ -13,6 +13,15 @@ func validateChainConfig(chain ChainConfig) error {
 	if !chain.IsFromLatest() && chain.StartBlock == 0 {
 		return fmt.Errorf("start_block is required when from_latest is false")
 	}
+	switch chain.Solana.WatchMode {
+	case "", "blocks":
+	case SolanaWatchAccounts:
+		if chain.Type != enum.NetworkTypeSol {
+			return fmt.Errorf("solana.watch_mode is only for sol chains")
+		}
+	default:
+		return fmt.Errorf("solana.watch_mode must be blocks or accounts, not %q", chain.Solana.WatchMode)
+	}
 	statusCfg := chain.Status.Normalize()
 	if statusCfg.HealthyMaxPendingBlocks >= statusCfg.SlowMaxPendingBlocks {
 		return fmt.Errorf(

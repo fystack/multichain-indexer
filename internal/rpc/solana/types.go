@@ -85,6 +85,8 @@ type TxnEnvelope struct {
 
 type GetTransactionResult struct {
 	Slot        uint64      `json:"slot"`
+	// Position in its block; nodes that don't report it leave it nil.
+	TransactionIndex *int `json:"transactionIndex"`
 	BlockTime   *int64      `json:"blockTime"`
 	Meta        *TxnMeta    `json:"meta"`
 	Transaction TxnEnvelope `json:"transaction"`
@@ -105,3 +107,36 @@ type Instruction struct {
 	ProgramId      string `json:"programId"`
 }
 
+
+// MaxMultipleAccounts is the most pubkeys getMultipleAccounts takes in one call.
+const MaxMultipleAccounts = 100
+
+// MaxSignaturesPerPage is the most signatures getSignaturesForAddress returns in one call.
+const MaxSignaturesPerPage = 1000
+
+type GetMultipleAccountsResult struct {
+	Context struct {
+		Slot uint64 `json:"slot"`
+	} `json:"context"`
+	// One entry per requested pubkey, in order; nil when the account doesn't exist.
+	Value []*AccountInfo `json:"value"`
+}
+
+type AccountInfo struct {
+	Lamports uint64   `json:"lamports"`
+	Owner    string   `json:"owner"`
+	Data     []string `json:"data"` // [base64, "base64"]
+}
+
+type SignaturesOptions struct {
+	Before string // page back from this signature (exclusive)
+	Until  string // stop at this signature (exclusive)
+	Limit  int
+}
+
+type SignatureInfo struct {
+	Signature string `json:"signature"`
+	Slot      uint64 `json:"slot"`
+	Err       any    `json:"err"`
+	BlockTime *int64 `json:"blockTime"`
+}

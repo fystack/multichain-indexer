@@ -85,6 +85,7 @@ type ChainConfig struct {
 	Client              ClientConfig     `yaml:"client"`
 	Throttle            Throttle         `yaml:"throttle"`
 	Ton                 TonConfig        `yaml:"ton"`
+	Solana              SolanaConfig     `yaml:"solana"`
 	Nodes               []NodeConfig     `yaml:"nodes"                 validate:"required,min=1"`
 }
 
@@ -125,6 +126,24 @@ type TonConfig struct {
 	// TxFetchWorkers controls parallel GetTransaction calls per shard block.
 	TxFetchWorkers int `yaml:"tx_fetch_workers"`
 }
+
+// SolanaWatchAccounts is the Solana watch mode that reads the watched accounts instead of every slot.
+const SolanaWatchAccounts = "accounts"
+
+type SolanaConfig struct {
+	// WatchMode is "blocks" (default: read every slot) or "accounts": poll the balances of the watched addresses and
+	// their token accounts, and fetch only the transactions of those that changed. Far fewer RPC calls while few
+	// addresses are watched (each 100 cost one call per poll); slot-range rescans still read blocks.
+	WatchMode string `yaml:"watch_mode"`
+	// TokenMints whose associated token accounts are watched for every address, from before their first deposit.
+	// Token accounts of other mints are found by listing each owner's token accounts every FullCheckInterval.
+	TokenMints []string `yaml:"token_mints"`
+	// FullCheckInterval: how often every watched account's history is checked even without a balance change, and
+	// owners' token accounts are listed again (default 10m).
+	FullCheckInterval time.Duration `yaml:"full_check_interval"`
+}
+
+func (c SolanaConfig) WatchesAccounts() bool { return c.WatchMode == SolanaWatchAccounts }
 
 type NodeConfig struct {
 	URL        string            `yaml:"url"     validate:"required,url"`

@@ -78,6 +78,8 @@ func setObserverOnWorkers(workers []Worker, obs BlockResultObserver) {
 			wt.BaseWorker.observer = obs
 		case *MempoolWorker:
 			wt.BaseWorker.observer = obs
+		case *SolanaAccountWorker:
+			wt.BaseWorker.observer = obs
 		}
 	}
 }
@@ -940,7 +942,26 @@ func CreateManagerWithWorkers(
 			}
 		}
 
-		addIfEnabled(ModeRegular, managerCfg.EnableRegular || cfg.Services.Worker.Regular.Enabled)
+		regularEnabled := managerCfg.EnableRegular || cfg.Services.Worker.Regular.Enabled
+		if solIdxr, ok := idxr.(*indexer.SolanaIndexer); ok && chainCfg.Solana.WatchesAccounts() && db != nil {
+			// Account watching replaces reading every slot: no regular, catch-up or failed-block workers. Manual
+			// slot-range rescans still read blocks.
+			if regularEnabled {
+				w := NewSolanaAccountWorker(ctx, solIdxr, chainCfg, kvstore, blockStore, emitter, pubkeyStore,
+					NewDefaultDBLoader(db), failedChan, statusRegistry)
+				setObserverOnWorkers([]Worker{w}, managerCfg.Observer)
+				manager.AddWorkers(w)
+				logger.Info("Worker enabled", "chain", chainName, "mode", "solana-accounts")
+			}
+			addIfEnabled(ModeManual, managerCfg.EnableManual || cfg.Services.Worker.Manual.Enabled)
+			continue
+		}
+		if chainCfg.Solana.WatchesAccounts() {
+			logger.Error("solana.watch_mode accounts needs the database for watched addresses; reading blocks instead",
+				"chain", chainName)
+		}
+
+		addIfEnabled(ModeRegular, regularEnabled)
 		addIfEnabled(
 			ModeRescanner,
 			managerCfg.EnableRescanner || cfg.Services.Worker.Rescanner.Enabled,

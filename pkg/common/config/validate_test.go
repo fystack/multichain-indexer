@@ -83,3 +83,15 @@ func TestValidateChainConfig_RequiresStartBlockWhenNotFromLatest(t *testing.T) {
 	chain.StartBlock = 100
 	require.NoError(t, validateChainConfig(chain))
 }
+
+func TestValidateChainConfig_SolanaWatchMode(t *testing.T) {
+	require.NoError(t, validateChainConfig(ChainConfig{Type: enum.NetworkTypeSol, Solana: SolanaConfig{WatchMode: "accounts"}}))
+	require.NoError(t, validateChainConfig(ChainConfig{Type: enum.NetworkTypeSol, Solana: SolanaConfig{WatchMode: "blocks"}}))
+
+	err := validateChainConfig(ChainConfig{Type: enum.NetworkTypeSol, Solana: SolanaConfig{WatchMode: "account"}})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "watch_mode")
+
+	err = validateChainConfig(ChainConfig{Type: enum.NetworkTypeEVM, Solana: SolanaConfig{WatchMode: "accounts"}})
+	require.Error(t, err)
+}

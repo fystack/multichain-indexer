@@ -107,3 +107,64 @@ func (c *Client) GetBlock(ctx context.Context, slot uint64) (*GetBlockResult, er
 	return &out, nil
 }
 
+
+func (c *Client) GetMultipleAccounts(ctx context.Context, pubkeys []string) (*GetMultipleAccountsResult, error) {
+	cfg := map[string]any{"encoding": "base64", "commitment": "finalized"}
+	resp, err := c.base.CallRPC(ctx, "getMultipleAccounts", []any{pubkeys, cfg})
+	if err != nil {
+		return nil, err
+	}
+	var out GetMultipleAccountsResult
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return nil, fmt.Errorf("decode getMultipleAccounts result: %w", err)
+	}
+	if len(out.Value) != len(pubkeys) {
+		return nil, fmt.Errorf("getMultipleAccounts returned %d accounts for %d pubkeys", len(out.Value), len(pubkeys))
+	}
+	return &out, nil
+}
+
+// GetSignaturesForAddress returns finalized signatures touching address, newest first.
+func (c *Client) GetSignaturesForAddress(ctx context.Context, address string, opts SignaturesOptions) ([]SignatureInfo, error) {
+	cfg := map[string]any{"commitment": "finalized"}
+	if opts.Before != "" {
+		cfg["before"] = opts.Before
+	}
+	if opts.Until != "" {
+		cfg["until"] = opts.Until
+	}
+	if opts.Limit > 0 {
+		cfg["limit"] = opts.Limit
+	}
+	resp, err := c.base.CallRPC(ctx, "getSignaturesForAddress", []any{address, cfg})
+	if err != nil {
+		return nil, err
+	}
+	var out []SignatureInfo
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return nil, fmt.Errorf("decode getSignaturesForAddress result: %w", err)
+	}
+	return out, nil
+}
+
+// GetTokenAccountsByOwner returns the pubkeys of owner's token accounts under one token program.
+func (c *Client) GetTokenAccountsByOwner(ctx context.Context, owner, programID string) ([]string, error) {
+	cfg := map[string]any{"encoding": "base64", "commitment": "finalized", "dataSlice": map[string]any{"offset": 0, "length": 0}}
+	resp, err := c.base.CallRPC(ctx, "getTokenAccountsByOwner", []any{owner, map[string]any{"programId": programID}, cfg})
+	if err != nil {
+		return nil, err
+	}
+	var out struct {
+		Value []struct {
+			Pubkey string `json:"pubkey"`
+		} `json:"value"`
+	}
+	if err := json.Unmarshal(resp.Result, &out); err != nil {
+		return nil, fmt.Errorf("decode getTokenAccountsByOwner result: %w", err)
+	}
+	keys := make([]string, 0, len(out.Value))
+	for _, v := range out.Value {
+		keys = append(keys, v.Pubkey)
+	}
+	return keys, nil
+}

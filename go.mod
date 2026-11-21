@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	dario.cat/mergo v1.0.2
+	filippo.io/edwards25519 v1.1.0
 	github.com/alecthomas/kong v1.12.1
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/btcsuite/btcutil v1.0.2
@@ -37,7 +38,6 @@ require (
 replace github.com/imdario/mergo => github.com/imdario/mergo v0.3.16
 
 require (
-	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/armon/go-metrics v0.4.1 // indirect
 	github.com/bits-and-blooms/bitset v1.10.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
