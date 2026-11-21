@@ -2,6 +2,8 @@ package indexer
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
@@ -431,8 +433,7 @@ func (s *StellarIndexer) convertPayment(
 	var memoType types.MemoType
 	if txDetail != nil {
 		fee = stroopsToXLM(strings.TrimSpace(txDetail.FeeCharged))
-		memo = strings.TrimSpace(txDetail.Memo)
-		memoType = types.MemoType(strings.TrimSpace(txDetail.MemoType))
+		memo, memoType = stellarMemo(txDetail)
 	}
 
 	tx := types.Transaction{
@@ -696,14 +697,29 @@ func (s *StellarIndexer) newOperationTransaction(
 		Status:        types.StatusConfirmed,
 	}
 	if txDetail != nil {
-		if memo := strings.TrimSpace(txDetail.Memo); memo != "" {
+		memo, memoType := stellarMemo(txDetail)
+		if memo != "" {
 			tx.Memo = memo
 		}
-		if memoType := strings.TrimSpace(txDetail.MemoType); memoType != "" {
-			tx.MemoType = types.MemoType(memoType)
+		if memoType != "" {
+			tx.MemoType = memoType
 		}
 	}
 	return tx
+}
+
+// stellarMemo returns hash and return memos as hex, the form users enter them in, instead of Horizon's base64.
+func stellarMemo(txDetail *stellar.Transaction) (string, types.MemoType) {
+	memo := strings.TrimSpace(txDetail.Memo)
+	memoType := types.MemoType(strings.TrimSpace(txDetail.MemoType))
+	if memoType != types.MemoTypeHash && memoType != types.MemoTypeReturn {
+		return memo, memoType
+	}
+	raw, err := base64.StdEncoding.DecodeString(memo)
+	if err != nil {
+		return memo, memoType
+	}
+	return hex.EncodeToString(raw), memoType
 }
 
 func (s *StellarIndexer) saveClaimableBalanceState(balanceID string, state stellarClaimableBalanceState) error {

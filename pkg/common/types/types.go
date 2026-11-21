@@ -17,8 +17,8 @@ import (
 // - "none"   -> MEMO_NONE
 // - "text"   -> MEMO_TEXT
 // - "id"     -> MEMO_ID
-// - "hash"   -> MEMO_HASH
-// - "return" -> MEMO_RETURN (32-byte refund hash)
+// - "hash"   -> MEMO_HASH (memo is the 32 bytes as lowercase hex)
+// - "return" -> MEMO_RETURN (32-byte refund hash, lowercase hex)
 //
 // Other chains may reuse these values or leave MemoType empty.
 type MemoType string
