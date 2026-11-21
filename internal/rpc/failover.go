@@ -186,6 +186,7 @@ type Failover[T NetworkClient] struct {
 	currentIndex    int
 	config          FailoverConfig
 	lastHealthCheck time.Time
+	lastPreferCheck time.Time
 	metrics         *FailoverMetrics
 	logThrottler    *LogThrottler
 }
@@ -266,6 +267,12 @@ func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 	// Check for expired blacklists and recover
 	f.recoverExpiredBlacklists(providers)
 
+	// Nodes are listed in order of preference (free before paid). After a failover, go back to an earlier node once
+	// it is usable again instead of staying on the fallback until that fails too.
+	if earlier := f.preferEarlierProvider(providers, curIdx); earlier != nil {
+		return earlier, nil
+	}
+
 	if curIdx >= 0 && curIdx < len(providers) {
 		cur := providers[curIdx]
 		if cur.IsAvailable() {
@@ -296,6 +303,44 @@ func (f *Failover[T]) GetBestProvider() (*Provider, error) {
 	}
 
 	return f.findNextAvailableProvider()
+}
+
+// preferEarlierInterval is how often a failover that sits on a later node checks whether an earlier one is back.
+const preferEarlierInterval = 30 * time.Second
+
+// preferEarlierProvider switches to the first node before the current one that is usable again: not blacklisted (or
+// its blacklist expired) and below the rotate threshold. Checked at most every preferEarlierInterval, so a node that
+// fails again costs one failed call per check rather than one per request.
+func (f *Failover[T]) preferEarlierProvider(providers []*Provider, curIdx int) *Provider {
+	if curIdx <= 0 {
+		return nil
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.currentIndex != curIdx || time.Since(f.lastPreferCheck) < preferEarlierInterval {
+		return nil
+	}
+	f.lastPreferCheck = time.Now()
+
+	for idx := 0; idx < curIdx && idx < len(providers); idx++ {
+		p := providers[idx]
+		if !p.IsAvailable() {
+			continue
+		}
+		p.mu.RLock()
+		consecutiveErrors := p.ConsecutiveErrors
+		p.mu.RUnlock()
+		if consecutiveErrors >= f.config.ForceRotateThreshold {
+			continue
+		}
+
+		logger.Info("Returning to preferred provider", "from_index", curIdx, "to_index", idx, "provider", p.Name)
+		f.currentIndex = idx
+		f.metrics.IncrementSwitch()
+		return p
+	}
+	return nil
 }
 
 // recoverExpiredBlacklists checks and recovers any expired blacklisted providers
@@ -675,6 +720,13 @@ func (f *Failover[T]) analyzeError(err error, elapsed time.Duration) ProviderIss
 		cooldown      time.Duration
 		markUnhealthy bool
 	}{
+		{
+			// A monthly allowance won't come back in minutes: check again hourly, not every 5 minutes.
+			patterns:      []string{"monthly quota", "max usage reached", "monthly capacity", "credits exhausted"},
+			reason:        "quota_exceeded",
+			cooldown:      time.Hour,
+			markUnhealthy: true,
+		},
 		{
 			patterns:      []string{"rate limit", "429", "too many requests"},
 			reason:        "rate_limit",
