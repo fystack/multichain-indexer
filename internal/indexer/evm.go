@@ -27,6 +27,9 @@ type EVMIndexer struct {
 	maxBatchSize        int                             // Maximum batch size to prevent RPC timeouts
 	maxReceiptBatchSize int                             // Specific limit for receipt batches (usually smaller)
 	pubkeyStore         PubkeyStore                     // For selective receipt fetching
+	// canonicalSafes caches addresses already confirmed as official Safes. Only confirmed
+	// addresses are cached: contract code cannot change after deployment, so a fake stays fake.
+	canonicalSafes sync.Map
 }
 
 // traceModeActive returns true when tracing can actually run right now.
@@ -393,6 +396,8 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 			"count", len(traces))
 	}
 
+	canonicalSafes, safeCheckFailures := e.checkSafeCandidates(ctx, blocks, allReceipts, traces)
+
 	totalElapsed := time.Since(startTime)
 	logger.Debug("[PROCESS BLOCKS COMPLETE]",
 		"total_elapsed_ms", totalElapsed.Milliseconds(),
@@ -400,7 +405,78 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	)
 
 	// Build final results
-	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts, traces), nil
+	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts, traces, canonicalSafes, safeCheckFailures), nil
+}
+
+// checkSafeCandidates confirms that the contract behind each untraced Safe execTransaction is
+// an official Safe. It returns the confirmed addresses (lowercased) and, per block, the error
+// that kept a candidate from being checked, so that block is retried instead of skipping the
+// transfer.
+func (e *EVMIndexer) checkSafeCandidates(
+	ctx context.Context,
+	blocks map[uint64]*evm.Block,
+	receipts map[string]*evm.TxnReceipt,
+	traces map[string]*evm.CallTrace,
+) (map[string]bool, map[uint64]error) {
+	confirmed := make(map[string]bool)
+	failures := make(map[uint64]error)
+	checked := make(map[string]bool)
+
+	for blockNum, block := range blocks {
+		if block == nil {
+			continue
+		}
+		for _, tx := range block.Transactions {
+			if traces[tx.Hash] != nil || !evm.IsSafeExecTransaction(tx.Input) || tx.To == "" {
+				continue
+			}
+			receipt := receipts[tx.Hash]
+			if !receipt.IsSuccessful() || !receipt.HasLogTopicFrom(evm.SAFE_EXECUTION_SUCCESS_TOPIC, tx.To) {
+				continue
+			}
+			address := strings.ToLower(tx.To)
+			if checked[address] {
+				continue
+			}
+			checked[address] = true
+			if _, ok := e.canonicalSafes.Load(address); ok {
+				confirmed[address] = true
+				continue
+			}
+
+			isSafe, err := e.isCanonicalSafe(ctx, address)
+			if err != nil {
+				logger.Warn("failed to check Safe contract; block will be retried",
+					"address", address, "tx", tx.Hash, "block", blockNum, "error", err)
+				failures[blockNum] = fmt.Errorf("check Safe contract %s: %w", address, err)
+				continue
+			}
+			if !isSafe {
+				logger.Warn("ignoring Safe execTransaction from a contract that is not an official Safe",
+					"address", address, "tx", tx.Hash, "block", blockNum)
+				continue
+			}
+			e.canonicalSafes.Store(address, true)
+			confirmed[address] = true
+		}
+	}
+	return confirmed, failures
+}
+
+func (e *EVMIndexer) isCanonicalSafe(ctx context.Context, address string) (bool, error) {
+	var code, slot0 string
+	err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
+		var err error
+		if code, err = c.GetCode(ctx, address); err != nil {
+			return err
+		}
+		slot0, err = c.GetStorageAt(ctx, address, evm.SafeSingletonSlot)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return evm.IsCanonicalSafe(code, slot0), nil
 }
 
 // fetchMissingBlocksRaw fetches missing blocks as raw evm.Block objects
@@ -970,6 +1046,8 @@ func (e *EVMIndexer) buildBlockResults(
 	txHashMap map[uint64][]string,
 	allReceipts map[string]*evm.TxnReceipt,
 	traces map[string]*evm.CallTrace,
+	canonicalSafes map[string]bool,
+	safeCheckFailures map[uint64]error,
 ) []BlockResult {
 	results := make([]BlockResult, 0, len(blockNums))
 
@@ -982,6 +1060,13 @@ func (e *EVMIndexer) buildBlockResults(
 			})
 			continue
 		}
+		if err := safeCheckFailures[num]; err != nil {
+			results = append(results, BlockResult{
+				Number: num,
+				Error:  &Error{ErrorType: ErrorTypeUnknown, Message: err.Error()},
+			})
+			continue
+		}
 
 		// Build receipts map for this block
 		txReceipts := make(map[string]*evm.TxnReceipt)
@@ -991,7 +1076,7 @@ func (e *EVMIndexer) buildBlockResults(
 			}
 		}
 
-		typesBlock, err := e.convertBlock(block, txReceipts, traces)
+		typesBlock, err := e.convertBlock(block, txReceipts, traces, canonicalSafes)
 		if err != nil {
 			results = append(results, BlockResult{
 				Number: num,
@@ -1082,6 +1167,7 @@ func (e *EVMIndexer) convertBlock(
 	eb *evm.Block,
 	receipts map[string]*evm.TxnReceipt,
 	traces map[string]*evm.CallTrace,
+	canonicalSafes map[string]bool,
 ) (*types.Block, error) {
 	num, _ := utils.ParseHexUint64(eb.Number)
 	ts, _ := utils.ParseHexUint64(eb.Timestamp)
@@ -1112,7 +1198,8 @@ func (e *EVMIndexer) convertBlock(
 		// Fallback: Safe heuristic when trace not available
 		if !traced && evm.IsSafeExecTransaction(tx.Input) {
 			transfers = append(transfers,
-				evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts)...)
+				evm.ExtractSafeTransfers(tx, receipt, e.GetNetworkId(), num, ts,
+					canonicalSafes[strings.ToLower(tx.To)])...)
 		}
 
 		// Always extract top-level transfers (native + ERC20)

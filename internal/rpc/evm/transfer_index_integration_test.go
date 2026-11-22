@@ -108,7 +108,7 @@ func TestEndToEnd_SafeTx_TransferIndex(t *testing.T) {
 		TransactionIndex: "0xa",
 	}
 
-	safeTransfers := ExtractSafeTransfers(safeTx, receipt, "ethereum", mainnetSafeBlock, 1000)
+	safeTransfers := ExtractSafeTransfers(safeTx, receipt, "ethereum", mainnetSafeBlock, 1000, true)
 	require.Len(t, safeTransfers, 1)
 	assert.Equal(t, "10:safe:0", safeTransfers[0].TransferIndex) // 0xa = 10
 	t.Logf("  safe: TransferIndex=%s amount=%s", safeTransfers[0].TransferIndex, safeTransfers[0].Amount)

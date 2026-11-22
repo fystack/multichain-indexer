@@ -121,7 +121,7 @@ func TestExtractSafeTransfers_TransferIndex(t *testing.T) {
 	}
 
 	receipt := makeSuccessReceipt("0xabc", "0xsafe")
-	transfers := ExtractSafeTransfers(tx, receipt, "eth", 100, 1000)
+	transfers := ExtractSafeTransfers(tx, receipt, "eth", 100, 1000, true)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, "9:safe:0", transfers[0].TransferIndex)
@@ -234,4 +234,52 @@ func TestDedupTransfers_SameIndex(t *testing.T) {
 
 	result := utils.DedupTransfers(transfers)
 	assert.Len(t, result, 1, "same TransferIndex should be deduped")
+}
+
+// An ETH transfer on a chain with EIP-7708 also carries an ERC20-style Transfer log from 0xff…fe. It must stay
+// one native transfer, while a real token's log in the same receipt still counts.
+func TestExtractTransfers_EIP7708NativeLog_IsNotATokenTransfer(t *testing.T) {
+	tx := Txn{
+		Hash:             "0x0f61",
+		From:             "0x969d812b43803d398bcefcc322d7f39f4a4e6744",
+		To:               "0x8e31c2fde55fa21bb497422f698c16746bfe14ef",
+		Value:            "0x6215b5e4fdc7bf",
+		Input:            "0x",
+		TransactionIndex: "0x1",
+	}
+	transferLog := func(emitter string, index string) Log {
+		return Log{
+			Address: emitter,
+			Topics: []string{
+				ERC20_TRANSFER_TOPIC,
+				"0x000000000000000000000000969d812b43803d398bcefcc322d7f39f4a4e6744",
+				"0x0000000000000000000000008e31c2fde55fa21bb497422f698c16746bfe14ef",
+			},
+			Data:     "0x000000000000000000000000000000000000000000000000006215b5e4fdc7bf",
+			LogIndex: index,
+		}
+	}
+	receipt := &TxnReceipt{
+		Status:            "0x1",
+		GasUsed:           "0x5208",
+		EffectiveGasPrice: "0x3b9aca00",
+		Logs: []Log{
+			transferLog("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFE", "0x0"),
+			transferLog("0x1c7d4b196cb0c7b01d743fbc6116a902379c7238", "0x1"),
+		},
+	}
+
+	transfers := tx.ExtractTransfers("eth", receipt, 12154351, 1000)
+	require.Len(t, transfers, 2)
+	var native, token int
+	for _, tr := range transfers {
+		assert.NotEqual(t, ToChecksumAddress(EIP7708_NATIVE_TRANSFER_EMITTER), ToChecksumAddress(tr.AssetAddress))
+		if tr.AssetAddress == "" {
+			native++
+		} else {
+			token++
+		}
+	}
+	assert.Equal(t, 1, native)
+	assert.Equal(t, 1, token)
 }

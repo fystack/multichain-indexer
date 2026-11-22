@@ -29,4 +29,6 @@ type EthereumAPI interface {
 		txHashes []string,
 	) (map[string]*TxnReceipt, error)
 	DebugTraceTransaction(ctx context.Context, txHash string) (*CallTrace, error)
+	GetCode(ctx context.Context, address string) (string, error)
+	GetStorageAt(ctx context.Context, address, slot string) (string, error)
 }

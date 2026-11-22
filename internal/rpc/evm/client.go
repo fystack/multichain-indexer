@@ -81,6 +81,32 @@ func (c *Client) GetLatestBlockTimestamp(ctx context.Context) (uint64, error) {
 	return ts, nil
 }
 
+// GetCode returns the contract code at address in the latest block, hex-encoded.
+func (c *Client) GetCode(ctx context.Context, address string) (string, error) {
+	resp, err := c.CallRPC(ctx, "eth_getCode", []any{address, "latest"})
+	if err != nil {
+		return "", fmt.Errorf("eth_getCode failed: %w", err)
+	}
+	var code string
+	if err := json.Unmarshal(resp.Result, &code); err != nil {
+		return "", fmt.Errorf("failed to unmarshal code: %w", err)
+	}
+	return code, nil
+}
+
+// GetStorageAt returns the 32-byte storage word at slot of address in the latest block.
+func (c *Client) GetStorageAt(ctx context.Context, address, slot string) (string, error) {
+	resp, err := c.CallRPC(ctx, "eth_getStorageAt", []any{address, slot, "latest"})
+	if err != nil {
+		return "", fmt.Errorf("eth_getStorageAt failed: %w", err)
+	}
+	var word string
+	if err := json.Unmarshal(resp.Result, &word); err != nil {
+		return "", fmt.Errorf("failed to unmarshal storage word: %w", err)
+	}
+	return word, nil
+}
+
 // GetBlockByNumber returns a block with full transaction data
 func (c *Client) GetBlockByNumber(
 	ctx context.Context,
