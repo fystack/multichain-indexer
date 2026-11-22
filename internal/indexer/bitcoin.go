@@ -310,8 +310,10 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	feeAssigned := false
 	for voutIdx, vout := range tx.Vout {
 		toAddrs := bitcoin.GetOutputAddresses(&vout)
-		if len(toAddrs) == 0 {
-			continue // Skip unspendable outputs (OP_RETURN, etc.)
+		// Skip unspendable outputs (OP_RETURN, etc.) and bare multisig: any listed key may be able
+		// to spend a multisig output alone, so it is not a payment to each listed address.
+		if len(toAddrs) != 1 {
+			continue
 		}
 
 		amountSat := satoshisFromFloat(vout.Value)
@@ -368,7 +370,8 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 	// Filtering happens at emission level based on monitored addresses
 	for i, vout := range tx.Vout {
 		addrs := bitcoin.GetOutputAddresses(&vout)
-		if len(addrs) == 0 {
+		// A bare multisig output is not a UTXO any single listed address owns.
+		if len(addrs) != 1 {
 			continue
 		}
 
