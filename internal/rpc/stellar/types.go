@@ -38,6 +38,8 @@ type Payment struct {
 	TransactionSuccessful bool   `json:"transaction_successful"`
 	From                  string `json:"from"`
 	To                    string `json:"to"`
+	ToMuxedID             string `json:"to_muxed_id"`
+	IntoMuxedID           string `json:"into_muxed_id"`
 	Funder                string `json:"funder"`
 	Account               string `json:"account"`
 	Into                  string `json:"into"`

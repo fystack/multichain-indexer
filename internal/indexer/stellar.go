@@ -435,6 +435,10 @@ func (s *StellarIndexer) convertPayment(
 		fee = stroopsToXLM(strings.TrimSpace(txDetail.FeeCharged))
 		memo, memoType = stellarMemo(txDetail)
 	}
+	// A payment to a muxed (M...) address carries the recipient's id in the address instead of a memo.
+	if muxedID := stellarDestinationMuxedID(payment); muxedID != "" && memo == "" {
+		memo, memoType = muxedID, types.MemoTypeID
+	}
 
 	tx := types.Transaction{
 		TxHash:        strings.TrimSpace(payment.TransactionHash),
@@ -709,17 +713,26 @@ func (s *StellarIndexer) newOperationTransaction(
 }
 
 // stellarMemo returns hash and return memos as hex, the form users enter them in, instead of Horizon's base64.
+// A text memo is returned exactly as sent: trimming it could turn it into another customer's memo.
 func stellarMemo(txDetail *stellar.Transaction) (string, types.MemoType) {
-	memo := strings.TrimSpace(txDetail.Memo)
+	memo := txDetail.Memo
 	memoType := types.MemoType(strings.TrimSpace(txDetail.MemoType))
 	if memoType != types.MemoTypeHash && memoType != types.MemoTypeReturn {
 		return memo, memoType
 	}
-	raw, err := base64.StdEncoding.DecodeString(memo)
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(memo))
 	if err != nil {
 		return memo, memoType
 	}
 	return hex.EncodeToString(raw), memoType
+}
+
+// stellarDestinationMuxedID returns the id embedded in the muxed address a payment was sent to, or "".
+func stellarDestinationMuxedID(payment stellar.Payment) string {
+	if strings.EqualFold(strings.TrimSpace(payment.Type), "account_merge") {
+		return strings.TrimSpace(payment.IntoMuxedID)
+	}
+	return strings.TrimSpace(payment.ToMuxedID)
 }
 
 func (s *StellarIndexer) saveClaimableBalanceState(balanceID string, state stellarClaimableBalanceState) error {

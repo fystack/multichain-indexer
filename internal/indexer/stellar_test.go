@@ -1360,6 +1360,68 @@ func TestStellarMainnetBatchPaymentProducesMultipleTransactions(t *testing.T) {
 	}
 }
 
+func TestStellarConvertPayment_MuxedDestinationIDBecomesMemo(t *testing.T) {
+	t.Parallel()
+
+	idx := NewStellarIndexer(
+		"stellar_testnet",
+		config.ChainConfig{NetworkId: "stellar_testnet"},
+		nil,
+		nil,
+		mockStellarPubkeyStore{addresses: map[string]struct{}{"GDEST": {}}},
+	)
+	payment := stellar.Payment{
+		Type:                  "payment",
+		TransactionHash:       "tx-muxed",
+		TransactionSuccessful: true,
+		From:                  "GSENDER",
+		To:                    "GDEST",
+		ToMuxedID:             "1234567890",
+		Amount:                "5.0000000",
+		AssetType:             "native",
+	}
+
+	t.Run("no transaction memo", func(t *testing.T) {
+		tx, ok := idx.convertPayment(payment, &stellar.Transaction{MemoType: "none"}, 1, "h", "p-0", 1)
+		require.True(t, ok)
+		assert.Equal(t, "GDEST", tx.ToAddress)
+		assert.Equal(t, "1234567890", tx.Memo)
+		assert.Equal(t, types.MemoTypeID, tx.MemoType)
+	})
+
+	t.Run("transaction memo wins", func(t *testing.T) {
+		tx, ok := idx.convertPayment(payment, &stellar.Transaction{Memo: "order-9", MemoType: "text"}, 1, "h", "p-0", 1)
+		require.True(t, ok)
+		assert.Equal(t, "order-9", tx.Memo)
+		assert.Equal(t, types.MemoTypeText, tx.MemoType)
+	})
+
+	t.Run("account merge into a muxed address", func(t *testing.T) {
+		merge := stellar.Payment{
+			Type:                  "account_merge",
+			TransactionHash:       "tx-merge",
+			TransactionSuccessful: true,
+			Account:               "GSENDER",
+			Into:                  "GDEST",
+			IntoMuxedID:           "77",
+			Amount:                "3.0000000",
+		}
+		tx, ok := idx.convertPayment(merge, nil, 1, "h", "p-1", 1)
+		require.True(t, ok)
+		assert.Equal(t, "77", tx.Memo)
+		assert.Equal(t, types.MemoTypeID, tx.MemoType)
+	})
+
+	t.Run("plain address has no memo", func(t *testing.T) {
+		plain := payment
+		plain.ToMuxedID = ""
+		tx, ok := idx.convertPayment(plain, &stellar.Transaction{MemoType: "none"}, 1, "h", "p-0", 1)
+		require.True(t, ok)
+		assert.Empty(t, tx.Memo)
+		assert.Equal(t, types.MemoTypeNone, tx.MemoType)
+	})
+}
+
 func TestStellarMemo_HashAndReturnAsHex(t *testing.T) {
 	t.Parallel()
 
@@ -1374,7 +1436,7 @@ func TestStellarMemo_HashAndReturnAsHex(t *testing.T) {
 	}{
 		{name: "hash base64 becomes hex", detail: stellar.Transaction{Memo: hashBase64, MemoType: "hash"}, wantMemo: hashHex, wantMemoType: types.MemoTypeHash},
 		{name: "return base64 becomes hex", detail: stellar.Transaction{Memo: hashBase64, MemoType: "return"}, wantMemo: hashHex, wantMemoType: types.MemoTypeReturn},
-		{name: "text is kept as is", detail: stellar.Transaction{Memo: " pspb:4441859 ", MemoType: "text"}, wantMemo: "pspb:4441859", wantMemoType: types.MemoTypeText},
+		{name: "text is kept as is", detail: stellar.Transaction{Memo: " pspb:4441859 ", MemoType: "text"}, wantMemo: " pspb:4441859 ", wantMemoType: types.MemoTypeText},
 		{name: "id is kept as is", detail: stellar.Transaction{Memo: "1795072257352", MemoType: "id"}, wantMemo: "1795072257352", wantMemoType: types.MemoTypeID},
 		{name: "none stays empty", detail: stellar.Transaction{MemoType: "none"}, wantMemo: "", wantMemoType: types.MemoTypeNone},
 		{name: "undecodable hash is kept", detail: stellar.Transaction{Memo: "not-base64!", MemoType: "hash"}, wantMemo: "not-base64!", wantMemoType: types.MemoTypeHash},
