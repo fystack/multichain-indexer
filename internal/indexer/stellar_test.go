@@ -1389,11 +1389,11 @@ func TestStellarConvertPayment_MuxedDestinationIDBecomesMemo(t *testing.T) {
 		assert.Equal(t, types.MemoTypeID, tx.MemoType)
 	})
 
-	t.Run("transaction memo wins", func(t *testing.T) {
-		tx, ok := idx.convertPayment(payment, &stellar.Transaction{Memo: "order-9", MemoType: "text"}, 1, "h", "p-0", 1)
+	t.Run("muxed id wins over a transaction memo", func(t *testing.T) {
+		tx, ok := idx.convertPayment(payment, &stellar.Transaction{Memo: "batch-1", MemoType: "text"}, 1, "h", "p-0", 1)
 		require.True(t, ok)
-		assert.Equal(t, "order-9", tx.Memo)
-		assert.Equal(t, types.MemoTypeText, tx.MemoType)
+		assert.Equal(t, "1234567890", tx.Memo)
+		assert.Equal(t, types.MemoTypeID, tx.MemoType)
 	})
 
 	t.Run("account merge into a muxed address", func(t *testing.T) {

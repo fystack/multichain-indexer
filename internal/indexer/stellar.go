@@ -435,8 +435,8 @@ func (s *StellarIndexer) convertPayment(
 		fee = stroopsToXLM(strings.TrimSpace(txDetail.FeeCharged))
 		memo, memoType = stellarMemo(txDetail)
 	}
-	// A payment to a muxed (M...) address carries the recipient's id in the address instead of a memo.
-	if muxedID := stellarDestinationMuxedID(payment); muxedID != "" && memo == "" {
+	// The muxed id names this payment's recipient; the tx memo is shared by every operation.
+	if muxedID := stellarDestinationMuxedID(payment); muxedID != "" {
 		memo, memoType = muxedID, types.MemoTypeID
 	}
 

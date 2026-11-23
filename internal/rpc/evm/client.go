@@ -81,9 +81,8 @@ func (c *Client) GetLatestBlockTimestamp(ctx context.Context) (uint64, error) {
 	return ts, nil
 }
 
-// GetCode returns the contract code at address in the latest block, hex-encoded.
-func (c *Client) GetCode(ctx context.Context, address string) (string, error) {
-	resp, err := c.CallRPC(ctx, "eth_getCode", []any{address, "latest"})
+func (c *Client) GetCode(ctx context.Context, address, block string) (string, error) {
+	resp, err := c.CallRPC(ctx, "eth_getCode", []any{address, block})
 	if err != nil {
 		return "", fmt.Errorf("eth_getCode failed: %w", err)
 	}
@@ -94,9 +93,8 @@ func (c *Client) GetCode(ctx context.Context, address string) (string, error) {
 	return code, nil
 }
 
-// GetStorageAt returns the 32-byte storage word at slot of address in the latest block.
-func (c *Client) GetStorageAt(ctx context.Context, address, slot string) (string, error) {
-	resp, err := c.CallRPC(ctx, "eth_getStorageAt", []any{address, slot, "latest"})
+func (c *Client) GetStorageAt(ctx context.Context, address, slot, block string) (string, error) {
+	resp, err := c.CallRPC(ctx, "eth_getStorageAt", []any{address, slot, block})
 	if err != nil {
 		return "", fmt.Errorf("eth_getStorageAt failed: %w", err)
 	}

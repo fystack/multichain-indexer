@@ -310,8 +310,7 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 	feeAssigned := false
 	for voutIdx, vout := range tx.Vout {
 		toAddrs := bitcoin.GetOutputAddresses(&vout)
-		// Skip unspendable outputs (OP_RETURN, etc.) and bare multisig: any listed key may be able
-		// to spend a multisig output alone, so it is not a payment to each listed address.
+		// Skip unspendable outputs and bare multisig, which no single listed address owns.
 		if len(toAddrs) != 1 {
 			continue
 		}
@@ -324,30 +323,28 @@ func (b *BitcoinIndexer) extractTransfersFromTx(
 			feeAssigned = true
 		}
 
-		for addrIdx, toAddr := range toAddrs {
-			if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
-				toAddr = normalized
-			}
-
-			transfer := types.Transaction{
-				TxHash:        tx.TxID,
-				NetworkId:     b.config.NetworkId,
-				BlockHash:     blockHash,
-				BlockNumber:   blockNumber,
-				TransferIndex: fmt.Sprintf("%d:%d", voutIdx, addrIdx),
-				FromAddress:   fromAddr,
-				FromAddresses: allInputAddrs,
-				ToAddress:     toAddr,
-				AssetAddress:  "",
-				Amount:        strconv.FormatInt(amountSat, 10),
-				Type:          constant.TxTypeNativeTransfer,
-				TxFee:         txFee,
-				Timestamp:     ts,
-				Confirmations: confirmations,
-				Status:        status,
-			}
-			transfers = append(transfers, transfer)
+		toAddr := toAddrs[0]
+		if normalized, err := bitcoin.NormalizeBTCAddress(toAddr); err == nil {
+			toAddr = normalized
 		}
+
+		transfers = append(transfers, types.Transaction{
+			TxHash:        tx.TxID,
+			NetworkId:     b.config.NetworkId,
+			BlockHash:     blockHash,
+			BlockNumber:   blockNumber,
+			TransferIndex: fmt.Sprintf("%d:0", voutIdx),
+			FromAddress:   fromAddr,
+			FromAddresses: allInputAddrs,
+			ToAddress:     toAddr,
+			AssetAddress:  "",
+			Amount:        strconv.FormatInt(amountSat, 10),
+			Type:          constant.TxTypeNativeTransfer,
+			TxFee:         txFee,
+			Timestamp:     ts,
+			Confirmations: confirmations,
+			Status:        status,
+		})
 	}
 
 	return transfers
@@ -377,19 +374,18 @@ func (b *BitcoinIndexer) extractUTXOEvent(
 
 		amountSat := satoshisFromFloat(vout.Value)
 
-		for _, addr := range addrs {
-			if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
-				addr = normalized
-			}
-
-			created = append(created, types.UTXO{
-				TxHash:       tx.TxID,
-				Vout:         uint32(i),
-				Address:      addr,
-				Amount:       strconv.FormatInt(amountSat, 10),
-				ScriptPubKey: vout.ScriptPubKey.Hex,
-			})
+		addr := addrs[0]
+		if normalized, err := bitcoin.NormalizeBTCAddress(addr); err == nil {
+			addr = normalized
 		}
+
+		created = append(created, types.UTXO{
+			TxHash:       tx.TxID,
+			Vout:         uint32(i),
+			Address:      addr,
+			Amount:       strconv.FormatInt(amountSat, 10),
+			ScriptPubKey: vout.ScriptPubKey.Hex,
+		})
 	}
 
 	// Extract ALL spent UTXOs (vins) without filtering

@@ -27,9 +27,8 @@ type EVMIndexer struct {
 	maxBatchSize        int                             // Maximum batch size to prevent RPC timeouts
 	maxReceiptBatchSize int                             // Specific limit for receipt batches (usually smaller)
 	pubkeyStore         PubkeyStore                     // For selective receipt fetching
-	// canonicalSafes caches addresses already confirmed as official Safes. Only confirmed
-	// addresses are cached: contract code cannot change after deployment, so a fake stays fake.
-	canonicalSafes sync.Map
+	// Only the proxy code is cached; slot0 (the singleton) can be rewritten by the Safe owners.
+	safeProxies sync.Map
 }
 
 // traceModeActive returns true when tracing can actually run right now.
@@ -396,7 +395,7 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 			"count", len(traces))
 	}
 
-	canonicalSafes, safeCheckFailures := e.checkSafeCandidates(ctx, blocks, allReceipts, traces)
+	safes, safeCheckFailures := e.checkSafeCandidates(ctx, blocks, allReceipts, traces)
 
 	totalElapsed := time.Since(startTime)
 	logger.Debug("[PROCESS BLOCKS COMPLETE]",
@@ -405,27 +404,26 @@ func (e *EVMIndexer) processBlocksAndReceipts(
 	)
 
 	// Build final results
-	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts, traces, canonicalSafes, safeCheckFailures), nil
+	return e.buildBlockResults(blockNums, blocks, txHashMap, allReceipts, traces, safes, safeCheckFailures), nil
 }
 
-// checkSafeCandidates confirms that the contract behind each untraced Safe execTransaction is
-// an official Safe. It returns the confirmed addresses (lowercased) and, per block, the error
-// that kept a candidate from being checked, so that block is retried instead of skipping the
-// transfer.
+// safeConfirmations holds, per block, the lowercased Safe addresses confirmed for that block.
+type safeConfirmations map[uint64]map[string]bool
+
 func (e *EVMIndexer) checkSafeCandidates(
 	ctx context.Context,
 	blocks map[uint64]*evm.Block,
 	receipts map[string]*evm.TxnReceipt,
 	traces map[string]*evm.CallTrace,
-) (map[string]bool, map[uint64]error) {
-	confirmed := make(map[string]bool)
+) (safeConfirmations, map[uint64]error) {
+	confirmed := make(safeConfirmations)
 	failures := make(map[uint64]error)
-	checked := make(map[string]bool)
 
 	for blockNum, block := range blocks {
 		if block == nil {
 			continue
 		}
+		checked := make(map[string]bool)
 		for _, tx := range block.Transactions {
 			if traces[tx.Hash] != nil || !evm.IsSafeExecTransaction(tx.Input) || tx.To == "" {
 				continue
@@ -439,12 +437,8 @@ func (e *EVMIndexer) checkSafeCandidates(
 				continue
 			}
 			checked[address] = true
-			if _, ok := e.canonicalSafes.Load(address); ok {
-				confirmed[address] = true
-				continue
-			}
 
-			isSafe, err := e.isCanonicalSafe(ctx, address)
+			isSafe, err := e.isCanonicalSafe(ctx, address, blockNum)
 			if err != nil {
 				logger.Warn("failed to check Safe contract; block will be retried",
 					"address", address, "tx", tx.Hash, "block", blockNum, "error", err)
@@ -452,31 +446,53 @@ func (e *EVMIndexer) checkSafeCandidates(
 				continue
 			}
 			if !isSafe {
-				logger.Warn("ignoring Safe execTransaction from a contract that is not an official Safe",
+				logger.Error("ignoring Safe execTransaction from a contract not confirmed as an official Safe",
 					"address", address, "tx", tx.Hash, "block", blockNum)
 				continue
 			}
-			e.canonicalSafes.Store(address, true)
-			confirmed[address] = true
+			if confirmed[blockNum] == nil {
+				confirmed[blockNum] = make(map[string]bool)
+			}
+			confirmed[blockNum][address] = true
 		}
 	}
 	return confirmed, failures
 }
 
-func (e *EVMIndexer) isCanonicalSafe(ctx context.Context, address string) (bool, error) {
-	var code, slot0 string
+// isCanonicalSafe requires an official singleton both before and after blockNum, so a singleton
+// swapped in an earlier block is caught; a swap and restore inside blockNum itself is not.
+func (e *EVMIndexer) isCanonicalSafe(ctx context.Context, address string, blockNum uint64) (bool, error) {
+	if blockNum == 0 {
+		return false, nil
+	}
+	at := fmt.Sprintf("0x%x", blockNum)
+	before := fmt.Sprintf("0x%x", blockNum-1)
+
+	var code, slotBefore, slotAt string
+	_, proxyKnown := e.safeProxies.Load(address)
 	err := e.failover.ExecuteWithRetry(ctx, func(c evm.EthereumAPI) error {
 		var err error
-		if code, err = c.GetCode(ctx, address); err != nil {
+		if !proxyKnown {
+			if code, err = c.GetCode(ctx, address, at); err != nil {
+				return err
+			}
+		}
+		if slotBefore, err = c.GetStorageAt(ctx, address, evm.SafeSingletonSlot, before); err != nil {
 			return err
 		}
-		slot0, err = c.GetStorageAt(ctx, address, evm.SafeSingletonSlot)
+		slotAt, err = c.GetStorageAt(ctx, address, evm.SafeSingletonSlot, at)
 		return err
 	})
 	if err != nil {
 		return false, err
 	}
-	return evm.IsCanonicalSafe(code, slot0), nil
+	if !proxyKnown {
+		if !evm.IsSafeProxyCode(code) {
+			return false, nil
+		}
+		e.safeProxies.Store(address, true)
+	}
+	return evm.IsSafeSingletonSlot(slotBefore) && evm.IsSafeSingletonSlot(slotAt), nil
 }
 
 // fetchMissingBlocksRaw fetches missing blocks as raw evm.Block objects
@@ -1046,7 +1062,7 @@ func (e *EVMIndexer) buildBlockResults(
 	txHashMap map[uint64][]string,
 	allReceipts map[string]*evm.TxnReceipt,
 	traces map[string]*evm.CallTrace,
-	canonicalSafes map[string]bool,
+	safes safeConfirmations,
 	safeCheckFailures map[uint64]error,
 ) []BlockResult {
 	results := make([]BlockResult, 0, len(blockNums))
@@ -1076,7 +1092,7 @@ func (e *EVMIndexer) buildBlockResults(
 			}
 		}
 
-		typesBlock, err := e.convertBlock(block, txReceipts, traces, canonicalSafes)
+		typesBlock, err := e.convertBlock(block, txReceipts, traces, safes[num])
 		if err != nil {
 			results = append(results, BlockResult{
 				Number: num,

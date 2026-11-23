@@ -743,6 +743,28 @@ func TestBitcoinExtractUTXO_MultisigOutput_NotTracked(t *testing.T) {
 	assert.Equal(t, uint32(1), event.Created[0].Vout)
 }
 
+func TestBitcoinExtractUTXO_MultisigPrevout_NotSpentOrSender(t *testing.T) {
+	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3", IndexUTXO: true})
+	msPrev := btcMultisigOutput([]string{"ms1", "ms2"}, 2.0, 0)
+	tx := &bitcoin.Transaction{
+		TxID: "spend_multisig",
+		Vin: []bitcoin.Input{
+			{TxID: "ms_prev", Vout: 0, PrevOut: &msPrev},
+			btcInput("p1", 0, "sender", 1.0),
+		},
+		Vout: []bitcoin.Output{btcOutput("recipient", 2.9, 0)},
+	}
+
+	event := idx.extractUTXOEvent(tx, 100, "bh", 1_000_000, 100)
+	require.NotNil(t, event)
+	require.Len(t, event.Spent, 1)
+	assert.Equal(t, "sender", event.Spent[0].Address)
+
+	transfers := idx.extractTransfersFromTx(tx, "bh", 100, 1_000_000, 100)
+	require.Len(t, transfers, 1)
+	assert.Equal(t, []string{"sender"}, transfers[0].FromAddresses)
+}
+
 func TestBitcoinExtractUTXO_Coinbase_ReturnsNil(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3", IndexUTXO: true})
 	coinbase := &bitcoin.Transaction{

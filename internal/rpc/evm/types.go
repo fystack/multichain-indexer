@@ -14,9 +14,7 @@ const (
 	ERC20_TRANSFER_SIG      = "0xa9059cbb"
 	ERC20_TRANSFER_FROM_SIG = "0x23b872dd"
 
-	// EIP-7708: chains that adopt it also log every native transfer as an ERC20-style Transfer event emitted
-	// by this pseudo-address. The native transfer is already reported from the transaction itself, so these
-	// logs must not become a second, "token" transfer of the same funds.
+	// EIP-7708 logs native transfers as Transfer events from this address; skip them to avoid double counting.
 	EIP7708_NATIVE_TRANSFER_EMITTER = "0xfffffffffffffffffffffffffffffffffffffffe"
 
 	// Gnosis Safe execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)

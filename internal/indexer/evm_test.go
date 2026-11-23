@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestParseGnosisSafeETHTransfer(t *testing.T) {
 
 	idx := newTestEVMIndexer()
 	receiptMap := map[string]*evm.TxnReceipt{txHash: receipt}
-	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil, nil)
+	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil, map[string]bool{strings.ToLower(targetTx.To): true})
 	require.NoError(t, err)
 
 	t.Logf("Extracted %d transfers from block", len(typesBlock.Transactions))
@@ -245,7 +246,7 @@ func TestParseGnosisSafeETHTransfer_Sepolia(t *testing.T) {
 
 	idx := newTestSepoliaIndexer()
 	receiptMap := map[string]*evm.TxnReceipt{txHash: receipt}
-	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil, nil)
+	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil, map[string]bool{strings.ToLower(targetTx.To): true})
 	require.NoError(t, err)
 
 	t.Logf("Extracted %d transfers from block", len(typesBlock.Transactions))
@@ -341,25 +342,26 @@ const safeV130SingletonSlotTest = "0x000000000000000000000000d9db270c1b5e3bd161e
 
 type safeCheckClient struct {
 	evm.EthereumAPI
-	code  map[string]string
-	slot0 map[string]string
-	err   error
-	calls int
+	code      map[string]string
+	slot0     map[string]map[string]string // address -> block -> word
+	err       error
+	codeCalls int
 }
 
-func (c *safeCheckClient) GetCode(_ context.Context, address string) (string, error) {
-	c.calls++
+func (c *safeCheckClient) GetCode(_ context.Context, address, _ string) (string, error) {
+	c.codeCalls++
 	return c.code[address], c.err
 }
 
-func (c *safeCheckClient) GetStorageAt(_ context.Context, address, _ string) (string, error) {
-	return c.slot0[address], c.err
+func (c *safeCheckClient) GetStorageAt(_ context.Context, address, _, block string) (string, error) {
+	return c.slot0[address][block], c.err
 }
 
 func TestCheckSafeCandidates(t *testing.T) {
 	const (
-		realSafe = "0x84ba2321d46814fb1aa69a7b71882efea50f700c"
-		fakeSafe = "0x00000000000000000000000000000000000000fa"
+		realSafe     = "0x84ba2321d46814fb1aa69a7b71882efea50f700c"
+		fakeSafe     = "0x00000000000000000000000000000000000000fa"
+		fakeSlotTest = "0x0000000000000000000000000000000000000000000000000000000000000bad"
 	)
 	safeTx := func(hash, to string) evm.Txn {
 		return evm.Txn{Hash: hash, From: "0xsender", To: to, Value: "0x0", Input: safeExecInputTest}
@@ -372,12 +374,20 @@ func TestCheckSafeCandidates(t *testing.T) {
 		}
 	}
 	blocks := map[uint64]*evm.Block{
-		1: {Number: "0x1", Transactions: []evm.Txn{safeTx("0xreal", realSafe)}},
-		2: {Number: "0x2", Transactions: []evm.Txn{safeTx("0xfake", fakeSafe)}},
+		1: {Number: "0x1", Transactions: []evm.Txn{safeTx("0xreal1", realSafe)}},
+		2: {Number: "0x2", Transactions: []evm.Txn{safeTx("0xreal2", realSafe), safeTx("0xfake", fakeSafe)}},
 	}
 	receipts := map[string]*evm.TxnReceipt{
-		"0xreal": successReceipt("0xreal", realSafe),
-		"0xfake": successReceipt("0xfake", fakeSafe),
+		"0xreal1": successReceipt("0xreal1", realSafe),
+		"0xreal2": successReceipt("0xreal2", realSafe),
+		"0xfake":  successReceipt("0xfake", fakeSafe),
+	}
+	officialAt := func(blocks ...string) map[string]string {
+		m := map[string]string{}
+		for _, b := range blocks {
+			m[b] = safeV130SingletonSlotTest
+		}
+		return m
 	}
 	newIndexer := func(client *safeCheckClient) *EVMIndexer {
 		failover := rpc.NewFailover[evm.EthereumAPI](nil)
@@ -387,23 +397,39 @@ func TestCheckSafeCandidates(t *testing.T) {
 
 	t.Run("only an official Safe proxy with an official singleton is confirmed", func(t *testing.T) {
 		client := &safeCheckClient{
-			code:  map[string]string{realSafe: safeProxyV130RuntimeTest, fakeSafe: "0x6080604052"},
-			slot0: map[string]string{realSafe: safeV130SingletonSlotTest, fakeSafe: safeV130SingletonSlotTest},
+			code: map[string]string{realSafe: safeProxyV130RuntimeTest, fakeSafe: "0x6080604052"},
+			slot0: map[string]map[string]string{
+				realSafe: officialAt("0x0", "0x1", "0x2"),
+				fakeSafe: officialAt("0x0", "0x1", "0x2"),
+			},
 		}
 		idx := newIndexer(client)
 
 		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
 		assert.Empty(t, failures)
-		assert.Equal(t, map[string]bool{realSafe: true}, confirmed)
+		assert.Equal(t, safeConfirmations{1: {realSafe: true}, 2: {realSafe: true}}, confirmed)
 
-		// A confirmed Safe is cached; only the fake one is looked up again.
-		client.calls = 0
-		confirmed, _ = idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
-		assert.Equal(t, map[string]bool{realSafe: true}, confirmed)
-		assert.Equal(t, 1, client.calls)
+		// Proxy code is cached; only the fake is looked up again.
+		client.codeCalls = 0
+		_, _ = idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
+		assert.Equal(t, 1, client.codeCalls)
 	})
 
-	t.Run("a failed lookup fails the block instead of skipping the transfer", func(t *testing.T) {
+	t.Run("a singleton that was not official before the block is rejected", func(t *testing.T) {
+		client := &safeCheckClient{
+			code: map[string]string{realSafe: safeProxyV130RuntimeTest},
+			slot0: map[string]map[string]string{
+				realSafe: {"0x0": safeV130SingletonSlotTest, "0x1": fakeSlotTest, "0x2": safeV130SingletonSlotTest},
+			},
+		}
+		idx := newIndexer(client)
+
+		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
+		assert.Empty(t, failures)
+		assert.Equal(t, safeConfirmations{}, confirmed)
+	})
+
+	t.Run("a failed lookup fails every block with that Safe", func(t *testing.T) {
 		idx := newIndexer(&safeCheckClient{err: errors.New("rpc down")})
 
 		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
@@ -419,12 +445,12 @@ func TestCheckSafeCandidates(t *testing.T) {
 	t.Run("traced transactions are not checked", func(t *testing.T) {
 		client := &safeCheckClient{}
 		idx := newIndexer(client)
-		traces := map[string]*evm.CallTrace{"0xreal": {}, "0xfake": {}}
+		traces := map[string]*evm.CallTrace{"0xreal1": {}, "0xreal2": {}, "0xfake": {}}
 
 		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, traces)
 		assert.Empty(t, confirmed)
 		assert.Empty(t, failures)
-		assert.Zero(t, client.calls)
+		assert.Zero(t, client.codeCalls)
 	})
 }
 
