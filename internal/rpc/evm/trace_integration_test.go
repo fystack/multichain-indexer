@@ -198,7 +198,7 @@ func TestExtractInternalTransfers_BatchSendNative_Integration(t *testing.T) {
 	}
 
 	// Verify the Safe heuristic would miss these entirely
-	safeTransfers := ExtractSafeTransfers(tx, nil, "ethereum", batchBlockNum, 1000)
+	safeTransfers := ExtractSafeTransfers(tx, nil, "ethereum", batchBlockNum, 1000, true)
 	assert.Empty(t, safeTransfers, "Safe heuristic should find NOTHING for this batch tx")
 
 	// Verify ExtractTransfers (top-level) also finds nothing useful

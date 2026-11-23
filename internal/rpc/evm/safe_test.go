@@ -98,8 +98,53 @@ func TestDecodeGnosisSafe_MalformedInput(t *testing.T) {
 	// Ensure ExtractSafeTransfers doesn't panic on malformed input
 	tx := Txn{Hash: "0x1", To: "0x2", Value: "0x0", Input: "0x6a761202abcdef"}
 	receipt := makeSuccessReceipt("0x1", "0x2")
-	transfers := ExtractSafeTransfers(tx, receipt, "test", 1, 1)
+	transfers := ExtractSafeTransfers(tx, receipt, "test", 1, 1, true)
 	assert.Empty(t, transfers, "should gracefully handle malformed Safe input")
+}
+
+func TestIsCanonicalSafe(t *testing.T) {
+	// Official proxy runtime code, from each factory's proxyCreationCode().
+	proxies := map[string]string{
+		"v1.1.1": "0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea265627a7a72315820d8a00dc4fe6bf675a9d7416fc2d00bb3433362aa8186b750f76c4027269667ff64736f6c634300050e0032",
+		"v1.3.0": "0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea2646970667358221220d1429297349653a4918076d650332de1a1068c5f3e07c5c82360c277770b955264736f6c63430007060033",
+		"v1.4.1": "0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea264697066735822122003d1488ee65e08fa41e58e888a9865554c535f2c77126a82cb4c0f917f31441364736f6c63430007060033",
+		"v1.5.0": "0x608060405260005463a619486e60003560e01c14156024578060601b606c5260206060f35b3660008037600080366000845af43d6000803e806040573d6000fd5b3d6000f3fea2646970667358221220e61834ebd2d8cd909d362bf67c47ef58fd665df38e6dd036ce65611101d072e964736f6c63430007060033",
+	}
+	slot := func(singleton string) string {
+		return "0x000000000000000000000000" + strings.TrimPrefix(strings.ToLower(singleton), "0x")
+	}
+	officialSlot := slot("0x41675C099F32341bf84BFc5382aF534df5C7461a")
+
+	for version, code := range proxies {
+		assert.True(t, IsCanonicalSafe(code, officialSlot), "%s proxy with official singleton", version)
+	}
+
+	// Every official singleton, as listed in safe-global/safe-deployments.
+	for _, singleton := range []string{
+		"0x34CfAC646f301356fAa8B21e94227e3583Fe3F5F", "0x6851D6fDFAfD08c0295C392436245E5bc78B0185",
+		"0xd9Db270c1B5E3Bd161E8c8503c55cEABeE709552", "0x69f4D1788e39c87893C980c06EdF4b7f686e2938",
+		"0x3E5c63644E683549055b9Be8653de26E0B4CD36E", "0xfb1bffC9d739B8D520DaF37dF666da4C687191EA",
+		"0x41675C099F32341bf84BFc5382aF534df5C7461a", "0x29fcB43b46531BcA003ddC8FCB67FFE91900C762",
+		"0xFf51A5898e281Db6DfC7855790607438dF2ca44b", "0xEdd160fEBBD92E350D4D398fb636302fccd67C7e",
+	} {
+		assert.True(t, IsCanonicalSafe(proxies["v1.5.0"], slot(singleton)), "singleton %s", singleton)
+	}
+
+	v130 := proxies["v1.3.0"]
+	assert.False(t, IsCanonicalSafe("0x6080604052", officialSlot), "fake contract pretending to be a Safe")
+	assert.False(t, IsCanonicalSafe("0x", officialSlot), "no code")
+	assert.False(t, IsCanonicalSafe(v130+"00", officialSlot), "proxy code with extra bytes")
+	assert.False(t, IsCanonicalSafe(v130, slot("0x00000000000000000000000000000000000000ff")), "real proxy, attacker singleton")
+	assert.False(t, IsCanonicalSafe(v130, "0x"+strings.Repeat("0", 23)+"1"+officialSlot[26:]), "dirty upper bytes in slot")
+	assert.False(t, IsCanonicalSafe(v130, "0x0"), "short slot")
+	assert.True(t, IsCanonicalSafe(strings.ToUpper(v130[2:]), "0x"+strings.ToUpper(officialSlot[2:])), "case-insensitive hex")
+}
+
+func TestExtractSafeTransfers_NotCanonicalSafe(t *testing.T) {
+	tx := safeTx()
+	receipt := makeSuccessReceipt(tx.Hash, safeContractAddr)
+	assert.Empty(t, ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, false),
+		"a contract that only emits ExecutionSuccess must not be credited")
 }
 
 // --- ExtractSafeTransfers tests ---
@@ -108,7 +153,7 @@ func TestExtractSafeTransfers_ValidNativeTransfer(t *testing.T) {
 	tx := safeTx()
 	receipt := makeSuccessReceipt(tx.Hash, safeContractAddr)
 
-	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, true)
 
 	require.Len(t, transfers, 1)
 	assert.Equal(t, constant.TxTypeNativeTransfer, transfers[0].Type)
@@ -121,7 +166,7 @@ func TestExtractSafeTransfers_ExecutionFailure(t *testing.T) {
 	tx := safeTx()
 	receipt := makeFailureReceipt(tx.Hash, safeContractAddr)
 
-	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, true)
 	assert.Empty(t, transfers, "should skip when ExecutionFailure in receipt")
 }
 
@@ -130,7 +175,7 @@ func TestExtractSafeTransfers_ExecutionSuccessFromWrongAddress(t *testing.T) {
 	// ExecutionSuccess emitted by a DIFFERENT contract, not the Safe (tx.To)
 	receipt := makeSuccessReceipt(tx.Hash, "0x1111111111111111111111111111111111111111")
 
-	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, true)
 	assert.Empty(t, transfers, "should skip when ExecutionSuccess is from a different contract than tx.To")
 }
 
@@ -152,7 +197,7 @@ func TestExtractSafeTransfers_DelegateCall(t *testing.T) {
 	tx := Txn{Hash: "0xabc", From: "0xaaa", To: safeContractAddr, Value: "0x0", Input: inputHex}
 	receipt := makeSuccessReceipt(tx.Hash, safeContractAddr)
 
-	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, true)
 	assert.Empty(t, transfers, "should skip DelegateCall operations (operation=1)")
 }
 
@@ -174,7 +219,7 @@ func TestExtractSafeTransfers_ZeroValue(t *testing.T) {
 	tx := Txn{Hash: "0xabc", From: "0xaaa", To: safeContractAddr, Value: "0x0", Input: inputHex}
 	receipt := makeSuccessReceipt(tx.Hash, safeContractAddr)
 
-	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, true)
 	assert.Empty(t, transfers, "should skip when value=0")
 }
 
@@ -198,13 +243,13 @@ func TestExtractSafeTransfers_ValueWithData(t *testing.T) {
 	tx := Txn{Hash: "0xabc", From: "0xaaa", To: safeContractAddr, Value: "0x0", Input: inputHex}
 	receipt := makeSuccessReceipt(tx.Hash, safeContractAddr)
 
-	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, receipt, "ethereum-mainnet", 22869070, 1700000000, true)
 	assert.Empty(t, transfers, "ETH+calldata case is not extracted (known limitation)")
 }
 
 func TestExtractSafeTransfers_NilReceipt(t *testing.T) {
 	tx := safeTx()
-	transfers := ExtractSafeTransfers(tx, nil, "ethereum-mainnet", 22869070, 1700000000)
+	transfers := ExtractSafeTransfers(tx, nil, "ethereum-mainnet", 22869070, 1700000000, true)
 	assert.Empty(t, transfers, "should skip when receipt is nil")
 }
 

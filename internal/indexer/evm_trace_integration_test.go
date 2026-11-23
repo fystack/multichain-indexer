@@ -93,7 +93,7 @@ func TestEndToEnd_TraceInConvertBlock_Integration(t *testing.T) {
 	receiptMap := map[string]*evm.TxnReceipt{integrationSafeTxHash: receipt}
 	traceMap := map[string]*evm.CallTrace{integrationSafeTxHash: trace}
 
-	result, err := idx.convertBlock(miniBlock, receiptMap, traceMap)
+	result, err := idx.convertBlock(miniBlock, receiptMap, traceMap, nil)
 	require.NoError(t, err)
 
 	t.Logf("End-to-end: %d transfers extracted", len(result.Transactions))
@@ -161,11 +161,11 @@ func TestEndToEnd_BatchSendNative_Integration(t *testing.T) {
 	receiptMap := map[string]*evm.TxnReceipt{batchTxHash: receipt}
 	traceMap := map[string]*evm.CallTrace{batchTxHash: trace}
 
-	resultWithTrace, err := idx.convertBlock(miniBlock, receiptMap, traceMap)
+	resultWithTrace, err := idx.convertBlock(miniBlock, receiptMap, traceMap, nil)
 	require.NoError(t, err)
 
 	// Run through convertBlock WITHOUT traces (simulating debug_trace=false)
-	resultWithoutTrace, err := idx.convertBlock(miniBlock, receiptMap, nil)
+	resultWithoutTrace, err := idx.convertBlock(miniBlock, receiptMap, nil, nil)
 	require.NoError(t, err)
 
 	var nativeWithTrace, nativeWithoutTrace int

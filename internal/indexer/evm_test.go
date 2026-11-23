@@ -2,10 +2,13 @@ package indexer
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/fystack/multichain-indexer/internal/rpc"
 	"github.com/fystack/multichain-indexer/internal/rpc/evm"
 	"github.com/fystack/multichain-indexer/pkg/common/config"
 	"github.com/fystack/multichain-indexer/pkg/common/constant"
@@ -150,7 +153,7 @@ func TestParseGnosisSafeETHTransfer(t *testing.T) {
 
 	idx := newTestEVMIndexer()
 	receiptMap := map[string]*evm.TxnReceipt{txHash: receipt}
-	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil)
+	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil, map[string]bool{strings.ToLower(targetTx.To): true})
 	require.NoError(t, err)
 
 	t.Logf("Extracted %d transfers from block", len(typesBlock.Transactions))
@@ -243,7 +246,7 @@ func TestParseGnosisSafeETHTransfer_Sepolia(t *testing.T) {
 
 	idx := newTestSepoliaIndexer()
 	receiptMap := map[string]*evm.TxnReceipt{txHash: receipt}
-	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil)
+	typesBlock, err := idx.convertBlock(miniBlock, receiptMap, nil, map[string]bool{strings.ToLower(targetTx.To): true})
 	require.NoError(t, err)
 
 	t.Logf("Extracted %d transfers from block", len(typesBlock.Transactions))
@@ -308,7 +311,8 @@ func TestConvertBlock_DebugTraceDisabled_SafeHeuristicUnchanged(t *testing.T) {
 	}
 
 	receiptMap := map[string]*evm.TxnReceipt{"0xtx1": receipt}
-	result, err := idx.convertBlock(block, receiptMap, nil) // traces=nil
+	canonicalSafes := map[string]bool{"0x84ba2321d46814fb1aa69a7b71882efea50f700c": true}
+	result, err := idx.convertBlock(block, receiptMap, nil, canonicalSafes) // traces=nil
 	require.NoError(t, err)
 
 	// Safe heuristic should still extract the transfer
@@ -320,6 +324,134 @@ func TestConvertBlock_DebugTraceDisabled_SafeHeuristicUnchanged(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "Safe heuristic should still work when traces=nil")
+
+	// The same calldata and ExecutionSuccess log from a contract not confirmed as an official
+	// Safe is the fake-Safe attack: nothing may be credited.
+	result, err = idx.convertBlock(block, receiptMap, nil, nil)
+	require.NoError(t, err)
+	for _, tx := range result.Transactions {
+		assert.NotEqual(t, constant.TxTypeNativeTransfer, tx.Type, "unconfirmed Safe must not produce a native transfer")
+	}
+}
+
+// safeProxyV130RuntimeTest is the official Safe v1.3.0 proxy runtime code.
+const safeProxyV130RuntimeTest = "0x608060405273ffffffffffffffffffffffffffffffffffffffff600054167fa619486e0000000000000000000000000000000000000000000000000000000060003514156050578060005260206000f35b3660008037600080366000845af43d6000803e60008114156070573d6000fd5b3d6000f3fea2646970667358221220d1429297349653a4918076d650332de1a1068c5f3e07c5c82360c277770b955264736f6c63430007060033"
+
+// safeV130SingletonSlotTest is slot 0 of a proxy pointing at the official v1.3.0 GnosisSafe.
+const safeV130SingletonSlotTest = "0x000000000000000000000000d9db270c1b5e3bd161e8c8503c55ceabee709552"
+
+type safeCheckClient struct {
+	evm.EthereumAPI
+	code      map[string]string
+	slot0     map[string]map[string]string // address -> block -> word
+	err       error
+	codeCalls int
+}
+
+func (c *safeCheckClient) GetCode(_ context.Context, address, _ string) (string, error) {
+	c.codeCalls++
+	return c.code[address], c.err
+}
+
+func (c *safeCheckClient) GetStorageAt(_ context.Context, address, _, block string) (string, error) {
+	return c.slot0[address][block], c.err
+}
+
+func TestCheckSafeCandidates(t *testing.T) {
+	const (
+		realSafe     = "0x84ba2321d46814fb1aa69a7b71882efea50f700c"
+		fakeSafe     = "0x00000000000000000000000000000000000000fa"
+		fakeSlotTest = "0x0000000000000000000000000000000000000000000000000000000000000bad"
+	)
+	safeTx := func(hash, to string) evm.Txn {
+		return evm.Txn{Hash: hash, From: "0xsender", To: to, Value: "0x0", Input: safeExecInputTest}
+	}
+	successReceipt := func(hash, emitter string) *evm.TxnReceipt {
+		return &evm.TxnReceipt{
+			TransactionHash: hash,
+			Status:          "0x1",
+			Logs:            []evm.Log{{Address: emitter, Topics: []string{evm.SAFE_EXECUTION_SUCCESS_TOPIC}}},
+		}
+	}
+	blocks := map[uint64]*evm.Block{
+		1: {Number: "0x1", Transactions: []evm.Txn{safeTx("0xreal1", realSafe)}},
+		2: {Number: "0x2", Transactions: []evm.Txn{safeTx("0xreal2", realSafe), safeTx("0xfake", fakeSafe)}},
+	}
+	receipts := map[string]*evm.TxnReceipt{
+		"0xreal1": successReceipt("0xreal1", realSafe),
+		"0xreal2": successReceipt("0xreal2", realSafe),
+		"0xfake":  successReceipt("0xfake", fakeSafe),
+	}
+	officialAt := func(blocks ...string) map[string]string {
+		m := map[string]string{}
+		for _, b := range blocks {
+			m[b] = safeV130SingletonSlotTest
+		}
+		return m
+	}
+	newIndexer := func(client *safeCheckClient) *EVMIndexer {
+		failover := rpc.NewFailover[evm.EthereumAPI](nil)
+		require.NoError(t, failover.AddProvider(&rpc.Provider{Name: "test", URL: "http://evm.test", Network: "eth", Client: client, State: rpc.StateHealthy}))
+		return &EVMIndexer{chainName: "ethereum", config: config.ChainConfig{NetworkId: "eth"}, failover: failover}
+	}
+
+	t.Run("only an official Safe proxy with an official singleton is confirmed", func(t *testing.T) {
+		client := &safeCheckClient{
+			code: map[string]string{realSafe: safeProxyV130RuntimeTest, fakeSafe: "0x6080604052"},
+			slot0: map[string]map[string]string{
+				realSafe: officialAt("0x0", "0x1", "0x2"),
+				fakeSafe: officialAt("0x0", "0x1", "0x2"),
+			},
+		}
+		idx := newIndexer(client)
+
+		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
+		assert.Empty(t, failures)
+		assert.Equal(t, safeConfirmations{1: {realSafe: true}, 2: {realSafe: true}}, confirmed)
+
+		// Proxy code is cached; only the fake is looked up again.
+		client.codeCalls = 0
+		_, _ = idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
+		assert.Equal(t, 1, client.codeCalls)
+	})
+
+	t.Run("a singleton that was not official before the block is rejected", func(t *testing.T) {
+		client := &safeCheckClient{
+			code: map[string]string{realSafe: safeProxyV130RuntimeTest},
+			slot0: map[string]map[string]string{
+				realSafe: {"0x0": safeV130SingletonSlotTest, "0x1": fakeSlotTest, "0x2": safeV130SingletonSlotTest},
+			},
+		}
+		idx := newIndexer(client)
+
+		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
+		assert.Empty(t, failures)
+		assert.Equal(t, safeConfirmations{}, confirmed)
+	})
+
+	t.Run("a failed lookup fails every block with that Safe", func(t *testing.T) {
+		idx := newIndexer(&safeCheckClient{err: errors.New("rpc down")})
+
+		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, nil)
+		assert.Empty(t, confirmed)
+		assert.Contains(t, failures, uint64(1))
+		assert.Contains(t, failures, uint64(2))
+
+		results := idx.buildBlockResults([]uint64{1}, blocks, nil, nil, nil, confirmed, failures)
+		require.Len(t, results, 1)
+		require.NotNil(t, results[0].Error)
+	})
+
+	t.Run("traced transactions are not checked", func(t *testing.T) {
+		client := &safeCheckClient{}
+		idx := newIndexer(client)
+		traces := map[string]*evm.CallTrace{"0xreal1": {}, "0xreal2": {}, "0xfake": {}}
+
+		confirmed, failures := idx.checkSafeCandidates(context.Background(), blocks, receipts, traces)
+		assert.Empty(t, confirmed)
+		assert.Empty(t, failures)
+		assert.Zero(t, client.codeCalls)
+	})
 }
 
 func TestConvertBlock_TraceOverridesSafeHeuristic(t *testing.T) {
@@ -375,7 +507,7 @@ func TestConvertBlock_TraceOverridesSafeHeuristic(t *testing.T) {
 	}
 
 	receiptMap := map[string]*evm.TxnReceipt{"0xtx1": receipt}
-	result, err := idx.convertBlock(block, receiptMap, traces)
+	result, err := idx.convertBlock(block, receiptMap, traces, nil)
 	require.NoError(t, err)
 
 	var nativeCount int
@@ -568,7 +700,7 @@ func TestBuildBlockResults_WithTraces(t *testing.T) {
 		},
 	}
 
-	results := idx.buildBlockResults([]uint64{blockNum}, blocks, txHashMap, allReceipts, traces)
+	results := idx.buildBlockResults([]uint64{blockNum}, blocks, txHashMap, allReceipts, traces, nil, nil)
 
 	require.Len(t, results, 1)
 	assert.Nil(t, results[0].Error)
@@ -599,7 +731,7 @@ func TestBuildBlockResults_MissingBlock(t *testing.T) {
 		},
 	}
 
-	results := idx.buildBlockResults([]uint64{1, 2}, blocks, nil, nil, nil)
+	results := idx.buildBlockResults([]uint64{1, 2}, blocks, nil, nil, nil, nil, nil)
 
 	require.Len(t, results, 2)
 	assert.Nil(t, results[0].Error, "block 1 should succeed")
@@ -646,6 +778,8 @@ func TestBuildBlockResults_NilTraces(t *testing.T) {
 		map[uint64][]string{1: {txHash}},
 		map[string]*evm.TxnReceipt{txHash: receipt},
 		nil, // no traces
+		nil,
+		nil,
 	)
 
 	require.Len(t, results, 1)
@@ -686,7 +820,7 @@ func TestConvertBlock_TracesNil_NoNilPanic(t *testing.T) {
 		EffectiveGasPrice: "0x3b9aca00",
 	}
 
-	result, err := idx.convertBlock(block, map[string]*evm.TxnReceipt{"0xtx1": receipt}, nil)
+	result, err := idx.convertBlock(block, map[string]*evm.TxnReceipt{"0xtx1": receipt}, nil, nil)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	// Should still extract the native transfer via ExtractTransfers

@@ -81,5 +81,10 @@ func GetInputAddress(input *Input) string {
 		return ""
 	}
 
-	return GetOutputAddress(input.PrevOut)
+	// Matches the outputs side: a bare multisig prevout belongs to no single address.
+	addrs := GetOutputAddresses(input.PrevOut)
+	if len(addrs) != 1 {
+		return ""
+	}
+	return addrs[0]
 }

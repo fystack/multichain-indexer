@@ -14,6 +14,9 @@ const (
 	ERC20_TRANSFER_SIG      = "0xa9059cbb"
 	ERC20_TRANSFER_FROM_SIG = "0x23b872dd"
 
+	// EIP-7708 logs native transfers as Transfer events from this address; skip them to avoid double counting.
+	EIP7708_NATIVE_TRANSFER_EMITTER = "0xfffffffffffffffffffffffffffffffffffffffe"
+
 	// Gnosis Safe execTransaction(address,uint256,bytes,uint8,uint256,uint256,uint256,address,address,bytes)
 	SAFE_EXEC_TRANSACTION_SIG    = "0x6a761202"
 	SAFE_EXECUTION_SUCCESS_TOPIC = "0x442e715f626346e8c54381002da614f62bee8d27386535b2521ec8540898556e"

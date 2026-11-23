@@ -418,28 +418,24 @@ func TestBitcoinExtractTransfers_MultiInput_FromAddresses(t *testing.T) {
 		"FromAddresses must contain all distinct senders")
 }
 
-// TestBitcoinExtractTransfers_MultisigOutput_AllAddresses verifies Bug #3 fix:
-// a bare multisig output now emits one transfer per participant address.
-func TestBitcoinExtractTransfers_MultisigOutput_AllAddresses(t *testing.T) {
+// A bare multisig output can be spent by whichever listed keys meet its threshold, so it is not a
+// deposit to any one listed address: crediting each address would credit funds a co-signer can take back.
+func TestBitcoinExtractTransfers_MultisigOutput_NotCredited(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
 	tx := &bitcoin.Transaction{
 		TxID: "bare_multisig",
 		Vin:  []bitcoin.Input{btcInput("p1", 0, "sender_alice", 1.0)},
 		Vout: []bitcoin.Output{
 			btcMultisigOutput([]string{"ms_addr0", "ms_addr1", "ms_addr2"}, 0.99, 0),
+			btcOutput("plain_addr", 0.005, 1),
 		},
 	}
 
 	transfers := idx.extractTransfersFromTx(tx, "testhash", 100, 1_000_000, 100)
 
-	require.Len(t, transfers, 3, "one transfer per multisig participant address")
-	toAddrs := map[string]bool{}
-	for _, tr := range transfers {
-		toAddrs[tr.ToAddress] = true
-	}
-	assert.True(t, toAddrs["ms_addr0"])
-	assert.True(t, toAddrs["ms_addr1"])
-	assert.True(t, toAddrs["ms_addr2"])
+	require.Len(t, transfers, 1, "only the single-address output is a transfer")
+	assert.Equal(t, "plain_addr", transfers[0].ToAddress)
+	assert.Equal(t, "1:0", transfers[0].TransferIndex)
 }
 
 func TestBitcoinExtractTransfers_FeeOnFirstOutputOnly(t *testing.T) {
@@ -571,21 +567,23 @@ func TestBitcoinExtractTransfers_BlockHashAndTransferIndex(t *testing.T) {
 	}
 }
 
-func TestBitcoinExtractTransfers_MultisigTransferIndex(t *testing.T) {
+func TestBitcoinExtractTransfers_TransferIndexKeepsVoutAfterSkippedMultisig(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3"})
 	tx := &bitcoin.Transaction{
 		TxID: "multisig_index",
 		Vin:  []bitcoin.Input{btcInput("p1", 0, "sender", 1.0)},
 		Vout: []bitcoin.Output{
-			btcMultisigOutput([]string{"ms_a", "ms_b"}, 0.99, 0),
+			btcMultisigOutput([]string{"ms_a", "ms_b"}, 0.5, 0),
+			btcOutput("addr_b", 0.2, 1),
+			btcOutput("addr_c", 0.2, 2),
 		},
 	}
 
 	transfers := idx.extractTransfersFromTx(tx, "blockhash_xyz", 100, 1_000_000, 100)
 
 	require.Len(t, transfers, 2)
-	assert.Equal(t, "0:0", transfers[0].TransferIndex)
-	assert.Equal(t, "0:1", transfers[1].TransferIndex)
+	assert.Equal(t, "1:0", transfers[0].TransferIndex)
+	assert.Equal(t, "2:0", transfers[1].TransferIndex)
 
 	hashes := map[string]bool{}
 	for _, tr := range transfers {
@@ -725,30 +723,46 @@ func TestBitcoinExtractUTXO_CapturesAllVoutsAndVins(t *testing.T) {
 	assert.True(t, spentAddrs["addr_b"])
 }
 
-// TestBitcoinExtractUTXO_MultisigOutput_OneEntryPerAddress verifies Bug #3 fix
-// for the UTXO stream: a bare multisig output produces one UTXO entry per
-// participant address, all sharing the same Vout index.
-func TestBitcoinExtractUTXO_MultisigOutput_OneEntryPerAddress(t *testing.T) {
+// A bare multisig output is not a UTXO that any single listed address owns.
+func TestBitcoinExtractUTXO_MultisigOutput_NotTracked(t *testing.T) {
 	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3", IndexUTXO: true})
 	tx := &bitcoin.Transaction{
 		TxID: "multisig_utxo",
 		Vin:  []bitcoin.Input{btcInput("p1", 0, "sender", 3.0)},
 		Vout: []bitcoin.Output{
 			btcMultisigOutput([]string{"ms1", "ms2"}, 2.9, 0),
+			btcOutput("plain_addr", 0.05, 1),
 		},
 	}
 
 	event := idx.extractUTXOEvent(tx, 100, "bh", 1_000_000, 100)
 
 	require.NotNil(t, event)
-	require.Len(t, event.Created, 2, "one UTXO entry per multisig address")
-	utxoAddrs := map[string]bool{}
-	for _, u := range event.Created {
-		utxoAddrs[u.Address] = true
-		assert.Equal(t, uint32(0), u.Vout, "all entries share the same Vout index")
+	require.Len(t, event.Created, 1)
+	assert.Equal(t, "plain_addr", event.Created[0].Address)
+	assert.Equal(t, uint32(1), event.Created[0].Vout)
+}
+
+func TestBitcoinExtractUTXO_MultisigPrevout_NotSpentOrSender(t *testing.T) {
+	idx := newBTCTestIndexer(config.ChainConfig{NetworkId: "testnet3", IndexUTXO: true})
+	msPrev := btcMultisigOutput([]string{"ms1", "ms2"}, 2.0, 0)
+	tx := &bitcoin.Transaction{
+		TxID: "spend_multisig",
+		Vin: []bitcoin.Input{
+			{TxID: "ms_prev", Vout: 0, PrevOut: &msPrev},
+			btcInput("p1", 0, "sender", 1.0),
+		},
+		Vout: []bitcoin.Output{btcOutput("recipient", 2.9, 0)},
 	}
-	assert.True(t, utxoAddrs["ms1"])
-	assert.True(t, utxoAddrs["ms2"])
+
+	event := idx.extractUTXOEvent(tx, 100, "bh", 1_000_000, 100)
+	require.NotNil(t, event)
+	require.Len(t, event.Spent, 1)
+	assert.Equal(t, "sender", event.Spent[0].Address)
+
+	transfers := idx.extractTransfersFromTx(tx, "bh", 100, 1_000_000, 100)
+	require.Len(t, transfers, 1)
+	assert.Equal(t, []string{"sender"}, transfers[0].FromAddresses)
 }
 
 func TestBitcoinExtractUTXO_Coinbase_ReturnsNil(t *testing.T) {
