@@ -114,13 +114,15 @@ flowchart TB
 | Optimism | EVM | Stable |
 | TRON | TRON | Stable |
 | Bitcoin | UTXO | Stable |
-| Solana | SVM | Beta |
-| Aptos | Move | Beta |
-| Sui | Move | Beta |
-| Cosmos (Hub, Osmosis, Celestia) | Cosmos | Beta |
-| TON | TON | Beta |
-| XRP | XRP Ledger | Beta |
-| Stellar | Stellar | Beta |
+| Stellar | Stellar | Stable |
+| Solana | SVM | Not audited |
+| Aptos | Move | Not audited |
+| Sui | Move | Not audited |
+| Cosmos (Hub, Osmosis, Celestia) | Cosmos | Not audited |
+| TON | TON | Not audited |
+| XRP | XRP Ledger | Not audited |
+
+> **Warning:** chains marked **Not audited** have not been reviewed for deposit-parsing safety (fake deposits, duplicate or mis-attributed credits). Use them at your own risk, and do not credit funds from their events without your own verification.
 
 ---
 
