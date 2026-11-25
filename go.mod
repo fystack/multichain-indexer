@@ -14,7 +14,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/golang/protobuf v1.5.4
 	github.com/hashicorp/consul/api v1.32.1
-	github.com/jackc/pgx/v5 v5.7.5
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/lmittmann/tint v1.1.2
 	github.com/mr-tron/base58 v1.2.0
 	github.com/nats-io/nats.go v1.44.0
